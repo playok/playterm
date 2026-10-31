@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
+use crate::keepalive::{IdleTimer, sleep_until};
 use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
 
 /// How long the line is held in the break state (devices expect 250–500 ms).
@@ -195,7 +196,8 @@ pub(crate) async fn run(
             .with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", settings.port))?
     };
     sink.send(SessionEvent::Connected);
-    serve(stream, commands, sink).await
+    let idle = IdleTimer::new(&params.keepalive, false, &sink);
+    serve(stream, commands, sink, idle).await
 }
 
 /// Pumps bytes between the line and the session until closed.
@@ -203,6 +205,7 @@ pub(crate) async fn serve<S>(
     mut stream: S,
     mut commands: mpsc::UnboundedReceiver<SessionCommand>,
     sink: EventSink,
+    mut idle: IdleTimer,
 ) -> anyhow::Result<()>
 where
     S: AsyncRead + AsyncWrite + SendBreak + Unpin,
@@ -223,7 +226,10 @@ where
                 sink.send(SessionEvent::Data(buf[..n].to_vec()));
             }
             cmd = commands.recv() => match cmd {
-                Some(SessionCommand::Input(data)) => stream.write_all(&data).await?,
+                Some(SessionCommand::Input(data)) => {
+                    stream.write_all(&data).await?;
+                    idle.touch();
+                }
                 Some(SessionCommand::SendBreak) => {
                     stream.send_break().await.context(t("BREAK 신호를 보낼 수 없습니다", "Cannot send BREAK"))?;
                     sink.notice(t("BREAK 신호를 보냈습니다", "Sent BREAK"));
@@ -238,6 +244,12 @@ where
                 }
                 Some(SessionCommand::Close) | None => return Ok(()),
             },
+            _ = sleep_until(idle.deadline()) => {
+                if let Some(text) = &idle.text {
+                    stream.write_all(text).await?;
+                }
+                idle.touch();
+            }
         }
     }
 }
@@ -250,6 +262,7 @@ mod tests {
     use tokio::io::DuplexStream;
 
     use super::*;
+    use crate::keepalive::{KeepAlive, KeepAliveMode};
     use crate::session::SessionHandle;
 
     /// In-memory "serial line" that counts BREAK signals.
@@ -304,12 +317,35 @@ mod tests {
         panic!("timed out");
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn types_keepalive_text_when_idle() {
+        let (line, mut device) = tokio::io::duplex(1024);
+        let (handle, commands, sink) = SessionHandle::new(Arc::new(|| {}));
+        let keepalive = KeepAlive { mode: KeepAliveMode::Text, interval: 30, text: "\\x20\\b".into() };
+        let idle = IdleTimer::new(&keepalive, false, &sink);
+        let task = tokio::spawn(serve(FakeLine { io: line, breaks: Arc::default() }, commands, sink, idle));
+
+        let mut buf = [0u8; 2];
+        device.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b" \x08");
+        let start = tokio::time::Instant::now();
+        handle.send(b"x".to_vec());
+        let mut buf = [0u8; 3];
+        device.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"x \x08", "the next one comes a full period after the input");
+        assert!(start.elapsed() >= Duration::from_secs(30));
+
+        handle.close();
+        task.await.unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn pumps_data_and_breaks() {
         let (line, mut device) = tokio::io::duplex(1024);
         let breaks = Arc::new(AtomicUsize::new(0));
         let (handle, commands, sink) = SessionHandle::new(Arc::new(|| {}));
-        let task = tokio::spawn(serve(FakeLine { io: line, breaks: breaks.clone() }, commands, sink));
+        let idle = IdleTimer::new(&KeepAlive::default(), false, &sink);
+        let task = tokio::spawn(serve(FakeLine { io: line, breaks: breaks.clone() }, commands, sink, idle));
 
         device.write_all(b"Router>").await.unwrap();
         assert!(matches!(next_event(&handle).await, SessionEvent::Data(d) if d == b"Router>"));

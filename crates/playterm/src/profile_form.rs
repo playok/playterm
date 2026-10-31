@@ -7,7 +7,8 @@ use eframe::egui;
 use playterm_config::{AutoLogin, LoginStep, SessionProfile};
 use playterm_i18n::{t, tr};
 use playterm_net::{
-    ForwardKind, ForwardRule, Protocol, SerialFlow, SerialParity, SerialPortEntry, SerialSettings, list_ports,
+    ForwardKind, ForwardRule, KeepAlive, KeepAliveMode, Protocol, SerialFlow, SerialParity, SerialPortEntry,
+    SerialSettings, decode_escapes, list_ports,
 };
 use playterm_term::Charset;
 use zeroize::Zeroizing;
@@ -201,6 +202,78 @@ fn log_ui(ui: &mut egui::Ui, log: &mut playterm_config::LogSettings) {
             }
         });
     });
+}
+
+fn keepalive_ui(ui: &mut egui::Ui, k: &mut KeepAlive, protocol: Protocol) {
+    let mode_name = |m: KeepAliveMode| match m {
+        KeepAliveMode::Off => t("끔", "Off"),
+        KeepAliveMode::Protocol => t("프로토콜 신호", "Protocol keep-alive"),
+        KeepAliveMode::Text => t("문자열 입력", "Type text"),
+    };
+    let title = match k.mode {
+        KeepAliveMode::Off => t("접속 유지: 끔", "Keep-alive: off").to_owned(),
+        m => tr!("접속 유지: {} · {}초", "Keep-alive: {} · {} s", mode_name(m), k.interval),
+    };
+    egui::CollapsingHeader::new(title).id_salt("keepalive").show(ui, |ui| {
+        ui.horizontal(|ui| {
+            for m in KeepAliveMode::ALL {
+                ui.radio_value(&mut k.mode, m, mode_name(m));
+            }
+        });
+        ui.weak(match k.mode {
+            KeepAliveMode::Off => t("아무것도 보내지 않습니다.", "Nothing is sent."),
+            KeepAliveMode::Protocol => t(
+                "SSH keepalive / Telnet NOP 를 보냅니다. 방화벽·공유기·서버의 무통신 끊김을 막고, 끊긴 SSH 연결을 알아챕니다.\n장비의 입력 대기 시간 제한(exec-timeout 등)에는 '문자열 입력' 을 쓰세요.",
+                "Sends SSH keepalives / Telnet NOP. Stops firewalls, routers and servers from dropping a quiet connection, and notices dead SSH connections.\nFor device input timeouts (exec-timeout etc.) use 'Type text'.",
+            ),
+            KeepAliveMode::Text => t(
+                "아래 문자열을 입력한 것처럼 보내 장비·셸의 자동 로그아웃(exec-timeout, TMOUT)을 막습니다.\n\\r Enter, \\b 백스페이스, \\e Esc, \\xHH 바이트. 기본값 \\x20\\b (스페이스+백스페이스)는 치던 명령을 건드리지 않습니다.",
+                "Types the text below to stop devices and shells from logging you out (exec-timeout, TMOUT).\n\\r Enter, \\b backspace, \\e Esc, \\xHH a byte. The default \\x20\\b (space + backspace) leaves a half-typed command alone.",
+            ),
+        });
+        ui.add_enabled_ui(k.mode != KeepAliveMode::Off, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(t("보내는 간격", "Interval"));
+                ui.add(
+                    egui::DragValue::new(&mut k.interval)
+                        .range(KeepAlive::MIN_INTERVAL..=KeepAlive::MAX_INTERVAL)
+                        .speed(1)
+                        .suffix(t(" 초", " s")),
+                );
+                ui.weak(t("(이 시간 동안 보낸 것이 없을 때)", "(after this long with nothing sent)"));
+            });
+            if k.mode == KeepAliveMode::Text {
+                ui.horizontal(|ui| {
+                    ui.label(t("문자열", "Text"));
+                    ui.add(egui::TextEdit::singleline(&mut k.text).hint_text(KeepAlive::DEFAULT_TEXT).desired_width(160.0));
+                    if ui.small_button(t("기본값", "Default")).clicked() {
+                        k.text = KeepAlive::DEFAULT_TEXT.into();
+                    }
+                });
+                if let Err(e) = decode_escapes(&k.text) {
+                    ui.colored_label(ui.visuals().error_fg_color, e);
+                }
+            }
+            if protocol == Protocol::Serial && k.mode == KeepAliveMode::Protocol {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    t("시리얼에는 프로토콜 신호가 없습니다. '문자열 입력' 을 쓰세요", "Serial lines have no protocol keep-alive; use 'Type text'"),
+                );
+            }
+        });
+    });
+}
+
+fn validate_keepalive(k: &KeepAlive) -> Result<KeepAlive, String> {
+    let mut k = k.clone();
+    k.interval = k.interval.clamp(KeepAlive::MIN_INTERVAL, KeepAlive::MAX_INTERVAL);
+    if k.mode == KeepAliveMode::Text {
+        let bytes = decode_escapes(&k.text).map_err(|e| tr!("접속 유지 문자열: {e}", "Keep-alive text: {e}"))?;
+        if bytes.is_empty() {
+            return Err(t("접속 유지로 보낼 문자열을 입력하세요", "Enter the keep-alive text to send").into());
+        }
+    }
+    Ok(k)
 }
 
 /// Which optional parts of the form to show.
@@ -453,6 +526,7 @@ impl ProfileForm {
         }
         if opts.meta {
             self.auto_login_ui(ui);
+            keepalive_ui(ui, &mut self.profile.keepalive, self.profile.protocol);
             log_ui(ui, &mut self.profile.log);
         }
 
@@ -603,6 +677,7 @@ impl ProfileForm {
         p.identity_file = p.identity_file.trim().trim_matches('"').to_owned();
         p.log.dir = p.log.dir.trim().trim_matches('"').to_owned();
         p.auto_login = validate_auto_login(&p.auto_login)?;
+        p.keepalive = validate_keepalive(&p.keepalive)?;
         let password = (!self.password.is_empty()).then(|| self.password.clone());
         if p.protocol == Protocol::Serial {
             p.serial.port = p.serial.port.trim().to_uppercase();
@@ -739,6 +814,17 @@ mod tests {
 
         form.port = "70000".into();
         assert!(form.validate().is_none());
+    }
+
+    #[test]
+    fn keepalive_validation() {
+        let k = |mode, interval, text: &str| KeepAlive { mode, interval, text: text.into() };
+        assert_eq!(validate_keepalive(&k(KeepAliveMode::Protocol, 1, "")).unwrap().interval, KeepAlive::MIN_INTERVAL);
+        assert_eq!(validate_keepalive(&k(KeepAliveMode::Protocol, 99999, "")).unwrap().interval, KeepAlive::MAX_INTERVAL);
+        assert!(validate_keepalive(&k(KeepAliveMode::Text, 60, "\\r")).is_ok());
+        assert!(validate_keepalive(&k(KeepAliveMode::Text, 60, "")).is_err());
+        assert!(validate_keepalive(&k(KeepAliveMode::Text, 60, "\\x1")).is_err());
+        assert!(validate_keepalive(&k(KeepAliveMode::Off, 60, "\\x1")).is_ok(), "the text only matters when used");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! the open tabs right away; Cancel puts the old settings back.
 
 use eframe::egui::{self, Color32, FontId, RichText, Sense, Vec2};
-use playterm_config::{AppSettings, Language, UiTheme};
+use playterm_config::{AppSettings, Language, PreventSleep, UiTheme};
 use playterm_i18n::{t, tr};
 use playterm_term::{THEMES, Theme};
 
@@ -89,6 +89,7 @@ impl SettingsDialog {
                     ui.weak(t("탭마다 보관하는 지난 출력", "Past output kept for each tab"));
                 });
                 ui.end_row();
+                self.sleep_row(ui);
             });
             ui.add_space(8.0);
             self.preview(ui);
@@ -217,6 +218,29 @@ impl SettingsDialog {
             self.draft.font = name;
             ui.close();
         }
+    }
+
+    fn sleep_row(&mut self, ui: &mut egui::Ui) {
+        let name = |p: PreventSleep| match p {
+            PreventSleep::Off => t("끔", "Off"),
+            PreventSleep::System => t("연결 중에는 절전 모드 안 함", "No sleep while connected"),
+            PreventSleep::Display => t("연결 중에는 화면도 켜 둠", "Keep the screen on while connected"),
+        };
+        ui.label(t("절전 방지", "Prevent sleep"));
+        egui::ComboBox::from_id_salt("prevent-sleep")
+            .width(200.0)
+            .selected_text(name(self.draft.prevent_sleep))
+            .show_ui(ui, |ui| {
+                for p in PreventSleep::ALL {
+                    ui.selectable_value(&mut self.draft.prevent_sleep, p, name(p));
+                }
+            })
+            .response
+            .on_hover_text(t(
+                "세션이 연결되어 있는 동안 Windows 가 유휴 상태로 절전에 들어가 연결이 끊기는 것을 막습니다.\n덮개를 닫거나 직접 절전을 고르면 그대로 절전합니다.",
+                "Stops Windows from going to sleep when idle, which would drop the connections, while a session is connected.\nClosing the lid or choosing Sleep still works.",
+            ));
+        ui.end_row();
     }
 
     fn size_row(&mut self, ui: &mut egui::Ui) {

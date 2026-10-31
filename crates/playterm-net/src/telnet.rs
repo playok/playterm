@@ -12,11 +12,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+use crate::keepalive::{IdleTimer, sleep_until};
 use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 const SE: u8 = 240;
+const NOP: u8 = 241;
 const BRK: u8 = 243;
 const SB: u8 = 250;
 const WILL: u8 = 251;
@@ -264,6 +266,7 @@ pub(crate) async fn run(
     let (mut reader, mut writer) = stream.into_split();
     let mut codec = TelnetCodec::new(&params.term_type, params.cols, params.rows);
     let mut buf = vec![0u8; 16 * 1024];
+    let mut idle = IdleTimer::new(&params.keepalive, true, &sink);
 
     loop {
         tokio::select! {
@@ -281,7 +284,10 @@ pub(crate) async fn run(
                 }
             }
             cmd = commands.recv() => match cmd {
-                Some(SessionCommand::Input(data)) => writer.write_all(&codec.encode_input(&data)).await?,
+                Some(SessionCommand::Input(data)) => {
+                    writer.write_all(&codec.encode_input(&data)).await?;
+                    idle.touch();
+                }
                 Some(SessionCommand::Resize { cols, rows }) => {
                     if let Some(naws) = codec.resize(cols, rows) {
                         writer.write_all(&naws).await?;
@@ -303,6 +309,14 @@ pub(crate) async fn run(
                     return Ok(());
                 }
             },
+            _ = sleep_until(idle.deadline()) => {
+                let bytes = match &idle.text {
+                    Some(text) => codec.encode_input(text),
+                    None => vec![IAC, NOP],
+                };
+                writer.write_all(&bytes).await?;
+                idle.touch();
+            }
         }
     }
 }
@@ -370,6 +384,45 @@ mod tests {
         assert_eq!(c.receive(&[b'x', IAC, IAC, b'\r', 0, b'y']).data, vec![b'x', IAC, b'\r', b'y']);
         assert_eq!(c.encode_input(&[IAC, b'\r']), vec![IAC, IAC, b'\r', b'\n']);
         assert_eq!(c.encode_input(b"a\r\nb"), b"a\r\nb");
+    }
+
+    #[tokio::test]
+    async fn keepalive_nop_and_text() {
+        use std::sync::Arc;
+
+        use crate::keepalive::{KeepAlive, KeepAliveMode};
+        use crate::session::SessionHandle;
+
+        for (mode, expected) in [(KeepAliveMode::Protocol, vec![IAC, NOP]), (KeepAliveMode::Text, b"\r\n".to_vec())] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let params = ConnectParams {
+                protocol: crate::Protocol::Telnet,
+                host: "127.0.0.1".into(),
+                port,
+                username: String::new(),
+                password: None,
+                identity_file: None,
+                default_identity_files: Vec::new(),
+                use_agent: false,
+                agent_pipe: None,
+                forwards: Vec::new(),
+                serial: Default::default(),
+                keepalive: KeepAlive { mode, interval: 1, text: "\\r".into() },
+                term_type: "xterm".into(),
+                cols: 80,
+                rows: 24,
+                known_hosts: Default::default(),
+            };
+            let (handle, commands, sink) = SessionHandle::new(Arc::new(|| {}));
+            let task = tokio::spawn(run(params, commands, sink));
+            let (mut server, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; expected.len()];
+            server.read_exact(&mut buf).await.unwrap();
+            assert_eq!(buf, expected, "{mode:?}");
+            handle.close();
+            task.await.unwrap().unwrap();
+        }
     }
 
     #[test]

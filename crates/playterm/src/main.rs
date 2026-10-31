@@ -13,6 +13,7 @@ mod local_fs;
 mod logging;
 mod menu;
 mod mouse;
+mod power;
 mod profile_form;
 mod putty;
 mod search_bar;

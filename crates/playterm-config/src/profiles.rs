@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use playterm_net::{ForwardRule, Protocol, SerialSettings};
+use playterm_net::{ForwardRule, KeepAlive, Protocol, SerialSettings};
 use playterm_term::Charset;
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +81,8 @@ pub struct SessionProfile {
     pub serial: SerialSettings,
     pub log: LogSettings,
     pub auto_login: AutoLogin,
+    /// Keeps the connection from timing out while idle.
+    pub keepalive: KeepAlive,
 }
 
 impl Default for SessionProfile {
@@ -102,6 +104,7 @@ impl Default for SessionProfile {
             serial: SerialSettings::default(),
             log: LogSettings::default(),
             auto_login: AutoLogin::default(),
+            keepalive: KeepAlive::default(),
         }
     }
 }
@@ -232,6 +235,7 @@ mod tests {
 
         let mut a = a;
         a.auto_login = AutoLogin { enabled: true, steps: AutoLogin::standard_steps() };
+        a.keepalive = KeepAlive { mode: playterm_net::KeepAliveMode::Text, interval: 300, text: "\\r".into() };
         store.upsert(a.clone()).unwrap();
         assert_eq!(ProfileStore::load(&path).unwrap().get(&a.id), Some(&a), "login steps are saved");
 
@@ -272,6 +276,7 @@ mod tests {
         let p = &store.profiles()[0];
         assert_eq!((p.id.as_str(), p.port, p.protocol), ("x", 22, Protocol::Ssh));
         assert!(p.use_agent && p.identity_file.is_empty(), "files from older versions keep agent auth on");
+        assert_eq!(p.keepalive, KeepAlive::default(), "and get protocol keep-alives");
     }
 
     #[test]

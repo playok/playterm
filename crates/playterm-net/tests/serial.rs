@@ -19,6 +19,7 @@ fn params(port: &str) -> ConnectParams {
         agent_pipe: None,
         forwards: Vec::new(),
         serial: SerialSettings { port: port.into(), baud: 115200, ..Default::default() },
+        keepalive: Default::default(),
         term_type: "xterm-256color".into(),
         cols: 80,
         rows: 24,

@@ -44,6 +44,22 @@ impl UiTheme {
     pub const ALL: [UiTheme; 3] = [UiTheme::Dark, UiTheme::Light, UiTheme::System];
 }
 
+/// Keeping Windows awake while sessions are connected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PreventSleep {
+    Off,
+    /// The PC does not go to sleep on its own while a session is connected.
+    #[default]
+    System,
+    /// ...and the screen stays on too.
+    Display,
+}
+
+impl PreventSleep {
+    pub const ALL: [PreventSleep; 3] = [PreventSleep::Off, PreventSleep::System, PreventSleep::Display];
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -59,6 +75,7 @@ pub struct AppSettings {
     pub status_bar: bool,
     pub language: Language,
     pub ui_theme: UiTheme,
+    pub prevent_sleep: PreventSleep,
 }
 
 impl AppSettings {
@@ -106,6 +123,7 @@ impl Default for AppSettings {
             status_bar: true,
             language: Language::Korean,
             ui_theme: UiTheme::Dark,
+            prevent_sleep: PreventSleep::System,
         }
     }
 }
@@ -128,6 +146,7 @@ mod tests {
             status_bar: false,
             language: Language::English,
             ui_theme: UiTheme::System,
+            prevent_sleep: PreventSleep::Display,
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);

@@ -5,6 +5,7 @@ use std::sync::{Arc, mpsc as std_mpsc};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::forward::ForwardRule;
+use crate::keepalive::KeepAlive;
 use crate::serial::SerialSettings;
 use crate::sftp::SftpConnection;
 
@@ -64,6 +65,8 @@ pub struct ConnectParams {
     pub forwards: Vec<ForwardRule>,
     /// Line settings for [`Protocol::Serial`].
     pub serial: SerialSettings,
+    /// Keeps the connection from timing out while idle.
+    pub keepalive: KeepAlive,
     /// Value for the `TERM` variable / Telnet terminal type.
     pub term_type: String,
     pub cols: u16,
@@ -83,6 +86,7 @@ impl fmt::Debug for ConnectParams {
             .field("identity_file", &self.identity_file)
             .field("use_agent", &self.use_agent)
             .field("forwards", &self.forwards)
+            .field("keepalive", &self.keepalive)
             .field("term_type", &self.term_type)
             .finish_non_exhaustive()
     }

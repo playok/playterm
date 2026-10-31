@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
-use playterm_config::{AppSettings, Language, ProfileStore, SessionProfile, UiTheme, Vault};
+use playterm_config::{AppSettings, Language, PreventSleep, ProfileStore, SessionProfile, UiTheme, Vault};
 use playterm_i18n::{t, tr};
 use playterm_net::{ConnectParams, NetRuntime, Waker};
 use playterm_term::{LogMode, Palette, Theme};
@@ -16,6 +16,7 @@ use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultM
 use crate::import_dialog::{ImportDialog, ImportResult};
 use crate::logging::{self, LogPlan};
 use crate::menu::{self, Command, MenuState};
+use crate::power::SleepGuard;
 use crate::profile_form::expand_home;
 use crate::search_bar::SearchBar;
 use crate::session::{Session, SessionSpec, SessionState, TermSetup};
@@ -135,6 +136,8 @@ pub struct PlaytermApp {
     zoom_accum: f32,
     /// Simultaneous input: typing in the active tab also goes to the other included tabs.
     broadcast: bool,
+    /// Holds off Windows sleep while sessions are connected.
+    sleep_guard: SleepGuard,
 }
 
 impl PlaytermApp {
@@ -188,6 +191,7 @@ impl PlaytermApp {
             settings_unsaved: None,
             zoom_accum: 0.0,
             broadcast: false,
+            sleep_guard: SleepGuard::default(),
         };
         for profile in initial {
             app.open_session(&profile, None, None);
@@ -270,6 +274,7 @@ impl PlaytermApp {
             agent_pipe: None,
             forwards: profile.forwards.clone(),
             serial: profile.serial.clone(),
+            keepalive: profile.keepalive.clone(),
             term_type: profile.term_type.clone(),
             cols: 80,
             rows: 24,
@@ -1237,6 +1242,8 @@ impl eframe::App for PlaytermApp {
             self.open_local();
         }
         self.dropped_files(&ctx);
+        let connected = self.sessions.iter().any(|s| s.state == SessionState::Connected);
+        self.sleep_guard.set(if connected { self.settings.prevent_sleep } else { PreventSleep::Off });
 
         let prompt_open = self.show_session_prompts(&ctx);
         if !prompt_open {
@@ -1254,7 +1261,8 @@ impl eframe::App for PlaytermApp {
         // Added before the side panel so it spans the whole window width.
         if self.settings.status_bar {
             let session = self.sessions.get(self.active);
-            egui::Panel::bottom("status").show(ui, |ui| status_bar::show(ui, session));
+            let awake = self.sleep_guard.active();
+            egui::Panel::bottom("status").show(ui, |ui| status_bar::show(ui, session, awake));
         }
         if self.show_sidebar {
             let vault = self.vault_state();

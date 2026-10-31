@@ -37,7 +37,8 @@ fn lock(ui: &mut egui::Ui, label: &str, on: bool) {
     ui.label(text).on_hover_text(format!("{label} {}", if on { t("켜짐", "on") } else { t("꺼짐", "off") }));
 }
 
-pub fn show(ui: &mut egui::Ui, session: Option<&Session>) {
+/// `awake`: Windows sleep is being held off for the connected sessions.
+pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: bool) {
     let (caps, num) = lock_keys();
     ui.horizontal(|ui| {
         if let Some(s) = session {
@@ -59,6 +60,13 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             lock(ui, "NUM", num);
             lock(ui, "CAPS", caps);
+            if awake {
+                ui.separator();
+                ui.label(RichText::new(t("절전 방지", "No sleep")).small()).on_hover_text(t(
+                    "연결된 세션이 있어 Windows 가 절전 모드로 들어가지 않습니다 (설정에서 변경)",
+                    "Windows will not go to sleep while sessions are connected (change in Settings)",
+                ));
+            }
             let Some(s) = session else { return };
             ui.separator();
             ui.label(RichText::new(format!("↑ {}", human_size(s.tx_bytes))).small().monospace())

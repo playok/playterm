@@ -5,6 +5,7 @@
 //! (so the UI thread can poll without async), and a waker callback tells the UI to repaint.
 
 mod forward;
+mod keepalive;
 mod serial;
 mod session;
 mod sftp;
@@ -19,6 +20,7 @@ pub use session::{
     Waker,
 };
 pub use forward::{ForwardKind, ForwardRule};
+pub use keepalive::{KeepAlive, KeepAliveMode, decode_escapes};
 pub use serial::{SerialFlow, SerialParity, SerialPortEntry, SerialSettings, list_ports};
 pub use sftp::{RemoteEntry, SftpConnection, SftpEvent, TransferState, TransferUpdate, remote_join, remote_parent};
 pub use telnet::TelnetCodec;

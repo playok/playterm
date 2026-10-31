@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use crate::forward::{self, ForwardKind, ForwardRule};
+use crate::keepalive::{IdleTimer, KeepAliveMode, sleep_until};
 use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
 use crate::sftp::SftpConnection;
 use crate::ssh_auth::authenticate;
@@ -118,8 +119,9 @@ pub(crate) async fn run(
     .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
     stream.set_nodelay(true)?;
 
+    // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
     let config = Arc::new(client::Config {
-        keepalive_interval: Some(Duration::from_secs(30)),
+        keepalive_interval: (params.keepalive.mode != KeepAliveMode::Off).then(|| params.keepalive.period()),
         ..Default::default()
     });
     let handler = ClientHandler {
@@ -153,6 +155,7 @@ pub(crate) async fn run(
     sink.send(SessionEvent::Connected);
 
     let (mut reader, writer) = channel.split();
+    let mut idle = IdleTimer::new(&params.keepalive, false, &sink);
     loop {
         tokio::select! {
             msg = reader.wait() => match msg {
@@ -166,7 +169,10 @@ pub(crate) async fn run(
                 Some(_) => {}
             },
             cmd = commands.recv() => match cmd {
-                Some(SessionCommand::Input(data)) => writer.data_bytes(data).await?,
+                Some(SessionCommand::Input(data)) => {
+                    writer.data_bytes(data).await?;
+                    idle.touch();
+                }
                 Some(SessionCommand::Resize { cols, rows }) => {
                     writer.window_change(cols.into(), rows.into(), 0, 0).await?;
                 }
@@ -182,6 +188,12 @@ pub(crate) async fn run(
                 }
                 Some(SessionCommand::Close) | None => break,
             },
+            _ = sleep_until(idle.deadline()) => {
+                if let Some(text) = &idle.text {
+                    writer.data_bytes(text.clone()).await?;
+                }
+                idle.touch();
+            }
         }
     }
 
