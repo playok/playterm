@@ -23,15 +23,17 @@ pub enum VaultState {
     Unlocked,
 }
 
-/// Sites matching `filter` (name, host, user or folder), grouped by folder (top level first)
-/// and sorted by name within each folder.
-pub fn grouped<'a>(store: &'a ProfileStore, filter: &str) -> Vec<(String, Vec<&'a SessionProfile>)> {
+/// Whether a site's name, host, user or folder contains `filter` (ignoring case).
+pub fn matches(p: &SessionProfile, filter: &str) -> bool {
     let filter = filter.trim().to_lowercase();
-    let matches = |p: &SessionProfile| {
-        filter.is_empty()
-            || [&p.display_name(), &p.host, &p.username, &p.folder].iter().any(|s| s.to_lowercase().contains(&filter))
-    };
-    let mut sorted: Vec<&SessionProfile> = store.profiles().iter().filter(|p| matches(p)).collect();
+    filter.is_empty()
+        || [&p.display_name(), &p.host, &p.username, &p.folder].iter().any(|s| s.to_lowercase().contains(&filter))
+}
+
+/// Sites matching `filter` (see [`matches`]), grouped by folder (top level first) and sorted
+/// by name within each folder.
+pub fn grouped<'a>(store: &'a ProfileStore, filter: &str) -> Vec<(String, Vec<&'a SessionProfile>)> {
+    let mut sorted: Vec<&SessionProfile> = store.profiles().iter().filter(|p| matches(p, filter)).collect();
     sorted.sort_by_key(|p| p.display_name().to_lowercase());
     store
         .folders()
@@ -44,11 +46,43 @@ pub fn grouped<'a>(store: &'a ProfileStore, filter: &str) -> Vec<(String, Vec<&'
         .collect()
 }
 
-/// Hover text for a site entry.
+/// Where a site connects: `SSH user@host:22`, `Telnet [::1]:23`, `Serial COM3 9600 8N1`.
 pub fn summary(p: &SessionProfile) -> String {
+    let host = if p.host.contains(':') { format!("[{}]", p.host) } else { p.host.clone() };
     match p.protocol {
         playterm_net::Protocol::Serial => format!("Serial {} {}", p.serial.port, p.serial.line_summary()),
-        proto => format!("{proto} {}:{}", p.host, p.port),
+        playterm_net::Protocol::Ssh if !p.username.is_empty() => format!("SSH {}@{host}:{}", p.username, p.port),
+        proto => format!("{proto} {host}:{}", p.port),
+    }
+}
+
+/// Finds a site in `sites` (numbered from 1, in `sites` order) by exact name, by number, or
+/// by a part of its name or host that only one site has. Returns its id or what went wrong.
+pub fn find(sites: &[&SessionProfile], query: &str) -> Result<String, String> {
+    let query = query.trim();
+    let q = query.to_lowercase();
+    if let Some(p) = sites.iter().find(|p| p.display_name().to_lowercase() == q) {
+        return Ok(p.id.clone());
+    }
+    let number = q.parse::<usize>().ok();
+    if let Some(p) = number.and_then(|n| n.checked_sub(1)).and_then(|k| sites.get(k)) {
+        return Ok(p.id.clone());
+    }
+    // Not a valid number: it may still be part of a name or an address (`open 192`).
+    let hits: Vec<&&SessionProfile> = sites
+        .iter()
+        .filter(|p| p.display_name().to_lowercase().contains(&q) || p.host.to_lowercase().contains(&q))
+        .collect();
+    match hits.as_slice() {
+        [p] => Ok(p.id.clone()),
+        [] if number.is_some() => {
+            Err(format!("{query}번 사이트가 없고, '{query}' 와 일치하는 사이트도 없습니다 (sites 로 확인)"))
+        }
+        [] => Err(format!("'{query}' 사이트를 찾을 수 없습니다 (sites 로 목록 보기)")),
+        many => {
+            let names: Vec<String> = many.iter().map(|p| p.display_name()).collect();
+            Err(format!("여러 사이트가 일치합니다: {}", names.join(", ")))
+        }
     }
 }
 
@@ -144,5 +178,44 @@ impl Sidebar {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use playterm_net::Protocol;
+
+    fn site(id: &str, name: &str, host: &str) -> SessionProfile {
+        SessionProfile { id: id.into(), name: name.into(), host: host.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn finds_sites() {
+        let a = site("a", "웹서버", "192.168.0.10");
+        let b = site("b", "DB", "db.example.com");
+        let c = site("c", "10", "10.0.0.1");
+        let sites = [&a, &b, &c];
+        assert_eq!(find(&sites, "웹서버"), Ok("a".into()));
+        assert_eq!(find(&sites, "db"), Ok("b".into()), "exact name, ignoring case");
+        assert_eq!(find(&sites, "2"), Ok("b".into()), "number");
+        assert_eq!(find(&sites, "10"), Ok("c".into()), "an exact name wins over the number");
+        assert_eq!(find(&sites, "192"), Ok("a".into()), "no site 192: part of an address");
+        assert_eq!(find(&sites, "example"), Ok("b".into()));
+        assert!(find(&sites, "0").unwrap_err().contains("여러 사이트"), "no site 0, two addresses with 0");
+        assert!(find(&sites, "99").unwrap_err().contains("99번"));
+        assert!(find(&sites, "nope").unwrap_err().contains("찾을 수 없습니다"));
+    }
+
+    #[test]
+    fn summaries() {
+        let mut p = site("a", "", "web");
+        p.username = "me".into();
+        assert_eq!(summary(&p), "SSH me@web:22");
+        p.host = "::1".into();
+        assert_eq!(summary(&p), "SSH me@[::1]:22");
+        p.protocol = Protocol::Telnet;
+        p.port = 23;
+        assert_eq!(summary(&p), "Telnet [::1]:23");
     }
 }

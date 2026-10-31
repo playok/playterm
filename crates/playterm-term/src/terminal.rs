@@ -142,6 +142,21 @@ impl Terminal {
         self.encoder = InputEncoder::new(charset);
     }
 
+    /// Turns off what a remote program may have left on: alternate screen, origin mode and
+    /// scroll region, line-drawing character set, insert mode, application keys, mouse
+    /// reporting, bracketed paste, hidden cursor, colors. The cursor stays where it is.
+    pub fn reset_modes(&mut self) {
+        // Back to the normal screen first; that also restores its cursor.
+        self.feed_local("\x1b[?1049l");
+        let cursor = self.term.grid().cursor.point;
+        // Origin mode and the scroll region reset move the cursor home, so put it back after.
+        self.feed_local(
+            "\x1b[?6l\x1b[r\x1b(B\x0f\x1b[4l\x1b[?7h\x1b[?25h\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\
+             \x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l",
+        );
+        self.feed_local(&format!("\x1b[{};{}H", cursor.line.0 + 1, cursor.column.0 + 1));
+    }
+
     /// Encodes user-typed text into the wire charset.
     pub fn encode_input(&self, text: &str) -> Vec<u8> {
         self.encoder.encode(text)
@@ -272,6 +287,7 @@ impl Terminal {
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::index::{Column, Line, Point};
+    use alacritty_terminal::term::TermMode;
 
     use super::*;
 
@@ -301,6 +317,24 @@ mod tests {
         assert_eq!(first.c, '한');
         assert!(first.flags.contains(crate::Flags::WIDE_CHAR));
         assert_eq!(grid[Point::new(Line(0), Column(2))].c, 'A');
+    }
+
+    #[test]
+    fn reset_modes_keeps_cursor() {
+        let mut t = Terminal::new(20, 5, Charset::Utf8, 100);
+        t.feed(b"one\r\ntwo");
+        // A full-screen program: alternate screen, scroll region, origin mode, line drawing,
+        // insert mode, mouse reporting.
+        t.feed(b"\x1b[?1049h\x1b[2;4r\x1b[?6h\x1b(0\x1b[4h\x1b[?1000h\x1b[?2004h");
+        t.reset_modes();
+        assert!(!t.term().mode().intersects(TermMode::MOUSE_MODE | TermMode::BRACKETED_PASTE | TermMode::INSERT));
+        // Back on the normal screen, after "two"; "q" is a plain q again, not a line.
+        t.feed(b"q");
+        assert_eq!(row_text(&t, 0), "one");
+        assert_eq!(row_text(&t, 1), "twoq");
+        // Without a scroll region, new lines reach the bottom row.
+        t.feed(b"\r\n3\r\n4\r\n5");
+        assert_eq!(row_text(&t, 4), "5");
     }
 
     #[test]

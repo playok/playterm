@@ -66,11 +66,6 @@ struct Remote {
     handle: SessionHandle,
 }
 
-/// Leaves modes a remote program may have left on (alternate screen, mouse reporting,
-/// bracketed paste, application keys, scroll region, hidden cursor) before the prompt.
-const RESET_MODES: &str = "\x1b[?1049l\x1b[?1l\x1b>\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\
-                           \x1b[?1005l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b7\x1b[r\x1b8\x1b[0m";
-
 pub struct Session {
     pub id: u64,
     charset: Charset,
@@ -152,6 +147,9 @@ impl Session {
         if let Some(remote) = &self.remote {
             remote.handle.close();
         }
+        self.leave_prompt();
+        // A log belongs to one connection: the new one follows its own profile's setting.
+        self.stop_log();
         params.cols = self.terminal.cols() as u16;
         params.rows = self.terminal.rows() as u16;
         self.charset = charset;
@@ -169,9 +167,7 @@ impl Session {
         self.state = SessionState::Connecting;
         let target = self.target();
         self.terminal.feed_local(&format!("\x1b[90m{target} 에 연결 중...\x1b[0m\r\n"));
-        if let Some(plan) = log
-            && !self.is_logging()
-        {
+        if let Some(plan) = log {
             let path = logging::new_log_path(&plan.dir, &self.tab_title());
             self.start_log(&path, plan.mode);
         }
@@ -232,6 +228,7 @@ impl Session {
         remote.params.cols = self.terminal.cols() as u16;
         remote.params.rows = self.terminal.rows() as u16;
         remote.handle = net.connect(remote.params.clone(), waker);
+        self.leave_prompt();
         let target = self.target();
         self.terminal.feed_local(&format!("\x1b[90m{target} 에 다시 연결 중...\x1b[0m\r\n"));
         self.state = SessionState::Connecting;
@@ -289,7 +286,7 @@ impl Session {
                     self.auth = None;
                     self.sftp = None;
                     self.sftp_pending = false;
-                    self.terminal.feed_local(RESET_MODES);
+                    self.terminal.reset_modes();
                     match reason {
                         Some(reason) => self.notice(&format!("연결 종료: {reason}"), "31"),
                         None => self.notice("연결이 종료되었습니다", "90"),
@@ -370,8 +367,22 @@ impl Session {
 
     // -- local prompt ---------------------------------------------------------------------------
 
+    /// Makes room for connection output: removes the prompt (and anything typed after it)
+    /// when it is showing, or else starts a new line.
+    fn leave_prompt(&mut self) {
+        if self.in_console() {
+            let mut out = String::new();
+            self.console.set_width(self.terminal.cols());
+            self.console.erase(&mut out);
+            self.terminal.feed_local(&out);
+        } else {
+            self.terminal.feed_local("\r\n");
+        }
+    }
+
     /// Shows a fresh prompt line.
     pub fn prompt(&mut self) {
+        self.console.set_width(self.terminal.cols());
         let folder = local_fs::display(&self.cwd);
         self.console.set_prompt(format!("\x1b[1;36mplayterm\x1b[0m \x1b[34m{folder}\x1b[0m> "));
         let mut out = String::new();
@@ -394,6 +405,7 @@ impl Session {
         }
         self.terminal.scroll_to_bottom();
         self.terminal.clear_selection();
+        self.console.set_width(self.terminal.cols());
         let mut out = String::new();
         let lines = self.console.text(text, &mut out);
         self.terminal.feed_local(&out);
@@ -412,6 +424,7 @@ impl Session {
         }
         self.terminal.scroll_to_bottom();
         self.terminal.clear_selection();
+        self.console.set_width(self.terminal.cols());
         let mut out = String::new();
         let result = self.console.key(bytes, &mut out);
         self.terminal.feed_local(&out);

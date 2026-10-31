@@ -4,14 +4,12 @@
 use playterm_config::SessionProfile;
 use playterm_net::{ForwardKind, ForwardRule};
 use playterm_term::Charset;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::local_fs::ListOptions;
 use crate::profile_form::parse_url;
 
 pub const PROMPT: &str = "\x1b[1;36mplayterm\x1b[0m> ";
-#[cfg(test)]
-const PROMPT_WIDTH: usize = "playterm> ".len();
 
 pub const HELP: &str = "\
 \x1b[1m사용할 수 있는 명령\x1b[0m
@@ -239,6 +237,10 @@ pub fn pad(s: &str, width: usize) -> String {
 /// Single-line editor with history. Output (echo, redraws) is appended to `out`.
 pub struct LineEditor {
     prompt: String,
+    /// Terminal width, for lines that wrap.
+    cols: usize,
+    /// Row of the terminal cursor, counted from the row where the prompt starts.
+    cursor_row: usize,
     line: Vec<char>,
     cursor: usize,
     history: Vec<String>,
@@ -252,6 +254,8 @@ impl Default for LineEditor {
     fn default() -> Self {
         Self {
             prompt: PROMPT.into(),
+            cols: 80,
+            cursor_row: 0,
             line: Vec::new(),
             cursor: 0,
             history: Vec::new(),
@@ -267,17 +271,55 @@ impl LineEditor {
         self.prompt = prompt;
     }
 
-    /// Redraws the prompt line and puts the cursor in place.
-    fn redraw(&self, out: &mut String) {
-        let line: String = self.line.iter().collect();
-        out.push_str("\r\x1b[K");
-        out.push_str(&self.prompt);
-        out.push_str(&line);
-        let after: String = self.line[self.cursor..].iter().collect();
-        let back = after.width();
-        if back > 0 {
-            out.push_str(&format!("\x1b[{back}D"));
+    /// Terminal width; lines longer than this wrap.
+    pub fn set_width(&mut self, cols: usize) {
+        self.cols = cols.max(1);
+    }
+
+    /// Where the terminal puts the next character after the prompt and the first `upto`
+    /// characters of the line, as (row from the prompt's first row, column). The column
+    /// equals the width when the row is full and the next character wraps.
+    fn position(&self, upto: usize) -> (usize, usize) {
+        let mut pos = (0, 0);
+        for c in visible(&self.prompt).chars().chain(self.line[..upto].iter().copied()) {
+            pos = advance(pos, c.width().unwrap_or(0), self.cols);
         }
+        pos
+    }
+
+    /// Moves the cursor back to the start of the prompt and clears from there down.
+    fn rewind(&mut self, out: &mut String) {
+        if self.cursor_row > 0 {
+            out.push_str(&format!("\x1b[{}A", self.cursor_row));
+        }
+        out.push_str("\r\x1b[J");
+        self.cursor_row = 0;
+    }
+
+    /// Redraws the prompt and the line (which may wrap over several rows) and puts the
+    /// cursor in place.
+    fn redraw(&mut self, out: &mut String) {
+        self.rewind(out);
+        out.push_str(&self.prompt);
+        out.extend(self.line.iter());
+        let end = self.position(self.line.len());
+        if self.cursor == self.line.len() {
+            self.cursor_row = end.0;
+            return;
+        }
+        // The character under the cursor starts the next row if it does not fit.
+        let (mut row, mut col) = self.position(self.cursor);
+        if col + self.line[self.cursor].width().unwrap_or(0) > self.cols {
+            (row, col) = (row + 1, 0);
+        }
+        if end.0 > row {
+            out.push_str(&format!("\x1b[{}A", end.0 - row));
+        }
+        out.push('\r');
+        if col > 0 {
+            out.push_str(&format!("\x1b[{col}C"));
+        }
+        self.cursor_row = row;
     }
 
     /// Prompt for a fresh line.
@@ -286,17 +328,38 @@ impl LineEditor {
         self.cursor = 0;
         self.browsing = None;
         out.push_str(&self.prompt);
+        self.cursor_row = self.position(0).0;
+    }
+
+    /// Removes the prompt and the line from the screen (something else takes over the row).
+    pub fn erase(&mut self, out: &mut String) {
+        self.rewind(out);
+        self.line.clear();
+        self.cursor = 0;
+        self.browsing = None;
+    }
+
+    /// Puts the cursor after the end of the line, so output can follow it.
+    fn move_to_end(&mut self, out: &mut String) {
+        if self.cursor != self.line.len() {
+            self.cursor = self.line.len();
+            self.redraw(out);
+        }
     }
 
     /// Typed or pasted text. Returns completed lines (a paste may hold several).
     pub fn text(&mut self, text: &str, out: &mut String) -> Vec<String> {
         let mut done = Vec::new();
         let mut last_cr = false;
+        let mut changed = false;
         for c in text.chars() {
             match c {
                 '\r' | '\n' => {
                     // "\r\n" is one Enter.
                     if !(c == '\n' && last_cr) {
+                        if std::mem::take(&mut changed) {
+                            self.redraw(out);
+                        }
                         done.push(self.submit(out));
                     }
                 }
@@ -304,23 +367,24 @@ impl LineEditor {
                 c => {
                     self.line.insert(self.cursor, c);
                     self.cursor += 1;
-                    if self.cursor == self.line.len() {
-                        out.push(c);
-                    } else {
-                        self.redraw(out);
-                    }
+                    changed = true;
                 }
             }
             last_cr = c == '\r';
+        }
+        if changed {
+            self.redraw(out);
         }
         done
     }
 
     fn submit(&mut self, out: &mut String) -> String {
+        self.move_to_end(out);
         let line: String = self.line.drain(..).collect();
         self.cursor = 0;
         self.browsing = None;
         out.push_str("\r\n");
+        self.cursor_row = 0;
         let trimmed = line.trim();
         if !trimmed.is_empty() && self.history.last().map(String::as_str) != Some(trimmed) {
             self.history.push(trimmed.to_owned());
@@ -354,6 +418,7 @@ impl LineEditor {
             }
             [0x03] => {
                 // Ctrl+C: drop the line, like a shell.
+                self.move_to_end(out);
                 out.push_str("^C\r\n");
                 self.prompt(out);
             }
@@ -403,11 +468,34 @@ impl LineEditor {
         KeyResult::None
     }
 
-    /// Width of the prompt plus the current line, for tests.
-    #[cfg(test)]
-    fn width(&self) -> usize {
-        PROMPT_WIDTH + self.line.iter().collect::<String>().width()
+}
+
+/// `s` without its escape sequences (the part that takes up cells).
+fn visible(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // CSI: ESC [ parameters final-byte; other escapes are two characters.
+            if chars.next() == Some('[') {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+        } else {
+            out.push(c);
+        }
     }
+    out
+}
+
+/// Cursor position after drawing a character `width` cells wide at `pos` on a `cols`-wide
+/// screen with auto-wrap: a character that does not fit goes to the start of the next row.
+fn advance(pos: (usize, usize), width: usize, cols: usize) -> (usize, usize) {
+    let (row, col) = if pos.1 + width > cols { (pos.0 + 1, 0) } else { pos };
+    (row, col + width)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -506,7 +594,7 @@ mod tests {
         ed.key(b"\x1b[D", &mut out);
         ed.key(b"\x1b[D", &mut out);
         ed.text("한", &mut out);
-        assert_eq!(ed.width(), PROMPT_WIDTH + 4);
+        assert_eq!(ed.position(ed.line.len()), (0, "playterm> ".len() + 4));
         ed.key(b"\x1b[3~", &mut out);
         assert_eq!(ed.key(b"\r", &mut out), KeyResult::Line("한s".into()));
 
@@ -524,5 +612,60 @@ mod tests {
         // A paste with several lines.
         ed.key(&[0x15], &mut out);
         assert_eq!(ed.text("ls\r\nhelp\n", &mut out), ["ls", "help"]);
+    }
+
+    #[test]
+    fn wrapped_lines() {
+        let mut ed = LineEditor::default();
+        ed.set_width(20);
+        let mut out = String::new();
+        ed.prompt(&mut out);
+        // 10 prompt cells + 15 characters: the line wraps onto a second row.
+        ed.text("abcdefghijklmno", &mut out);
+        assert_eq!(ed.cursor_row, 1);
+
+        // Left: redraw from the prompt's first row, cursor before "o" (row 1, column 4).
+        out.clear();
+        ed.key(b"\x1b[D", &mut out);
+        assert!(out.starts_with("\x1b[1A\r\x1b[J"), "{out:?}");
+        assert!(out.ends_with("\r\x1b[4C"), "{out:?}");
+        assert_eq!(ed.cursor_row, 1);
+
+        // Home: up one row to just after the prompt.
+        out.clear();
+        ed.key(b"\x1b[H", &mut out);
+        assert!(out.ends_with("\x1b[1A\r\x1b[10C"), "{out:?}");
+        assert_eq!(ed.cursor_row, 0);
+
+        // Enter from the first row: move past the wrapped end before the new line.
+        out.clear();
+        assert_eq!(ed.key(b"\r", &mut out), KeyResult::Line("abcdefghijklmno".into()));
+        assert!(out.ends_with("abcdefghijklmno\r\n"), "{out:?}");
+        assert_eq!(ed.cursor_row, 0);
+    }
+
+    #[test]
+    fn wide_characters_wrap_early() {
+        let mut ed = LineEditor::default();
+        ed.set_width(13);
+        let mut out = String::new();
+        ed.prompt(&mut out);
+        // 10 + 2 = 12 cells; the next wide character does not fit in the 13th cell.
+        ed.text("한", &mut out);
+        assert_eq!(ed.position(1), (0, 12));
+        ed.text("글", &mut out);
+        assert_eq!((ed.position(2), ed.cursor_row), ((1, 2), 1));
+        // A full row leaves the cursor on it until the next character arrives.
+        let mut ed = LineEditor::default();
+        ed.set_width(12);
+        ed.prompt(&mut out);
+        ed.text("ab", &mut out);
+        assert_eq!((ed.position(2), ed.cursor_row), ((0, 12), 0));
+    }
+
+    #[test]
+    fn prompt_width_ignores_colors() {
+        assert_eq!(visible(PROMPT), "playterm> ");
+        assert_eq!(visible("\x1b[1;36ma\x1b[0m \x1b[34m~\\x\x1b[0m> "), "a ~\\x> ");
     }
 }

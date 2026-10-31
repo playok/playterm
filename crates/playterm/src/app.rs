@@ -58,8 +58,8 @@ enum Pending {
     Unlock,
     /// Connect a saved profile, using its stored password, in the given tab if any.
     Connect(String, Option<u64>),
-    /// Store a password typed in the session editor.
-    StoreSecret { id: String, password: Zeroizing<String>, connect: bool },
+    /// Store a password typed in the site manager (and connect, in the given tab if any).
+    StoreSecret { id: String, password: Zeroizing<String>, connect: bool, target: Option<u64> },
 }
 
 enum Modal {
@@ -93,8 +93,12 @@ pub struct PlaytermApp {
     status: Option<String>,
     window_title: String,
     always_on_top: bool,
-    /// Tab (at its prompt) that the next connection should use instead of a new tab.
+    /// Tab (at its prompt) that the connection being opened should use instead of a new tab.
+    /// Only set for the duration of one call; see [`Self::connect_in`].
     connect_target: Option<u64>,
+    /// Prompt tab that opened the quick-connect dialog or the site manager, so a connection
+    /// made from there replaces that prompt.
+    dialog_target: Option<u64>,
 }
 
 impl PlaytermApp {
@@ -131,6 +135,7 @@ impl PlaytermApp {
             window_title: String::new(),
             always_on_top: false,
             connect_target: None,
+            dialog_target: None,
         };
         for profile in initial {
             app.open_session(&profile, None, None);
@@ -162,7 +167,7 @@ impl PlaytermApp {
 
     /// Connects `spec` in the tab it was typed in, in the current tab if that is an unused
     /// prompt, or else in a new tab.
-    fn open_spec(&mut self, mut spec: SessionSpec) {
+    fn open_spec(&mut self, spec: SessionSpec) {
         let target = self.connect_target.take().or_else(|| {
             self.sessions.get(self.active).filter(|s| s.state == SessionState::Local).map(|s| s.id)
         });
@@ -171,15 +176,24 @@ impl PlaytermApp {
             self.active = i;
             return;
         }
-        // The real size is applied on the first frame; this is only the initial PTY request.
-        if let Some(s) = self.sessions.get(self.active) {
-            spec.params.cols = s.terminal.cols() as u16;
-            spec.params.rows = s.terminal.rows() as u16;
-        }
+        self.connect_in_new_tab(spec);
+    }
+
+    fn connect_in_new_tab(&mut self, mut spec: SessionSpec) {
+        (spec.params.cols, spec.params.rows) = self.tab_size();
         let session = Session::connect(self.next_id, spec, &self.net, self.waker.clone());
         self.next_id += 1;
         self.sessions.push(session);
         self.active = self.sessions.len() - 1;
+    }
+
+    /// Runs `connect` (which may open a connection, or a vault dialog that opens one later)
+    /// so that the connection replaces the prompt of tab `target`.
+    fn connect_in(&mut self, target: Option<u64>, connect: impl FnOnce(&mut Self)) {
+        self.connect_target = target;
+        connect(self);
+        // Consumed by `open_spec`, or carried into a pending vault step; never left behind.
+        self.connect_target = None;
     }
 
     fn open_session(&mut self, profile: &SessionProfile, password: Option<String>, name: Option<String>) {
@@ -285,8 +299,9 @@ impl PlaytermApp {
         } else {
             (VaultMode::Create, "처음으로 비밀번호를 저장합니다.")
         };
-        self.modal =
-            Some(Modal::Vault(VaultDialog::new(mode, reason), Pending::StoreSecret { id, password, connect }));
+        let target = self.connect_target.take();
+        let pending = Pending::StoreSecret { id, password, connect, target };
+        self.modal = Some(Modal::Vault(VaultDialog::new(mode, reason), pending));
     }
 
     /// Runs after the vault was unlocked or created.
@@ -297,15 +312,12 @@ impl PlaytermApp {
         self.report("볼트 정리 실패", r);
         match pending {
             Pending::Unlock => {}
-            Pending::Connect(id, target) => {
-                self.connect_target = target;
-                self.connect_saved(&id);
-            }
-            Pending::StoreSecret { id, password, connect } => {
+            Pending::Connect(id, target) => self.connect_in(target, |app| app.connect_saved(&id)),
+            Pending::StoreSecret { id, password, connect, target } => {
                 let r = self.vault.set(&id, &password);
                 self.report("비밀번호 저장 실패", r);
                 if connect {
-                    self.connect_saved(&id);
+                    self.connect_in(target, |app| app.connect_saved(&id));
                 }
             }
         }
@@ -316,15 +328,15 @@ impl PlaytermApp {
         match pending {
             Pending::Unlock => {}
             Pending::Connect(id, target) => {
-                self.connect_target = target;
                 if let Some(p) = self.store.get(&id).cloned() {
-                    self.open_session(&p, None, Some(p.display_name()));
+                    self.connect_in(target, |app| app.open_session(&p, None, Some(p.display_name())));
                 }
             }
-            Pending::StoreSecret { id, password, connect } => {
+            Pending::StoreSecret { id, password, connect, target } => {
                 self.status = Some("비밀번호는 저장되지 않았습니다".into());
                 if connect && let Some(p) = self.store.get(&id).cloned() {
-                    self.open_session(&p, Some(password.to_string()), Some(p.display_name()));
+                    let password = password.to_string();
+                    self.connect_in(target, |app| app.open_session(&p, Some(password), Some(p.display_name())));
                 }
             }
         }
@@ -344,8 +356,9 @@ impl PlaytermApp {
         Some(copy)
     }
 
-    /// Opens the site manager, with `select` selected or a new site started.
-    fn open_site_manager(&mut self, select: Option<&str>, new_site: bool) {
+    /// Opens the site manager, with `select` selected or a new site started. `target` is the
+    /// prompt tab it was opened from, if any.
+    fn open_site_manager(&mut self, select: Option<&str>, new_site: bool, target: Option<u64>) {
         let mut manager = SiteManager::default();
         if new_site {
             manager.new_site();
@@ -353,13 +366,20 @@ impl PlaytermApp {
             manager.select(p, has_secret(&self.vault, p));
         }
         self.site_manager = Some(manager);
+        self.dialog_target = target;
+    }
+
+    /// Opens the quick-connect dialog; `target` is the prompt tab it was opened from, if any.
+    fn open_quick_connect(&mut self, target: Option<u64>) {
+        self.modal = Some(Modal::QuickConnect(Box::new(QuickConnect::new())));
+        self.dialog_target = target;
     }
 
     fn sidebar_action(&mut self, action: SidebarAction) {
         match action {
             SidebarAction::Connect(id) => self.connect_saved(&id),
-            SidebarAction::Manage(id) => self.open_site_manager(id.as_deref(), false),
-            SidebarAction::New => self.open_site_manager(None, true),
+            SidebarAction::Manage(id) => self.open_site_manager(id.as_deref(), false, None),
+            SidebarAction::New => self.open_site_manager(None, true, None),
             SidebarAction::Duplicate(id) => {
                 self.duplicate_profile(&id);
             }
@@ -378,6 +398,7 @@ impl PlaytermApp {
         let Some(mut manager) = self.site_manager.take() else { return };
         let vault = &self.vault;
         let result = manager.show(ctx, &self.store, &|p| has_secret(vault, p));
+        let target = self.dialog_target;
         match result {
             SiteManagerResult::Open => self.site_manager = Some(manager),
             SiteManagerResult::Close => {}
@@ -385,9 +406,9 @@ impl PlaytermApp {
                 if !connect && !close {
                     self.site_manager = Some(manager);
                 }
-                self.save_profile(*profile, password, connect);
+                self.connect_in(target, |app| app.save_profile(*profile, password, connect));
             }
-            SiteManagerResult::Connect(id) => self.connect_saved(&id),
+            SiteManagerResult::Connect(id) => self.connect_in(target, |app| app.connect_saved(&id)),
             SiteManagerResult::Duplicate(id) => {
                 if let Some(copy) = self.duplicate_profile(&id) {
                     manager.select(&copy, has_secret(&self.vault, &copy));
@@ -398,6 +419,9 @@ impl PlaytermApp {
                 self.site_manager = Some(manager);
                 self.modal = Some(Modal::ConfirmDelete(id));
             }
+        }
+        if self.site_manager.is_none() {
+            self.dialog_target = None;
         }
     }
 
@@ -415,7 +439,6 @@ impl PlaytermApp {
             .collect();
         for (id, request) in pending {
             self.console_request(id, request);
-            self.connect_target = None;
         }
     }
 
@@ -424,14 +447,12 @@ impl PlaytermApp {
         let mut output = None;
         match request {
             Request::Connect(profile) => {
-                self.connect_target = Some(id);
-                self.open_session(&profile, None, None);
+                self.connect_in(Some(id), |app| app.open_session(&profile, None, None));
                 return;
             }
-            Request::OpenSite(query) => match self.find_site(&query) {
+            Request::OpenSite(query) => match sidebar::find(&self.numbered_sites(), &query) {
                 Ok(site) => {
-                    self.connect_target = Some(id);
-                    self.connect_saved(&site);
+                    self.connect_in(Some(id), |app| app.connect_saved(&site));
                     return;
                 }
                 Err(e) => output = Some(format!("\x1b[31m{e}\x1b[0m")),
@@ -439,10 +460,10 @@ impl PlaytermApp {
             Request::Sites(filter) => output = Some(self.site_list(&filter)),
             Request::SiteManager => {
                 let selected = self.sidebar.selected().map(str::to_owned);
-                self.open_site_manager(selected.as_deref(), false);
+                self.open_site_manager(selected.as_deref(), false, Some(id));
             }
-            Request::NewSite => self.open_site_manager(None, true),
-            Request::QuickConnect => self.modal = Some(Modal::QuickConnect(Box::new(QuickConnect::new()))),
+            Request::NewSite => self.open_site_manager(None, true, Some(id)),
+            Request::QuickConnect => self.open_quick_connect(Some(id)),
             Request::Reconnect if self.sessions[i].has_target() => {
                 let waker = self.waker.clone();
                 self.sessions[i].reconnect(&self.net, waker);
@@ -466,33 +487,6 @@ impl PlaytermApp {
         sidebar::grouped(&self.store, "").into_iter().flat_map(|(_, items)| items).collect()
     }
 
-    /// Finds a saved site by `sites` number, exact name, or a unique part of its name or host.
-    fn find_site(&self, query: &str) -> Result<String, String> {
-        let sites = self.numbered_sites();
-        let q = query.trim().to_lowercase();
-        if let Some(p) = sites.iter().find(|p| p.display_name().to_lowercase() == q) {
-            return Ok(p.id.clone());
-        }
-        if let Ok(n) = q.parse::<usize>() {
-            return match n.checked_sub(1).and_then(|k| sites.get(k)) {
-                Some(p) => Ok(p.id.clone()),
-                None => Err(format!("{n}번 사이트가 없습니다 (sites 로 번호 확인)")),
-            };
-        }
-        let hits: Vec<&&SessionProfile> = sites
-            .iter()
-            .filter(|p| p.display_name().to_lowercase().contains(&q) || p.host.to_lowercase().contains(&q))
-            .collect();
-        match hits.as_slice() {
-            [] => Err(format!("'{}' 사이트를 찾을 수 없습니다 (sites 로 목록 보기)", query.trim())),
-            [p] => Ok(p.id.clone()),
-            many => {
-                let names: Vec<String> = many.iter().map(|p| p.display_name()).collect();
-                Err(format!("여러 사이트가 일치합니다: {}", names.join(", ")))
-            }
-        }
-    }
-
     /// `sites` output: numbered sites matching `filter`.
     fn site_list(&self, filter: &str) -> String {
         use crate::console::pad;
@@ -500,29 +494,20 @@ impl PlaytermApp {
         if sites.is_empty() {
             return "저장된 사이트가 없습니다. open 으로 사이트 관리 창을 열어 추가하세요.".into();
         }
-        let shown: std::collections::HashSet<&str> = sidebar::grouped(&self.store, filter)
-            .into_iter()
-            .flat_map(|(_, items)| items)
-            .map(|p| p.id.as_str())
-            .collect();
-        let address = |p: &SessionProfile| match p.protocol {
-            Protocol::Serial => format!("serial {} {}", p.serial.port, p.serial.line_summary()),
-            Protocol::Telnet => format!("telnet {}:{}", p.host, p.port),
-            Protocol::Ssh => format!("ssh {}@{}:{}", p.username, p.host, p.port),
-        };
         let mut out = format!("\x1b[90m{}  {}  {}  폴더\x1b[0m\n", pad("번호", 4), pad("이름", 20), pad("접속", 34));
-        for (n, p) in sites.iter().enumerate() {
-            if shown.contains(p.id.as_str()) {
-                out.push_str(&format!(
-                    "{:>4}  {}  {}  {}\n",
-                    n + 1,
-                    pad(&p.display_name(), 20),
-                    pad(&address(p), 34),
-                    p.folder
-                ));
-            }
+        let mut shown = 0;
+        // Numbers count every site, so `open N` works on a filtered list too.
+        for (n, p) in sites.iter().enumerate().filter(|(_, p)| sidebar::matches(p, filter)) {
+            shown += 1;
+            out.push_str(&format!(
+                "{:>4}  {}  {}  {}\n",
+                n + 1,
+                pad(&p.display_name(), 20),
+                pad(&sidebar::summary(p), 34),
+                p.folder
+            ));
         }
-        if shown.is_empty() {
+        if shown == 0 {
             out.push_str(&format!("'{}' 와 일치하는 사이트가 없습니다\n", filter.trim()));
         }
         out.push_str("\x1b[90mopen 번호|이름 으로 접속\x1b[0m");
@@ -534,13 +519,13 @@ impl PlaytermApp {
     fn run(&mut self, ctx: &egui::Context, command: Command) {
         let n = self.sessions.len();
         match command {
-            Command::QuickConnect => self.modal = Some(Modal::QuickConnect(Box::new(QuickConnect::new()))),
+            Command::QuickConnect => self.open_quick_connect(None),
             Command::NewTab => self.open_local(),
             Command::SiteManager => {
                 let selected = self.sidebar.selected().map(str::to_owned);
-                self.open_site_manager(selected.as_deref(), false);
+                self.open_site_manager(selected.as_deref(), false, None);
             }
-            Command::NewSite => self.open_site_manager(None, true),
+            Command::NewSite => self.open_site_manager(None, true, None),
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
 
             Command::Copy => {
@@ -616,17 +601,8 @@ impl PlaytermApp {
             Command::PrevTab if n > 0 => self.active = (self.active + n - 1) % n,
             Command::NextTab | Command::PrevTab => {}
             Command::Duplicate(i) => match self.sessions.get(i).map(Session::spec) {
-                Some(Some(spec)) => {
-                    // Always a new tab, even when the current one is an unused prompt.
-                    let (cols, rows) = self.tab_size();
-                    let mut spec = spec;
-                    spec.params.cols = cols;
-                    spec.params.rows = rows;
-                    let session = Session::connect(self.next_id, spec, &self.net, self.waker.clone());
-                    self.next_id += 1;
-                    self.sessions.push(session);
-                    self.active = self.sessions.len() - 1;
-                }
+                // Always a new tab, even when the current one is an unused prompt.
+                Some(Some(spec)) => self.connect_in_new_tab(spec),
                 Some(None) => self.open_local(),
                 None => {}
             },
@@ -678,14 +654,15 @@ impl PlaytermApp {
         match modal {
             Modal::QuickConnect(mut dialog) => match dialog.show(ctx) {
                 QuickConnectResult::Open => self.modal = Some(Modal::QuickConnect(dialog)),
-                QuickConnectResult::Cancel => {}
+                QuickConnectResult::Cancel => self.dialog_target = None,
                 QuickConnectResult::Connect { profile, password, save } => {
                     if save {
                         let r = self.store.upsert((*profile).clone());
                         self.report("사이트 저장 실패", r);
                     }
                     let name = save.then(|| profile.display_name());
-                    self.open_session(&profile, password.map(|p| p.to_string()), name);
+                    let target = self.dialog_target.take();
+                    self.connect_in(target, |app| app.open_session(&profile, password.map(|p| p.to_string()), name));
                 }
             },
             Modal::Shortcuts => {

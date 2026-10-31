@@ -29,11 +29,13 @@ pub fn display(path: &Path) -> String {
     }
 }
 
-/// Resolves `arg` against `cwd`: `~`, drive letters (`D:`), absolute and relative paths,
-/// with `.` and `..` removed (no `\\?\` prefix like `canonicalize`).
+/// Resolves `arg` against `cwd`: `~` and `~\...` (home), drive letters (`D:`), absolute and
+/// relative paths, with `.` and `..` removed (no `\\?\` prefix like `canonicalize`). Other
+/// names that start with `~` (`~backup`, `~$doc.docx`) are ordinary relative names.
 pub fn resolve(cwd: &Path, arg: &str) -> PathBuf {
     let arg = arg.trim().trim_matches('"');
-    let joined = if arg.starts_with('~') {
+    let home_relative = arg == "~" || arg.starts_with("~\\") || arg.starts_with("~/");
+    let joined = if home_relative {
         expand_home(arg)
     } else if arg.len() == 2 && arg.ends_with(':') {
         // A bare drive means its root.
@@ -250,6 +252,9 @@ mod tests {
         assert_eq!(resolve(cwd, "D:"), PathBuf::from(r"D:\"));
         assert_eq!(resolve(cwd, r"E:\x\..\y"), PathBuf::from(r"E:\y"));
         assert_eq!(resolve(cwd, "~"), home());
+        assert_eq!(resolve(cwd, r"~\Documents"), home().join("Documents"));
+        assert_eq!(resolve(cwd, "~backup"), PathBuf::from(r"C:\Users\me\work\~backup"));
+        assert_eq!(resolve(cwd, "~$report.docx"), PathBuf::from(r"C:\Users\me\work\~$report.docx"));
     }
 
     #[test]
