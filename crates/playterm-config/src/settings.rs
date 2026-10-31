@@ -73,6 +73,8 @@ pub struct AppSettings {
     pub scrollback: usize,
     /// Show the status bar under the terminal.
     pub status_bar: bool,
+    /// Show the command input bar under the terminal.
+    pub compose_bar: bool,
     pub language: Language,
     pub ui_theme: UiTheme,
     pub prevent_sleep: PreventSleep,
@@ -123,6 +125,7 @@ impl Default for AppSettings {
             theme: "Campbell".into(),
             scrollback: 10_000,
             status_bar: true,
+            compose_bar: false,
             language: Language::Korean,
             ui_theme: UiTheme::Dark,
             prevent_sleep: PreventSleep::System,
@@ -147,6 +150,7 @@ mod tests {
             theme: "Dracula".into(),
             scrollback: 5000,
             status_bar: false,
+            compose_bar: true,
             language: Language::English,
             ui_theme: UiTheme::System,
             prevent_sleep: PreventSleep::Display,

@@ -4,6 +4,7 @@ mod app;
 mod autologin;
 mod boxdraw;
 mod clipboard;
+mod compose_bar;
 mod console;
 mod dialogs;
 mod fonts;

@@ -11,6 +11,7 @@ use playterm_term::{LogMode, Palette, Theme};
 use zeroize::Zeroizing;
 
 use crate::autologin::LoginScript;
+use crate::compose_bar::{self, ComposeBar};
 use crate::console::Request;
 use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultMode, VaultResult};
 use crate::import_dialog::{ImportDialog, ImportResult};
@@ -38,6 +39,7 @@ const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
     (KeyboardShortcut::new(CTRL_SHIFT, Key::I), Shortcut::Broadcast),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::E), Shortcut::Sftp),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::X), Shortcut::SftpPanel),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::M), Shortcut::ComposeBar),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::Tab), Shortcut::PrevTab),
     (KeyboardShortcut::new(Modifiers::CTRL, Key::Tab), Shortcut::NextTab),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::W), Shortcut::CloseTab),
@@ -61,6 +63,7 @@ enum Shortcut {
     Broadcast,
     Sftp,
     SftpPanel,
+    ComposeBar,
     PrevTab,
     NextTab,
     CloseTab,
@@ -144,6 +147,8 @@ pub struct PlaytermApp {
     screensaver_guard: ScreenSaverGuard,
     /// The SFTP explorer side panel is open.
     sftp_panel: bool,
+    /// Command input bar under the terminal (shown per `settings.compose_bar`).
+    compose: ComposeBar,
 }
 
 impl PlaytermApp {
@@ -200,6 +205,7 @@ impl PlaytermApp {
             sleep_guard: SleepGuard::default(),
             screensaver_guard: ScreenSaverGuard::default(),
             sftp_panel: false,
+            compose: ComposeBar::default(),
         };
         for profile in initial {
             app.open_session(&profile, None, None);
@@ -615,6 +621,28 @@ impl PlaytermApp {
             .collect()
     }
 
+    /// Types a message from the command input bar: into the current tab (and the tabs receiving
+    /// simultaneous input), or into every connected tab.
+    fn send_composed(&mut self, send: compose_bar::Send) {
+        let mut targets = vec![self.active];
+        if send.to_all {
+            targets.extend(
+                (0..self.sessions.len())
+                    .filter(|&i| i != self.active)
+                    .filter(|&i| self.sessions[i].in_broadcast && self.sessions[i].state == SessionState::Connected),
+            );
+        } else {
+            targets.extend(self.broadcast_targets());
+        }
+        for i in targets {
+            let Some(session) = self.sessions.get_mut(i) else { continue };
+            for line in compose_bar::lines(&send.text) {
+                session.send_text(line);
+                session.send_bytes(vec![b'\r']);
+            }
+        }
+    }
+
     /// Repeats input typed in the active tab in the other receiving tabs.
     fn broadcast_input(&mut self, inputs: &[UserInput]) {
         if inputs.is_empty() {
@@ -746,6 +774,13 @@ impl PlaytermApp {
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
             Command::ToggleStatusBar => {
                 self.settings.status_bar = !self.settings.status_bar;
+                self.save_settings();
+            }
+            Command::ToggleComposeBar => {
+                self.settings.compose_bar = !self.settings.compose_bar;
+                if self.settings.compose_bar {
+                    self.compose.request_focus();
+                }
                 self.save_settings();
             }
             Command::ToggleFullscreen => {
@@ -1003,6 +1038,7 @@ impl PlaytermApp {
                 Shortcut::Broadcast => Command::ToggleBroadcast,
                 Shortcut::Sftp => Command::Sftp(i),
                 Shortcut::SftpPanel => Command::ToggleSftpPanel,
+                Shortcut::ComposeBar => Command::ToggleComposeBar,
                 Shortcut::PrevTab => Command::PrevTab,
                 Shortcut::NextTab => Command::NextTab,
                 Shortcut::CloseTab => Command::Close(i),
@@ -1024,6 +1060,7 @@ impl PlaytermApp {
             active: self.active,
             show_sidebar: self.show_sidebar,
             show_status_bar: self.settings.status_bar,
+            show_compose_bar: self.settings.compose_bar,
             vault: self.vault_state(),
             always_on_top: self.always_on_top,
             broadcast: self.broadcast,
@@ -1369,6 +1406,14 @@ impl eframe::App for PlaytermApp {
                     // Progress arrives at most every 100 ms; keep the bars moving.
                     ctx.request_repaint_after(std::time::Duration::from_millis(100));
                 }
+            }
+        }
+
+        if self.settings.compose_bar {
+            let connected = self.sessions.iter().filter(|s| s.state == SessionState::Connected).count();
+            let send = egui::Panel::bottom("compose").show(ui, |ui| self.compose.show(ui, connected)).inner;
+            if let Some(send) = send {
+                self.send_composed(send);
             }
         }
 
