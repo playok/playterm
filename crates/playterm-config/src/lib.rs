@@ -6,6 +6,6 @@ mod profiles;
 mod settings;
 mod vault;
 
-pub use profiles::{LogSettings, ProfileStore, SessionProfile};
+pub use profiles::{AutoLogin, LogSettings, LoginStep, ProfileStore, SessionProfile};
 pub use settings::AppSettings;
 pub use vault::{Vault, VaultError};

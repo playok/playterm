@@ -5,10 +5,11 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
 use playterm_config::{AppSettings, ProfileStore, SessionProfile, Vault};
-use playterm_net::{ConnectParams, NetRuntime, Protocol, Waker};
+use playterm_net::{ConnectParams, NetRuntime, Waker};
 use playterm_term::{LogMode, Palette, Theme};
 use zeroize::Zeroizing;
 
+use crate::autologin::LoginScript;
 use crate::console::Request;
 use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultMode, VaultResult};
 use crate::import_dialog::{ImportDialog, ImportResult};
@@ -267,13 +268,19 @@ impl PlaytermApp {
             dir: logging::log_dir(&profile.log.dir),
             mode: if profile.log.raw { LogMode::Raw } else { LogMode::Text { timestamps: profile.log.timestamps } },
         });
-        self.open_spec(SessionSpec { params, charset: profile.charset, name, log });
+        let login = (profile.auto_login.enabled && !profile.auto_login.steps.is_empty()).then(|| LoginScript {
+            steps: profile.auto_login.steps.clone(),
+            user: profile.username.clone(),
+            password: params.password.clone().map(Zeroizing::new),
+        });
+        self.open_spec(SessionSpec { params, charset: profile.charset, name, log, login });
     }
 
     /// Connects a saved profile, unlocking the vault first if its password is stored there.
     fn connect_saved(&mut self, id: &str) {
         let Some(profile) = self.store.get(id).cloned() else { return };
-        let wants_secret = profile.save_password && profile.protocol == Protocol::Ssh;
+        // SSH logs in with it; Telnet and serial sites type it at the prompt (automatic login).
+        let wants_secret = profile.save_password;
         if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
             let dialog = VaultDialog::new(
                 VaultMode::Unlock,

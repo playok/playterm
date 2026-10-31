@@ -4,6 +4,7 @@
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
 use playterm_term::{Charset, LogMode, Palette, Point, Terminal, TerminalEvent};
 
+use crate::autologin::{LoginAction, LoginRunner, LoginScript};
 use crate::console::{self, KeyResult, LineEditor, Parsed, Request};
 use crate::local_fs;
 use crate::logging::{self, LogPlan};
@@ -42,6 +43,8 @@ pub struct SessionSpec {
     pub name: Option<String>,
     /// Start logging as soon as the tab opens.
     pub log: Option<LogPlan>,
+    /// Answer login prompts automatically.
+    pub login: Option<LoginScript>,
 }
 
 /// Mouse reporting state (application mouse modes).
@@ -97,6 +100,10 @@ pub struct Session {
     sftp_pending: bool,
     /// Auto-log settings of the profile, kept so duplicates log to their own file.
     log_plan: Option<LogPlan>,
+    /// The site's automatic login, kept for reconnects and duplicates.
+    login_script: Option<LoginScript>,
+    /// Automatic login in progress on the current connection.
+    login: Option<LoginRunner>,
     remote: Option<Remote>,
     console: LineEditor,
     /// Current folder of the prompt (`cd`, `ls`).
@@ -145,6 +152,8 @@ impl Session {
             search: None,
             sftp_pending: false,
             log_plan: None,
+            login_script: None,
+            login: None,
             remote: None,
             console: LineEditor::default(),
             cwd: local_fs::home(),
@@ -154,7 +163,7 @@ impl Session {
 
     /// Connects this tab (from the prompt, or as a new tab), keeping the screen contents.
     pub fn start(&mut self, spec: SessionSpec, net: &NetRuntime, waker: Waker) {
-        let SessionSpec { mut params, charset, name, log } = spec;
+        let SessionSpec { mut params, charset, name, log, login } = spec;
         if let Some(remote) = &self.remote {
             remote.handle.close();
         }
@@ -173,6 +182,8 @@ impl Session {
         self.sftp_pending = false;
         self.requests.clear();
         self.log_plan = log.clone();
+        self.login = login.clone().map(LoginRunner::new);
+        self.login_script = login;
         let handle = net.connect(params.clone(), waker);
         self.remote = Some(Remote { params, handle });
         self.state = SessionState::Connecting;
@@ -246,6 +257,7 @@ impl Session {
         self.host_key = None;
         self.auth = None;
         self.requests.clear();
+        self.login = self.login_script.clone().map(LoginRunner::new);
     }
 
     /// What this tab is connected with; `None` for a tab that never connected.
@@ -255,6 +267,7 @@ impl Session {
             charset: self.charset,
             name: self.name.clone(),
             log: self.log_plan.clone(),
+            login: self.login_script.clone(),
         })
     }
 
@@ -277,7 +290,10 @@ impl Session {
             changed = true;
             match event {
                 SessionEvent::Connected => self.state = SessionState::Connected,
-                SessionEvent::Data(bytes) => self.terminal.feed(&bytes),
+                SessionEvent::Data(bytes) => {
+                    self.terminal.feed(&bytes);
+                    self.auto_login(bytes.contains(&b'\n'));
+                }
                 SessionEvent::Notice(text) => self.notice(&text, "33"),
                 SessionEvent::HostKeyCheck(check) => self.host_key = Some(check),
                 SessionEvent::AuthPrompt(prompt) => {
@@ -325,6 +341,24 @@ impl Session {
         changed
     }
 
+    /// Answers the prompt the output now ends at, if it is the next login step.
+    fn auto_login(&mut self, newline: bool) {
+        let Some(runner) = &mut self.login else { return };
+        let action = runner.on_output(newline, &self.terminal.cursor_line_text());
+        if runner.done() {
+            self.login = None;
+        }
+        match action {
+            Some(LoginAction::Send(text)) => {
+                if let Some(remote) = &self.remote {
+                    remote.handle.send(self.terminal.encode_input(&text));
+                }
+            }
+            Some(LoginAction::Stop(message)) => self.notice(&message, "33"),
+            None => {}
+        }
+    }
+
     /// Writes a local status line into the terminal, in the given SGR color.
     fn notice(&mut self, text: &str, sgr: &str) {
         let body = text.trim_end().replace("\r\n", "\n").replace('\n', "\r\n");
@@ -356,6 +390,8 @@ impl Session {
 
     /// Typed or pasted text.
     pub fn send_text(&mut self, text: &str) {
+        // Typing yourself takes over from an automatic login still waiting for its prompt.
+        self.login = None;
         if self.in_console() {
             self.console_text(text);
             return;

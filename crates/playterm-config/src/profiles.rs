@@ -21,6 +21,39 @@ pub struct LogSettings {
     pub dir: String,
 }
 
+/// One step of an automatic login: when a line ends with `expect`, type `send` and Enter.
+/// `send` may contain `{user}` and `{password}` (the site's saved password).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoginStep {
+    pub expect: String,
+    pub send: String,
+}
+
+/// Answers to login prompts (Telnet and serial consoles, or commands after an SSH login).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoLogin {
+    pub enabled: bool,
+    #[serde(rename = "step")]
+    pub steps: Vec<LoginStep>,
+}
+
+impl AutoLogin {
+    /// The usual Unix/network-device login: user name, then password.
+    pub fn standard_steps() -> Vec<LoginStep> {
+        vec![
+            LoginStep { expect: "login:".into(), send: "{user}".into() },
+            LoginStep { expect: "Password:".into(), send: "{password}".into() },
+        ]
+    }
+
+    /// Whether some step types the saved password.
+    pub fn uses_password(&self) -> bool {
+        self.enabled && self.steps.iter().any(|s| s.send.contains("{password}"))
+    }
+}
+
 /// A saved connection. Passwords are never stored here, only in the [`crate::Vault`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -47,6 +80,7 @@ pub struct SessionProfile {
     /// Line settings for serial sessions.
     pub serial: SerialSettings,
     pub log: LogSettings,
+    pub auto_login: AutoLogin,
 }
 
 impl Default for SessionProfile {
@@ -67,6 +101,7 @@ impl Default for SessionProfile {
             forwards: Vec::new(),
             serial: SerialSettings::default(),
             log: LogSettings::default(),
+            auto_login: AutoLogin::default(),
         }
     }
 }
@@ -194,6 +229,11 @@ mod tests {
         };
         store.upsert(a.clone()).unwrap();
         store.upsert(b.clone()).unwrap();
+
+        let mut a = a;
+        a.auto_login = AutoLogin { enabled: true, steps: AutoLogin::standard_steps() };
+        store.upsert(a.clone()).unwrap();
+        assert_eq!(ProfileStore::load(&path).unwrap().get(&a.id), Some(&a), "login steps are saved");
 
         let serial = SessionProfile {
             protocol: Protocol::Serial,

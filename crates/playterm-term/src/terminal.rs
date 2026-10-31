@@ -5,6 +5,7 @@ use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
@@ -215,6 +216,21 @@ impl Terminal {
         self.term.selection = Some(selection);
     }
 
+    /// The text on the cursor's line before the cursor: the prompt a program is waiting at.
+    pub fn cursor_line_text(&self) -> String {
+        let grid = self.term.grid();
+        let cursor = grid.cursor.point;
+        let row = &grid[cursor.line];
+        let mut text = String::new();
+        for col in 0..cursor.column.0.min(self.size.cols) {
+            let cell = &row[Column(col)];
+            if !cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                text.push(if cell.c == '\0' { ' ' } else { cell.c });
+            }
+        }
+        text
+    }
+
     /// Drops the scrollback history (the visible screen stays).
     pub fn clear_scrollback(&mut self) {
         self.term.scroll_display(Scroll::Bottom);
@@ -346,6 +362,17 @@ mod tests {
         // Without a scroll region, new lines reach the bottom row.
         t.feed(b"\r\n3\r\n4\r\n5");
         assert_eq!(row_text(&t, 4), "5");
+    }
+
+    #[test]
+    fn cursor_line_text() {
+        let mut t = Terminal::new(20, 3, Charset::Utf8, 100);
+        t.feed("Welcome\r\n\x1b[1mrouter\x1b[0m login: ".as_bytes());
+        assert_eq!(t.cursor_line_text(), "router login: ");
+        t.feed(b"admin\r\n");
+        assert_eq!(t.cursor_line_text(), "");
+        t.feed("암호: ".as_bytes());
+        assert_eq!(t.cursor_line_text(), "암호: ", "wide characters once each");
     }
 
     #[test]

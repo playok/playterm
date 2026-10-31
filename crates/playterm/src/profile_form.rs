@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use playterm_config::SessionProfile;
+use playterm_config::{AutoLogin, LoginStep, SessionProfile};
 use playterm_net::{
     ForwardKind, ForwardRule, Protocol, SerialFlow, SerialParity, SerialPortEntry, SerialSettings, list_ports,
 };
@@ -371,17 +371,23 @@ impl ProfileForm {
                 ui.end_row();
             }
 
-            if p.protocol == Protocol::Ssh {
+            // Telnet and serial consoles log in at a prompt: the site manager keeps a user name
+            // and password for the automatic login.
+            let ssh = p.protocol == Protocol::Ssh;
+            if ssh || opts.meta {
                 ui.label("사용자");
-                let user = ui.text_edit_singleline(&mut p.username);
+                let hint = if ssh { "" } else { "자동 로그인의 {user}" };
+                let user = ui.add(egui::TextEdit::singleline(&mut p.username).hint_text(hint));
                 submit |= enter(ui, &user);
                 ui.end_row();
 
                 ui.label("비밀번호");
                 let hint = if self.has_saved_password && p.save_password {
                     "저장된 비밀번호 유지 (바꾸려면 입력)"
-                } else {
+                } else if ssh {
                     "비워두면 접속 시 물어봅니다"
+                } else {
+                    "자동 로그인의 {password}"
                 };
                 let pw = ui.add(egui::TextEdit::singleline(&mut *self.password).password(true).hint_text(hint));
                 submit |= enter(ui, &pw);
@@ -392,7 +398,9 @@ impl ProfileForm {
                     ui.checkbox(&mut p.save_password, "비밀번호 저장 (마스터 비밀번호로 암호화)");
                     ui.end_row();
                 }
+            }
 
+            if ssh {
                 ui.label("키 파일");
                 ui.horizontal(|ui| {
                     let key = ui.add(
@@ -432,6 +440,7 @@ impl ProfileForm {
             self.forwards_ui(ui);
         }
         if opts.meta {
+            self.auto_login_ui(ui);
             log_ui(ui, &mut self.profile.log);
         }
 
@@ -440,6 +449,50 @@ impl ProfileForm {
             ui.colored_label(ui.visuals().error_fg_color, err);
         }
         submit
+    }
+
+    fn auto_login_ui(&mut self, ui: &mut egui::Ui) {
+        let save_password = self.profile.save_password;
+        let a = &mut self.profile.auto_login;
+        let title = if a.enabled { format!("자동 로그인 ({}단계)", a.steps.len()) } else { "자동 로그인".to_owned() };
+        egui::CollapsingHeader::new(title).id_salt("auto-login").default_open(a.enabled).show(ui, |ui| {
+            if ui.checkbox(&mut a.enabled, "접속하면 프롬프트에 맞춰 자동으로 입력").changed() && a.enabled && a.steps.is_empty() {
+                a.steps = AutoLogin::standard_steps();
+            }
+            ui.add_enabled_ui(a.enabled, |ui| {
+                ui.weak("화면의 줄이 [기다릴 문자열] 로 끝나면 [보낼 내용] 과 Enter 를 입력합니다.\n{user}, {password} 는 위의 사용자 이름과 저장된 비밀번호로 바뀝니다.");
+                let mut remove = None;
+                egui::Grid::new("login-steps").num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
+                    ui.weak("");
+                    ui.weak("기다릴 문자열");
+                    ui.weak("보낼 내용");
+                    ui.end_row();
+                    for (i, step) in a.steps.iter_mut().enumerate() {
+                        ui.label(format!("{}.", i + 1));
+                        ui.add(egui::TextEdit::singleline(&mut step.expect).hint_text("login:").desired_width(150.0));
+                        ui.add(egui::TextEdit::singleline(&mut step.send).hint_text("{user}").desired_width(170.0));
+                        if ui.small_button("✕").on_hover_text("삭제").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+                if let Some(i) = remove {
+                    a.steps.remove(i);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("+ 단계 추가").clicked() {
+                        a.steps.push(LoginStep::default());
+                    }
+                    if ui.button("기본값 (login: / Password:)").clicked() {
+                        a.steps = AutoLogin::standard_steps();
+                    }
+                });
+                if a.uses_password() && !save_password {
+                    ui.colored_label(ui.visuals().warn_fg_color, "{password} 를 쓰려면 위에서 '비밀번호 저장' 을 켜세요");
+                }
+            });
+        });
     }
 
     fn forwards_ui(&mut self, ui: &mut egui::Ui) {
@@ -513,6 +566,8 @@ impl ProfileForm {
         p.username = p.username.trim().to_owned();
         p.identity_file = p.identity_file.trim().trim_matches('"').to_owned();
         p.log.dir = p.log.dir.trim().trim_matches('"').to_owned();
+        p.auto_login = validate_auto_login(&p.auto_login)?;
+        let password = (!self.password.is_empty()).then(|| self.password.clone());
         if p.protocol == Protocol::Serial {
             p.serial.port = p.serial.port.trim().to_uppercase();
             if p.serial.port.is_empty() {
@@ -522,14 +577,13 @@ impl ProfileForm {
                 self.baud.trim().parse().ok().filter(|&b: &u32| b > 0).ok_or("속도(baud)는 양의 정수여야 합니다")?;
             p.host = p.serial.port.clone();
             p.port = 0;
-            p.username.clear();
-            p.save_password = false;
             p.identity_file.clear();
             p.forwards.clear();
             if p.term_type.trim().is_empty() {
                 p.term_type = "xterm-256color".into();
             }
-            return Ok((p, None));
+            // The user name and password are for the automatic login at the console prompt.
+            return Ok((p, password));
         }
         if p.host.is_empty() {
             return Err("호스트를 입력하세요".into());
@@ -544,27 +598,40 @@ impl ProfileForm {
         if p.term_type.trim().is_empty() {
             p.term_type = "xterm-256color".into();
         }
-        let password = match p.protocol {
+        match p.protocol {
             Protocol::Ssh => {
                 if p.username.is_empty() {
                     return Err("SSH 사용자 이름을 입력하세요".into());
                 }
                 p.forwards =
                     self.forwards.iter().enumerate().map(|(i, r)| r.to_rule(i + 1)).collect::<Result<_, _>>()?;
-                (!self.password.is_empty()).then(|| self.password.clone())
             }
             Protocol::Serial => unreachable!("handled above"),
             Protocol::Telnet => {
-                // Telnet logs in through the remote prompt; nothing to store.
-                p.username.clear();
-                p.save_password = false;
+                // The user name and password are for the automatic login at the remote prompt.
                 p.identity_file.clear();
                 p.forwards.clear();
-                None
             }
-        };
+        }
         Ok((p, password))
     }
+}
+
+/// Drops empty rows; a step that types something must say what to wait for.
+fn validate_auto_login(a: &AutoLogin) -> Result<AutoLogin, String> {
+    let steps: Vec<LoginStep> = a
+        .steps
+        .iter()
+        .map(|s| LoginStep { expect: s.expect.trim().to_owned(), send: s.send.clone() })
+        .filter(|s| !s.expect.is_empty() || !s.send.trim().is_empty())
+        .collect();
+    if let Some(n) = steps.iter().position(|s| s.expect.is_empty()) {
+        return Err(format!("자동 로그인 {}단계: 기다릴 문자열을 입력하세요", n + 1));
+    }
+    if a.enabled && steps.is_empty() {
+        return Err("자동 로그인 단계를 하나 이상 넣거나 자동 로그인을 끄세요".into());
+    }
+    Ok(AutoLogin { enabled: a.enabled, steps })
 }
 
 #[cfg(test)]
@@ -618,8 +685,11 @@ mod tests {
 
         form.profile.protocol = Protocol::Telnet;
         form.profile.save_password = true;
+        form.profile.identity_file = "key".into();
         let (p, pw) = form.validate().unwrap();
-        assert!(pw.is_none() && !p.save_password && p.username.is_empty());
+        // Telnet keeps the user name and password for the automatic login; keys are SSH only.
+        assert_eq!(pw.as_deref().map(|s| s.as_str()), Some("pw"));
+        assert!(p.save_password && p.username == "me" && p.identity_file.is_empty());
 
         form.port = "70000".into();
         assert!(form.validate().is_none());
@@ -645,7 +715,7 @@ mod tests {
     fn serial_validation() {
         let profile = SessionProfile {
             protocol: Protocol::Serial,
-            username: "ignored".into(),
+            username: "root".into(),
             serial: SerialSettings { port: " com4 ".into(), ..Default::default() },
             ..Default::default()
         };
@@ -653,13 +723,28 @@ mod tests {
         form.baud = "115200".into();
         let (p, pw) = form.validate().unwrap();
         assert_eq!((p.serial.port.as_str(), p.serial.baud, p.host.as_str()), ("COM4", 115200, "COM4"));
-        assert!(pw.is_none() && p.username.is_empty());
+        assert!(pw.is_none() && p.username == "root", "kept for the console login");
 
         form.baud = "0".into();
         assert!(form.validate().is_none());
         form.baud = "9600".into();
         form.profile.serial.port.clear();
         assert!(form.validate().is_none());
+    }
+
+    #[test]
+    fn auto_login_validation() {
+        let step = |e: &str, s: &str| LoginStep { expect: e.into(), send: s.into() };
+        let mut a = AutoLogin { enabled: true, steps: vec![step(" login: ", "{user}"), step("", "  "), step("Password:", "{password}")] };
+        let v = validate_auto_login(&a).unwrap();
+        assert_eq!(v.steps, vec![step("login:", "{user}"), step("Password:", "{password}")], "trimmed, blank row dropped");
+
+        a.steps.push(step("", "show run"));
+        assert!(validate_auto_login(&a).unwrap_err().contains("3단계"));
+
+        let empty = AutoLogin { enabled: true, steps: vec![] };
+        assert!(validate_auto_login(&empty).is_err());
+        assert!(validate_auto_login(&AutoLogin::default()).is_ok(), "off and empty is fine");
     }
 
     #[test]
