@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use playterm_config::SessionProfile;
-use playterm_net::{ForwardKind, ForwardRule, Protocol};
+use playterm_net::{
+    ForwardKind, ForwardRule, Protocol, SerialFlow, SerialParity, SerialPortEntry, SerialSettings, list_ports,
+};
 use playterm_term::Charset;
 use zeroize::Zeroizing;
 
@@ -16,11 +18,23 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
         Some((scheme, rest)) => match scheme.to_ascii_lowercase().as_str() {
             "ssh" => (Protocol::Ssh, rest),
             "telnet" => (Protocol::Telnet, rest),
+            "serial" | "com" => (Protocol::Serial, rest),
             other => return Err(format!("지원하지 않는 프로토콜: {other}")),
         },
         None => (Protocol::Ssh, url),
     };
     let rest = rest.trim_end_matches('/');
+    if protocol == Protocol::Serial {
+        let (port, baud) = match rest.split_once(':') {
+            Some((port, baud)) => (port, baud.parse().ok().filter(|&b: &u32| b > 0).ok_or(format!("잘못된 속도: {baud}"))?),
+            None => (rest, SerialSettings::default().baud),
+        };
+        if port.is_empty() {
+            return Err(format!("시리얼 포트가 없습니다: {url}"));
+        }
+        let serial = SerialSettings { port: port.to_owned(), baud, ..Default::default() };
+        return Ok(SessionProfile { protocol, host: port.to_owned(), port: 0, serial, ..Default::default() });
+    }
     let (username, hostport) = match rest.rsplit_once('@') {
         Some((user, hp)) => (user.to_owned(), hp),
         None => (String::new(), rest),
@@ -74,6 +88,116 @@ fn pick_key_file(current: &str) -> Option<PathBuf> {
         .add_filter("모든 파일", &["*"])
         .add_filter("PuTTY 키 (*.ppk)", &["ppk"])
         .pick_file()
+}
+
+/// Serial line fields. Returns `true` if Enter was pressed in a text field.
+fn serial_rows(
+    ui: &mut egui::Ui,
+    s: &mut SerialSettings,
+    baud: &mut String,
+    ports: &mut Vec<SerialPortEntry>,
+    focus_requested: &mut bool,
+) -> bool {
+    let enter = |ui: &egui::Ui, r: &egui::Response| r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let mut submit = false;
+
+    ui.label("시리얼 포트");
+    ui.horizontal(|ui| {
+        let port = ui.add(egui::TextEdit::singleline(&mut s.port).hint_text("COM3").desired_width(90.0));
+        if !*focus_requested {
+            port.request_focus();
+            *focus_requested = true;
+        }
+        submit |= enter(ui, &port);
+        egui::ComboBox::from_id_salt("serial-ports").selected_text("목록").show_ui(ui, |ui| {
+            if ports.is_empty() {
+                ui.weak("COM 포트가 없습니다");
+            }
+            for entry in ports.iter() {
+                let label = if entry.description.is_empty() {
+                    entry.name.clone()
+                } else {
+                    format!("{}  {}", entry.name, entry.description)
+                };
+                if ui.selectable_label(s.port == entry.name, label).clicked() {
+                    s.port = entry.name.clone();
+                }
+            }
+        });
+        if ui.button("새로고침").clicked() {
+            *ports = list_ports();
+        }
+    });
+    ui.end_row();
+
+    ui.label("속도 (baud)");
+    ui.horizontal(|ui| {
+        let r = ui.add(egui::TextEdit::singleline(baud).desired_width(90.0));
+        submit |= enter(ui, &r);
+        ui.menu_button("선택", |ui| {
+            for rate in SerialSettings::COMMON_BAUD_RATES {
+                if ui.button(rate.to_string()).clicked() {
+                    *baud = rate.to_string();
+                    ui.close();
+                }
+            }
+        });
+    });
+    ui.end_row();
+
+    ui.label("데이터 비트");
+    egui::ComboBox::from_id_salt("data-bits").selected_text(s.data_bits.to_string()).show_ui(ui, |ui| {
+        for bits in [8u8, 7, 6, 5] {
+            ui.selectable_value(&mut s.data_bits, bits, bits.to_string());
+        }
+    });
+    ui.end_row();
+
+    ui.label("패리티");
+    egui::ComboBox::from_id_salt("parity").selected_text(s.parity.to_string()).show_ui(ui, |ui| {
+        for parity in SerialParity::ALL {
+            ui.selectable_value(&mut s.parity, parity, parity.to_string());
+        }
+    });
+    ui.end_row();
+
+    ui.label("정지 비트");
+    egui::ComboBox::from_id_salt("stop-bits").selected_text(s.stop_bits.to_string()).show_ui(ui, |ui| {
+        for bits in [1u8, 2] {
+            ui.selectable_value(&mut s.stop_bits, bits, bits.to_string());
+        }
+    });
+    ui.end_row();
+
+    ui.label("흐름 제어");
+    egui::ComboBox::from_id_salt("flow").selected_text(s.flow.to_string()).show_ui(ui, |ui| {
+        for flow in SerialFlow::ALL {
+            ui.selectable_value(&mut s.flow, flow, flow.to_string());
+        }
+    });
+    ui.end_row();
+    submit
+}
+
+fn log_ui(ui: &mut egui::Ui, log: &mut playterm_config::LogSettings) {
+    egui::CollapsingHeader::new("세션 로그").id_salt("log-settings").default_open(log.auto).show(ui, |ui| {
+        ui.checkbox(&mut log.auto, "접속하면 자동으로 로그 기록");
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut log.raw, false, "텍스트 (제어 문자 제거)");
+            ui.radio_value(&mut log.raw, true, "원본 (받은 바이트 그대로)");
+        });
+        ui.add_enabled(!log.raw, egui::Checkbox::new(&mut log.timestamps, "줄마다 시각 표시"));
+        ui.horizontal(|ui| {
+            ui.label("폴더");
+            let default_dir = crate::logging::default_log_dir().display().to_string();
+            ui.add(egui::TextEdit::singleline(&mut log.dir).hint_text(default_dir).desired_width(240.0));
+            if ui.button("찾아보기").clicked()
+                && let Some(dir) = rfd::FileDialog::new().set_title("로그 폴더").pick_folder()
+            {
+                log.dir = dir.display().to_string();
+            }
+        });
+    });
 }
 
 /// Which optional parts of the form to show.
@@ -134,18 +258,24 @@ pub struct ProfileForm {
     password: Zeroizing<String>,
     /// The vault already holds a password for this profile.
     has_saved_password: bool,
+    baud: String,
+    /// COM ports found on this machine; scanned when the serial fields are first shown.
+    serial_ports: Option<Vec<SerialPortEntry>>,
     error: Option<String>,
     focus_requested: bool,
 }
 
 impl ProfileForm {
     pub fn new(profile: SessionProfile, has_saved_password: bool) -> Self {
+        let profile_baud = profile.serial.baud.to_string();
         Self {
             port: profile.port.to_string(),
             forwards: profile.forwards.iter().map(ForwardRow::from_rule).collect(),
             profile,
             password: Zeroizing::default(),
             has_saved_password,
+            baud: profile_baud,
+            serial_ports: None,
             error: None,
             focus_requested: false,
         }
@@ -193,28 +323,35 @@ impl ProfileForm {
             ui.horizontal(|ui| {
                 for proto in Protocol::ALL {
                     let old = p.protocol;
-                    if ui.radio_value(&mut p.protocol, proto, proto.to_string()).changed()
-                        && self.port == old.default_port().to_string()
-                    {
-                        self.port = proto.default_port().to_string();
+                    if ui.radio_value(&mut p.protocol, proto, proto.to_string()).changed() {
+                        // Focus the first field of the newly shown fields (host or COM port).
+                        self.focus_requested = opts.meta;
+                        if self.port == old.default_port().to_string() {
+                            self.port = proto.default_port().to_string();
+                        }
                     }
                 }
             });
             ui.end_row();
 
-            ui.label("호스트");
-            let host = ui.add(egui::TextEdit::singleline(&mut p.host).hint_text("example.com 또는 IP"));
-            if !self.focus_requested {
-                host.request_focus();
-                self.focus_requested = true;
-            }
-            submit |= enter(ui, &host);
-            ui.end_row();
+            if p.protocol == Protocol::Serial {
+                let ports = self.serial_ports.get_or_insert_with(list_ports);
+                submit |= serial_rows(ui, &mut p.serial, &mut self.baud, ports, &mut self.focus_requested);
+            } else {
+                ui.label("호스트");
+                let host = ui.add(egui::TextEdit::singleline(&mut p.host).hint_text("example.com 또는 IP"));
+                if !self.focus_requested {
+                    host.request_focus();
+                    self.focus_requested = true;
+                }
+                submit |= enter(ui, &host);
+                ui.end_row();
 
-            ui.label("포트");
-            let port = ui.add(egui::TextEdit::singleline(&mut self.port).desired_width(80.0));
-            submit |= enter(ui, &port);
-            ui.end_row();
+                ui.label("포트");
+                let port = ui.add(egui::TextEdit::singleline(&mut self.port).desired_width(80.0));
+                submit |= enter(ui, &port);
+                ui.end_row();
+            }
 
             if p.protocol == Protocol::Ssh {
                 ui.label("사용자");
@@ -275,6 +412,9 @@ impl ProfileForm {
         if self.profile.protocol == Protocol::Ssh {
             ui.add_space(4.0);
             self.forwards_ui(ui);
+        }
+        if opts.meta {
+            log_ui(ui, &mut self.profile.log);
         }
 
         if let Some(err) = &self.error {
@@ -354,6 +494,25 @@ impl ProfileForm {
         p.host = p.host.trim().to_owned();
         p.username = p.username.trim().to_owned();
         p.identity_file = p.identity_file.trim().trim_matches('"').to_owned();
+        p.log.dir = p.log.dir.trim().trim_matches('"').to_owned();
+        if p.protocol == Protocol::Serial {
+            p.serial.port = p.serial.port.trim().to_uppercase();
+            if p.serial.port.is_empty() {
+                return Err("시리얼 포트를 입력하세요 (예: COM3)".into());
+            }
+            p.serial.baud =
+                self.baud.trim().parse().ok().filter(|&b: &u32| b > 0).ok_or("속도(baud)는 양의 정수여야 합니다")?;
+            p.host = p.serial.port.clone();
+            p.port = 0;
+            p.username.clear();
+            p.save_password = false;
+            p.identity_file.clear();
+            p.forwards.clear();
+            if p.term_type.trim().is_empty() {
+                p.term_type = "xterm-256color".into();
+            }
+            return Ok((p, None));
+        }
         if p.host.is_empty() {
             return Err("호스트를 입력하세요".into());
         }
@@ -376,6 +535,7 @@ impl ProfileForm {
                     self.forwards.iter().enumerate().map(|(i, r)| r.to_rule(i + 1)).collect::<Result<_, _>>()?;
                 (!self.password.is_empty()).then(|| self.password.clone())
             }
+            Protocol::Serial => unreachable!("handled above"),
             Protocol::Telnet => {
                 // Telnet logs in through the remote prompt; nothing to store.
                 p.username.clear();
@@ -400,6 +560,11 @@ mod tests {
 
         let r = parse_url("telnet://router").unwrap();
         assert_eq!((r.protocol, r.host.as_str(), r.port), (Protocol::Telnet, "router", 23));
+
+        let r = parse_url("serial://COM3:115200").unwrap();
+        assert_eq!((r.protocol, r.serial.port.as_str(), r.serial.baud), (Protocol::Serial, "COM3", 115200));
+        assert_eq!(parse_url("serial://COM1").unwrap().serial.baud, 9600);
+        assert!(parse_url("serial://COM1:fast").is_err());
 
         let r = parse_url("admin@[::1]").unwrap();
         assert_eq!((r.protocol, r.host.as_str(), r.port), (Protocol::Ssh, "::1", 22));
@@ -439,6 +604,27 @@ mod tests {
         assert!(pw.is_none() && !p.save_password && p.username.is_empty());
 
         form.port = "70000".into();
+        assert!(form.validate().is_none());
+    }
+
+    #[test]
+    fn serial_validation() {
+        let profile = SessionProfile {
+            protocol: Protocol::Serial,
+            username: "ignored".into(),
+            serial: SerialSettings { port: " com4 ".into(), ..Default::default() },
+            ..Default::default()
+        };
+        let mut form = ProfileForm::new(profile, false);
+        form.baud = "115200".into();
+        let (p, pw) = form.validate().unwrap();
+        assert_eq!((p.serial.port.as_str(), p.serial.baud, p.host.as_str()), ("COM4", 115200, "COM4"));
+        assert!(pw.is_none() && p.username.is_empty());
+
+        form.baud = "0".into();
+        assert!(form.validate().is_none());
+        form.baud = "9600".into();
+        form.profile.serial.port.clear();
         assert!(form.validate().is_none());
     }
 

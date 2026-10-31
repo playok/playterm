@@ -6,6 +6,7 @@ mod clipboard;
 mod dialogs;
 mod fonts;
 mod input;
+mod logging;
 mod profile_form;
 mod session;
 mod sftp_view;
@@ -17,7 +18,7 @@ use eframe::egui;
 use playterm_config::SessionProfile;
 use playterm_net::{ForwardKind, ForwardRule};
 
-const USAGE: &str = "사용법: playterm [--cp949] [-i 키파일] [-L|-R 포트:호스트:포트] [-D 포트] [ssh://[user@]host[:port] | telnet://host[:port]]...";
+const USAGE: &str = "사용법: playterm [--cp949] [-i 키파일] [-L|-R 포트:호스트:포트] [-D 포트] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:속도]]...";
 
 fn main() -> eframe::Result {
     env_logger::init();

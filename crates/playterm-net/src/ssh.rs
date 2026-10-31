@@ -174,6 +174,7 @@ pub(crate) async fn run(
                         sink.send(SessionEvent::Sftp(result));
                     });
                 }
+                Some(SessionCommand::SendBreak) => sink.notice("SSH 세션에서는 BREAK 신호를 지원하지 않습니다"),
                 Some(SessionCommand::Close) | None => break,
             },
         }

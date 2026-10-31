@@ -5,6 +5,7 @@
 //! (so the UI thread can poll without async), and a waker callback tells the UI to repaint.
 
 mod forward;
+mod serial;
 mod session;
 mod sftp;
 mod ssh;
@@ -18,6 +19,7 @@ pub use session::{
     Waker,
 };
 pub use forward::{ForwardKind, ForwardRule};
+pub use serial::{SerialFlow, SerialParity, SerialPortEntry, SerialSettings, list_ports};
 pub use sftp::{RemoteEntry, SftpConnection, SftpEvent, TransferState, TransferUpdate, remote_join, remote_parent};
 pub use telnet::TelnetCodec;
 
@@ -42,6 +44,7 @@ impl NetRuntime {
             let result = match params.protocol {
                 Protocol::Ssh => ssh::run(params, commands, sink.clone()).await,
                 Protocol::Telnet => telnet::run(params, commands, sink.clone()).await,
+                Protocol::Serial => serial::run(params, commands, sink.clone()).await,
             };
             if let Err(e) = &result {
                 log::warn!("session ended with error: {e:#}");

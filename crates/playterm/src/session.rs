@@ -1,8 +1,9 @@
 //! One open tab: a terminal screen bound to a network session.
 
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
-use playterm_term::{Charset, Point, Terminal, TerminalEvent};
+use playterm_term::{Charset, LogMode, Point, Terminal, TerminalEvent};
 
+use crate::logging::{self, LogPlan};
 use crate::sftp_view::SftpBrowser;
 
 const SCROLLBACK_LINES: usize = 10_000;
@@ -28,6 +29,8 @@ pub struct SessionSpec {
     pub charset: Charset,
     /// Saved-profile name, used as the tab title.
     pub name: Option<String>,
+    /// Start logging as soon as the tab opens.
+    pub log: Option<LogPlan>,
 }
 
 /// Mouse selection gesture state.
@@ -60,19 +63,17 @@ pub struct Session {
     pub sftp: Option<SftpBrowser>,
     /// An SFTP channel was requested and has not answered yet.
     sftp_pending: bool,
+    /// Auto-log settings of the profile, kept so duplicates log to their own file.
+    log_plan: Option<LogPlan>,
     handle: SessionHandle,
 }
 
 impl Session {
     pub fn connect(id: u64, spec: SessionSpec, net: &NetRuntime, waker: Waker) -> Self {
-        let SessionSpec { params, charset, name } = spec;
-        let mut terminal = Terminal::new(params.cols.into(), params.rows.into(), charset, SCROLLBACK_LINES);
-        terminal.feed_local(&format!(
-            "\x1b[90m{} {}:{} 에 연결 중...\x1b[0m\r\n",
-            params.protocol, params.host, params.port
-        ));
+        let SessionSpec { params, charset, name, log } = spec;
+        let terminal = Terminal::new(params.cols.into(), params.rows.into(), charset, SCROLLBACK_LINES);
         let handle = net.connect(params.clone(), waker);
-        Self {
+        let mut session = Self {
             id,
             params,
             charset,
@@ -88,7 +89,51 @@ impl Session {
             click: ClickState::default(),
             sftp: None,
             sftp_pending: false,
+            log_plan: log.clone(),
             handle,
+        };
+        session.terminal.feed_local(&format!("\x1b[90m{} 에 연결 중...\x1b[0m\r\n", session.target()));
+        if let Some(plan) = log {
+            let path = logging::new_log_path(&plan.dir, &session.tab_title());
+            session.start_log(&path, plan.mode);
+        }
+        session
+    }
+
+    /// `SSH host:22`, `Serial COM3 (9600 8N1)`.
+    fn target(&self) -> String {
+        let p = &self.params;
+        match p.protocol {
+            Protocol::Serial => format!("Serial {} ({})", p.serial.port, p.serial.line_summary()),
+            proto => format!("{proto} {}:{}", p.host, p.port),
+        }
+    }
+
+    pub fn start_log(&mut self, path: &std::path::Path, mode: LogMode) {
+        let title = self.tab_title();
+        match self.terminal.start_log(path, mode, &title) {
+            Ok(()) => self.notice(&format!("로그 기록 시작: {}", path.display()), "90"),
+            Err(e) => self.notice(&format!("로그 파일을 만들 수 없습니다 ({}): {e}", path.display()), "31"),
+        }
+    }
+
+    pub fn stop_log(&mut self) {
+        if let Some(path) = self.terminal.stop_log() {
+            self.notice(&format!("로그 기록 중지: {}", path.display()), "90");
+        }
+    }
+
+    pub fn is_logging(&self) -> bool {
+        self.terminal.log().is_some()
+    }
+
+    pub fn can_break(&self) -> bool {
+        self.state == SessionState::Connected && matches!(self.params.protocol, Protocol::Serial | Protocol::Telnet)
+    }
+
+    pub fn send_break(&mut self) {
+        if self.can_break() {
+            self.handle.send_break();
         }
     }
 
@@ -97,10 +142,8 @@ impl Session {
         self.handle.close();
         self.params.cols = self.terminal.cols() as u16;
         self.params.rows = self.terminal.rows() as u16;
-        self.terminal.feed_local(&format!(
-            "\r\n\x1b[90m{}:{} 에 다시 연결 중...\x1b[0m\r\n",
-            self.params.host, self.params.port
-        ));
+        let target = self.target();
+        self.terminal.feed_local(&format!("\r\n\x1b[90m{target} 에 다시 연결 중...\x1b[0m\r\n"));
         self.handle = net.connect(self.params.clone(), waker);
         self.state = SessionState::Connecting;
         self.host_key = None;
@@ -108,7 +151,12 @@ impl Session {
     }
 
     pub fn spec(&self) -> SessionSpec {
-        SessionSpec { params: self.params.clone(), charset: self.charset, name: self.name.clone() }
+        SessionSpec {
+            params: self.params.clone(),
+            charset: self.charset,
+            name: self.name.clone(),
+            log: self.log_plan.clone(),
+        }
     }
 
     pub fn tab_title(&self) -> String {
@@ -163,6 +211,7 @@ impl Session {
                 TerminalEvent::Reply(bytes) => self.handle.send(bytes),
                 TerminalEvent::Title(title) => self.remote_title = title,
                 TerminalEvent::ClipboardStore(text) => self.clipboard_store = Some(text),
+                TerminalEvent::LogFailed(e) => self.notice(&format!("로그 기록 실패, 중지합니다: {e}"), "31"),
                 TerminalEvent::Bell => {}
             }
         }

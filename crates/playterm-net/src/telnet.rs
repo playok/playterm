@@ -16,6 +16,7 @@ use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 const SE: u8 = 240;
+const BRK: u8 = 243;
 const SB: u8 = 250;
 const WILL: u8 = 251;
 const WONT: u8 = 252;
@@ -284,6 +285,10 @@ pub(crate) async fn run(
                     if let Some(naws) = codec.resize(cols, rows) {
                         writer.write_all(&naws).await?;
                     }
+                }
+                Some(SessionCommand::SendBreak) => {
+                    writer.write_all(&[IAC, BRK]).await?;
+                    sink.notice("BREAK 신호를 보냈습니다");
                 }
                 Some(SessionCommand::OpenSftp) => {
                     sink.send(SessionEvent::Sftp(Err("Telnet 세션에서는 SFTP를 쓸 수 없습니다".into())));

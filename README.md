@@ -29,7 +29,17 @@ playterm ssh://user@host:22               # 바로 접속
 playterm --cp949 telnet://192.168.0.1     # CP949(EUC-KR) 구형 장비
 playterm -i ~/.ssh/id_ed25519 ssh://user@host   # 키 파일 지정
 playterm -L 8080:db:5432 -D 1080 ssh://user@host   # 포트 포워딩 (OpenSSH 와 같은 형식, -R 도 지원)
+playterm serial://COM3:115200             # 시리얼 콘솔 (8N1)
 ```
+
+## 시리얼 · 로그
+
+- 연결 창에서 프로토콜 **Serial** → COM 포트(목록/직접 입력), 속도, 데이터 비트, 패리티, 정지 비트, 흐름 제어.
+- 탭 우클릭 → **BREAK 신호 보내기** (시리얼: 300ms line break, Telnet: `IAC BRK`) — 장비 ROMMON 진입·비밀번호 복구용.
+- 세션 로그: 세션 편집 창의 "세션 로그" 에서 자동 기록을 켜거나, 탭 우클릭 → 로그 메뉴에서 수동으로 시작/중지.
+  - 텍스트: 제어 문자·색상 코드를 뺀 출력 (UTF-8, 줄마다 시각 표시 선택)
+  - 원본: 받은 바이트 그대로
+  - 기본 폴더: `문서\playterm-logs`, 파일 이름: `세션이름_YYYYMMDD_HHMMSS.log`
 
 ## SFTP · 포트 포워딩
 
@@ -91,4 +101,4 @@ cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 3. ~~세션 관리자(저장, 마스터 비밀번호 볼트) · 탭 개선 · 텍스트 선택/복사~~
 4. ~~SSH 키 인증 · Pageant / Windows OpenSSH 에이전트~~
 5. ~~SFTP · 포트 포워딩~~
-6. 시리얼(COM) · 세션 로깅
+6. ~~시리얼(COM) · 세션 로깅~~

@@ -5,14 +5,16 @@ use anyhow::Context as _;
 use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
 use playterm_config::{ProfileStore, SessionProfile, Vault};
 use playterm_net::{ConnectParams, NetRuntime, Protocol, Waker};
+use playterm_term::LogMode;
 use zeroize::Zeroizing;
 
 use crate::dialogs::{
     self, EditorResult, QuickConnect, QuickConnectResult, SessionEditor, VaultDialog, VaultMode, VaultResult,
 };
+use crate::logging::{self, LogPlan};
+use crate::profile_form::expand_home;
 use crate::session::{Session, SessionSpec, SessionState};
 use crate::sidebar::{Sidebar, SidebarAction, VaultState};
-use crate::profile_form::expand_home;
 use crate::{clipboard, fonts, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
@@ -132,12 +134,17 @@ impl PlaytermApp {
             use_agent: profile.use_agent,
             agent_pipe: None,
             forwards: profile.forwards.clone(),
+            serial: profile.serial.clone(),
             term_type: profile.term_type.clone(),
             cols: 80,
             rows: 24,
             known_hosts: self.known_hosts.clone(),
         };
-        self.open_spec(SessionSpec { params, charset: profile.charset, name });
+        let log = profile.log.auto.then(|| LogPlan {
+            dir: logging::log_dir(&profile.log.dir),
+            mode: if profile.log.raw { LogMode::Raw } else { LogMode::Text { timestamps: profile.log.timestamps } },
+        });
+        self.open_spec(SessionSpec { params, charset: profile.charset, name, log });
     }
 
     /// Connects a saved profile, unlocking the vault first if its password is stored there.
@@ -419,6 +426,9 @@ impl PlaytermApp {
             Duplicate(usize),
             Reconnect(usize),
             Sftp(usize),
+            StartLog(usize, LogMode),
+            StopLog(usize),
+            Break(usize),
         }
         let mut action = None;
         ui.horizontal_wrapped(|ui| {
@@ -434,6 +444,10 @@ impl PlaytermApp {
                     SessionState::Closed => Color32::from_rgb(200, 70, 70),
                 };
                 ui.label(RichText::new("●").color(dot));
+                if s.is_logging() {
+                    ui.label(RichText::new("REC").small().color(Color32::from_rgb(220, 60, 60)))
+                        .on_hover_text(s.terminal.log().map(|l| l.path().display().to_string()).unwrap_or_default());
+                }
                 let tab = ui.selectable_label(i == self.active, s.tab_title());
                 if tab.clicked() {
                     self.active = i;
@@ -446,6 +460,36 @@ impl PlaytermApp {
                         action = Some(TabAction::Sftp(i));
                         ui.close();
                     }
+                    if ui.add_enabled(s.can_break(), egui::Button::new("BREAK 신호 보내기")).clicked() {
+                        action = Some(TabAction::Break(i));
+                        ui.close();
+                    }
+                    ui.menu_button("로그", |ui| {
+                        if let Some(log) = s.terminal.log() {
+                            if ui.button("로그 기록 중지").clicked() {
+                                action = Some(TabAction::StopLog(i));
+                                ui.close();
+                            }
+                            if ui.button("로그 파일 위치 열기").clicked() {
+                                logging::reveal(log.path());
+                                ui.close();
+                            }
+                        } else {
+                            if ui.button("텍스트 로그 시작…").clicked() {
+                                action = Some(TabAction::StartLog(i, LogMode::Text { timestamps: true }));
+                                ui.close();
+                            }
+                            if ui.button("원본(raw) 로그 시작…").clicked() {
+                                action = Some(TabAction::StartLog(i, LogMode::Raw));
+                                ui.close();
+                            }
+                        }
+                        if ui.button("로그 폴더 열기").clicked() {
+                            logging::reveal(&logging::default_log_dir());
+                            ui.close();
+                        }
+                    });
+                    ui.separator();
                     let entries = [
                         ("복제", TabAction::Duplicate(i)),
                         ("다시 연결", TabAction::Reconnect(i)),
@@ -501,6 +545,22 @@ impl PlaytermApp {
                 self.open_spec(spec);
             }
             Some(TabAction::Sftp(i)) => self.sessions[i].open_sftp(),
+            Some(TabAction::Break(i)) => self.sessions[i].send_break(),
+            Some(TabAction::StopLog(i)) => self.sessions[i].stop_log(),
+            Some(TabAction::StartLog(i, mode)) => {
+                let session = &mut self.sessions[i];
+                let dir = logging::default_log_dir();
+                let _ = std::fs::create_dir_all(&dir);
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("로그 파일")
+                    .set_directory(&dir)
+                    .set_file_name(logging::file_name(&session.tab_title()))
+                    .add_filter("로그", &["log", "txt"])
+                    .save_file()
+                {
+                    session.start_log(&path, mode);
+                }
+            }
             Some(TabAction::Reconnect(i)) => {
                 let waker = self.waker.clone();
                 self.sessions[i].reconnect(&self.net, waker);

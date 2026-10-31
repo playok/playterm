@@ -1,11 +1,25 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use playterm_net::{ForwardRule, Protocol};
+use playterm_net::{ForwardRule, Protocol, SerialSettings};
 use playterm_term::Charset;
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil::{random_id, write_atomic};
+
+/// Per-session output logging.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LogSettings {
+    /// Start logging automatically when the session connects.
+    pub auto: bool,
+    /// Raw bytes instead of cleaned-up text.
+    pub raw: bool,
+    /// Prefix text log lines with the time.
+    pub timestamps: bool,
+    /// Folder for log files; empty = the default log folder.
+    pub dir: String,
+}
 
 /// A saved connection. Passwords are never stored here, only in the [`crate::Vault`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +44,9 @@ pub struct SessionProfile {
     /// Port forwardings started with the session.
     #[serde(rename = "forward")]
     pub forwards: Vec<ForwardRule>,
+    /// Line settings for serial sessions.
+    pub serial: SerialSettings,
+    pub log: LogSettings,
 }
 
 impl Default for SessionProfile {
@@ -48,6 +65,8 @@ impl Default for SessionProfile {
             identity_file: String::new(),
             use_agent: true,
             forwards: Vec::new(),
+            serial: SerialSettings::default(),
+            log: LogSettings::default(),
         }
     }
 }
@@ -57,6 +76,8 @@ impl SessionProfile {
     pub fn display_name(&self) -> String {
         if !self.name.trim().is_empty() {
             self.name.clone()
+        } else if self.protocol == Protocol::Serial {
+            self.serial.port.clone()
         } else if self.username.is_empty() {
             self.host.clone()
         } else {
@@ -173,6 +194,18 @@ mod tests {
         };
         store.upsert(a.clone()).unwrap();
         store.upsert(b.clone()).unwrap();
+
+        let serial = SessionProfile {
+            protocol: Protocol::Serial,
+            serial: SerialSettings { port: "COM3".into(), baud: 115200, ..Default::default() },
+            log: LogSettings { auto: true, timestamps: true, ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(serial.display_name(), "COM3");
+        store.upsert(serial.clone()).unwrap();
+        let reloaded = ProfileStore::load(&path).unwrap();
+        assert_eq!(reloaded.get(&serial.id), Some(&serial));
+        store.remove(&serial.id).unwrap();
 
         let reloaded = ProfileStore::load(&path).unwrap();
         assert_eq!(reloaded.profiles(), &[a.clone(), b.clone()]);

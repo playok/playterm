@@ -5,6 +5,7 @@ use std::sync::{Arc, mpsc as std_mpsc};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::forward::ForwardRule;
+use crate::serial::SerialSettings;
 use crate::sftp::SftpConnection;
 
 /// Called from network threads whenever a new event is queued, so the UI can wake up.
@@ -16,15 +17,18 @@ pub enum Protocol {
     #[default]
     Ssh,
     Telnet,
+    /// Local COM port; `host`/`port` are unused, see [`ConnectParams::serial`].
+    Serial,
 }
 
 impl Protocol {
-    pub const ALL: [Protocol; 2] = [Protocol::Ssh, Protocol::Telnet];
+    pub const ALL: [Protocol; 3] = [Protocol::Ssh, Protocol::Telnet, Protocol::Serial];
 
     pub fn default_port(self) -> u16 {
         match self {
             Protocol::Ssh => 22,
             Protocol::Telnet => 23,
+            Protocol::Serial => 0,
         }
     }
 }
@@ -34,6 +38,7 @@ impl fmt::Display for Protocol {
         f.write_str(match self {
             Protocol::Ssh => "SSH",
             Protocol::Telnet => "Telnet",
+            Protocol::Serial => "Serial",
         })
     }
 }
@@ -57,6 +62,8 @@ pub struct ConnectParams {
     pub agent_pipe: Option<String>,
     /// Port forwardings started once the SSH session is authenticated.
     pub forwards: Vec<ForwardRule>,
+    /// Line settings for [`Protocol::Serial`].
+    pub serial: SerialSettings,
     /// Value for the `TERM` variable / Telnet terminal type.
     pub term_type: String,
     pub cols: u16,
@@ -143,6 +150,8 @@ pub(crate) enum SessionCommand {
     Input(Vec<u8>),
     Resize { cols: u16, rows: u16 },
     OpenSftp,
+    /// Serial BREAK / Telnet IAC BRK.
+    SendBreak,
     Close,
 }
 
@@ -171,6 +180,11 @@ impl SessionHandle {
 
     pub fn close(&self) {
         let _ = self.commands.send(SessionCommand::Close);
+    }
+
+    /// Sends a BREAK signal (serial line break, Telnet `IAC BRK`).
+    pub fn send_break(&self) {
+        let _ = self.commands.send(SessionCommand::SendBreak);
     }
 
     /// Opens an SFTP channel on this SSH connection; answered with [`SessionEvent::Sftp`].

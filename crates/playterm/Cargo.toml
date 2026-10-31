@@ -17,3 +17,6 @@ playterm-net = { version = "0.1.0", path = "../playterm-net" }
 playterm-term = { version = "0.1.0", path = "../playterm-term" }
 rfd = "0.17.2"
 zeroize = "1.9.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"

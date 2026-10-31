@@ -97,7 +97,12 @@ impl Sidebar {
             let response = ui
                 .push_id(&p.id, |ui| ui.selectable_label(selected, p.display_name()))
                 .inner
-                .on_hover_text(format!("{} {}:{}  (더블클릭: 연결)", p.protocol, p.host, p.port));
+                .on_hover_text(match p.protocol {
+                    playterm_net::Protocol::Serial => {
+                        format!("Serial {} {}  (더블클릭: 연결)", p.serial.port, p.serial.line_summary())
+                    }
+                    proto => format!("{proto} {}:{}  (더블클릭: 연결)", p.host, p.port),
+                });
             if response.clicked() {
                 self.selected = Some(p.id.clone());
             }

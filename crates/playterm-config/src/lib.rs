@@ -5,5 +5,5 @@ mod fsutil;
 mod profiles;
 mod vault;
 
-pub use profiles::{ProfileStore, SessionProfile};
+pub use profiles::{LogSettings, ProfileStore, SessionProfile};
 pub use vault::{Vault, VaultError};

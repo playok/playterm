@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::mpsc;
 
 use alacritty_terminal::event::{Event, EventListener};
@@ -8,6 +9,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
 use crate::charset::{Charset, InputEncoder, OutputDecoder};
+use crate::log::{LogMode, SessionLog};
 use crate::palette::Palette;
 
 /// Something the terminal needs the host application to act on.
@@ -20,6 +22,8 @@ pub enum TerminalEvent {
     Bell,
     /// Remote side asked to put text on the clipboard (OSC 52).
     ClipboardStore(String),
+    /// Writing the session log failed; logging has stopped.
+    LogFailed(String),
 }
 
 #[derive(Clone)]
@@ -60,6 +64,9 @@ pub struct Terminal {
     events: mpsc::Receiver<Event>,
     palette: Palette,
     size: Size,
+    log: Option<SessionLog>,
+    /// Events raised outside the VT parser (log errors).
+    pending: Vec<TerminalEvent>,
 }
 
 impl Terminal {
@@ -75,13 +82,53 @@ impl Terminal {
             events: rx,
             palette: Palette::default(),
             size,
+            log: None,
+            pending: Vec::new(),
         }
     }
 
     /// Feeds raw bytes received from the remote side.
     pub fn feed(&mut self, bytes: &[u8]) {
+        let mut log_error = None;
+        if let Some(log) = &mut self.log
+            && let Err(e) = log.record_raw(bytes)
+        {
+            log_error = Some(e);
+        }
         let utf8 = self.decoder.decode(bytes);
+        if let Some(log) = &mut self.log
+            && let Err(e) = log.record_decoded(utf8)
+        {
+            log_error = Some(e);
+        }
         self.parser.advance(&mut self.term, utf8);
+        if let Some(e) = log_error {
+            self.fail_log(e);
+        }
+    }
+
+    /// Starts writing received output to `path` (appending if it exists).
+    pub fn start_log(&mut self, path: &Path, mode: LogMode, title: &str) -> std::io::Result<()> {
+        self.stop_log();
+        self.log = Some(SessionLog::create(path, mode, title)?);
+        Ok(())
+    }
+
+    /// Stops logging; returns the file that was written.
+    pub fn stop_log(&mut self) -> Option<std::path::PathBuf> {
+        let mut log = self.log.take()?;
+        let _ = log.flush();
+        Some(log.path().to_owned())
+    }
+
+    pub fn log(&self) -> Option<&SessionLog> {
+        self.log.as_ref()
+    }
+
+    fn fail_log(&mut self, error: std::io::Error) {
+        if let Some(log) = self.log.take() {
+            self.pending.push(TerminalEvent::LogFailed(format!("{}: {error}", log.path().display())));
+        }
     }
 
     /// Feeds locally generated UTF-8 text (status messages), bypassing the wire charset.
@@ -182,7 +229,12 @@ impl Terminal {
 
     /// Drains pending terminal events, translating them for the host application.
     pub fn take_events(&mut self) -> Vec<TerminalEvent> {
-        let mut out = Vec::new();
+        if let Some(log) = &mut self.log
+            && let Err(e) = log.flush()
+        {
+            self.fail_log(e);
+        }
+        let mut out = std::mem::take(&mut self.pending);
         while let Ok(event) = self.events.try_recv() {
             match event {
                 Event::PtyWrite(text) => out.push(TerminalEvent::Reply(self.encoder.encode(&text))),
@@ -282,5 +334,22 @@ mod tests {
         let mut t = Terminal::new(20, 5, Charset::Utf8, 100);
         t.feed(b"\x1b]0;my title\x07");
         assert_eq!(t.take_events(), vec![TerminalEvent::Title(Some("my title".into()))]);
+    }
+
+    #[test]
+    fn logs_decoded_cp949_and_stops() {
+        let dir = tempfile::tempdir().unwrap();
+        let text_path = dir.path().join("text.log");
+        let mut t = Terminal::new(20, 5, Charset::Cp949, 100);
+        t.start_log(&text_path, LogMode::Text { timestamps: false }, "장비").unwrap();
+        t.feed(&[0x1b, b'[', b'1', b'm', 0xC7, 0xD1, b'\r', b'\n']);
+        t.feed_local("local notices are not logged\r\n");
+        assert!(t.take_events().is_empty());
+        assert_eq!(t.stop_log().as_deref(), Some(text_path.as_path()));
+        t.feed(b"after stop\r\n");
+
+        let text = std::fs::read_to_string(&text_path).unwrap();
+        assert!(text.ends_with("\r\n한\r\n"), "{text:?}");
+        assert!(!text.contains("local") && !text.contains("after"));
     }
 }

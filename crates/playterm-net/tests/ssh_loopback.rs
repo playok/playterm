@@ -225,6 +225,7 @@ impl Fixture {
             use_agent: false,
             agent_pipe: None,
             forwards: Vec::new(),
+            serial: Default::default(),
             term_type: "xterm-256color".into(),
             cols: 80,
             rows: 24,
