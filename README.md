@@ -29,6 +29,8 @@ pwsh scripts\package.ps1                     # dist\playterm-<버전>-windows-{a
 ```
 
 - C 런타임을 정적으로 링크하므로(`.cargo/config.toml`) VC++ 재배포 패키지 없이 실행됩니다.
+- 화면은 OpenGL(glow)로 그리고, OpenGL 을 쓸 수 없는 환경(GPU 없는 VM 등)에서는 자동으로 wgpu(DX12)로 전환합니다.
+  환경변수 `PLAYTERM_RENDERER=wgpu` 또는 `glow` 로 강제할 수 있습니다.
 - 아이콘은 `assets/make_icon.py` 로 생성합니다 (`playterm.png`, `playterm.ico`).
 
 ## 실행
