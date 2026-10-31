@@ -33,6 +33,10 @@ pub struct PendingAuth {
     pub prompt: AuthPrompt,
     pub answers: Vec<String>,
     pub focus_requested: bool,
+    /// User name as edited in the dialog (see [`AuthPrompt::user`]).
+    pub user: String,
+    /// Also store an edited user name in the saved site.
+    pub save_user: bool,
 }
 
 /// What a tab was opened with; enough to duplicate it.
@@ -46,6 +50,8 @@ pub struct SessionSpec {
     pub log: Option<LogPlan>,
     /// Answer login prompts automatically.
     pub login: Option<LoginScript>,
+    /// Id of the saved site this was opened from.
+    pub site: Option<String>,
 }
 
 /// Mouse reporting state (application mouse modes).
@@ -105,6 +111,8 @@ pub struct Session {
     log_plan: Option<LogPlan>,
     /// The site's automatic login, kept for reconnects and duplicates.
     login_script: Option<LoginScript>,
+    /// Saved site the connection was opened from.
+    site: Option<String>,
     /// Automatic login in progress on the current connection.
     login: Option<LoginRunner>,
     remote: Option<Remote>,
@@ -162,6 +170,7 @@ impl Session {
             sftp_pending: false,
             log_plan: None,
             login_script: None,
+            site: None,
             login: None,
             remote: None,
             console: LineEditor::default(),
@@ -174,7 +183,7 @@ impl Session {
 
     /// Connects this tab (from the prompt, or as a new tab), keeping the screen contents.
     pub fn start(&mut self, spec: SessionSpec, net: &NetRuntime, waker: Waker) {
-        let SessionSpec { mut params, charset, name, log, login } = spec;
+        let SessionSpec { mut params, charset, name, log, login, site } = spec;
         if let Some(remote) = &self.remote {
             remote.handle.close();
         }
@@ -195,6 +204,7 @@ impl Session {
         self.log_plan = log.clone();
         self.login = login.clone().map(LoginRunner::new);
         self.login_script = login;
+        self.site = site;
         self.rx_bytes = 0;
         self.tx_bytes = 0;
         let handle = net.connect(params.clone(), waker);
@@ -289,7 +299,25 @@ impl Session {
             name: self.name.clone(),
             log: self.log_plan.clone(),
             login: self.login_script.clone(),
+            site: self.site.clone(),
         })
+    }
+
+    /// Saved site this tab's connection was opened from.
+    pub fn site(&self) -> Option<&str> {
+        self.site.as_deref()
+    }
+
+    /// Connects again as another user (the user name was mistyped), with `password` if one was
+    /// typed for them.
+    pub fn relogin(&mut self, user: String, password: Option<String>, net: &NetRuntime, waker: Waker) {
+        let Some(remote) = &mut self.remote else { return };
+        remote.params.username = user.clone();
+        remote.params.password = password;
+        if let Some(script) = &mut self.login_script {
+            script.user = user;
+        }
+        self.reconnect(net, waker);
     }
 
     pub fn tab_title(&self) -> String {
@@ -320,7 +348,8 @@ impl Session {
                 SessionEvent::HostKeyCheck(check) => self.host_key = Some(check),
                 SessionEvent::AuthPrompt(prompt) => {
                     let answers = vec![String::new(); prompt.fields.len()];
-                    self.auth = Some(PendingAuth { prompt, answers, focus_requested: false });
+                    let user = prompt.user.clone().unwrap_or_default();
+                    self.auth = Some(PendingAuth { prompt, answers, focus_requested: false, user, save_user: false });
                 }
                 SessionEvent::Sftp(result) => {
                     self.sftp_pending = false;

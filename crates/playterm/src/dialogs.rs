@@ -340,7 +340,19 @@ pub fn host_key(ctx: &egui::Context, session: &mut Session) {
     }
 }
 
-pub fn auth(ctx: &egui::Context, session: &mut Session) {
+/// Log in again as another user: the user name was changed in the password dialog.
+pub struct Relogin {
+    pub user: String,
+    /// The password typed for that user, if the dialog asked for exactly a password.
+    pub password: Option<String>,
+    /// Also change the user name of the saved site.
+    pub save: bool,
+}
+
+/// The credentials dialog. For a login (password, keyboard-interactive) the user name can be
+/// corrected too; that answers with a [`Relogin`] instead of the server's questions.
+/// `saved_site`: the tab was opened from a saved site, whose user name could be updated.
+pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Option<Relogin> {
     let mut submit = None;
     egui::Modal::new(egui::Id::unique(("auth", session.id))).show(ctx, |ui| {
         let pending = session.auth.as_mut().expect("checked by caller");
@@ -351,6 +363,22 @@ pub fn auth(ctx: &egui::Context, session: &mut Session) {
         }
         ui.add_space(6.0);
         let mut enter = false;
+        let original_user = pending.prompt.user.clone();
+        if let Some(original) = &original_user {
+            ui.label(t("사용자", "User"));
+            let edit = ui.add(egui::TextEdit::singleline(&mut pending.user));
+            enter |= edit.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter));
+            if pending.user.trim() != original.as_str() {
+                ui.weak(t(
+                    "사용자를 바꾸면 새로 연결해서 그 사용자로 로그인합니다.",
+                    "Changing the user connects again and logs in as that user.",
+                ));
+                if saved_site {
+                    ui.checkbox(&mut pending.save_user, t("사이트 정보에도 저장", "Save it in the site too"));
+                }
+            }
+            ui.add_space(4.0);
+        }
         for (i, field) in pending.prompt.fields.iter().enumerate() {
             ui.label(&field.label);
             let edit = ui.add(egui::TextEdit::singleline(&mut pending.answers[i]).password(!field.echo));
@@ -362,8 +390,9 @@ pub fn auth(ctx: &egui::Context, session: &mut Session) {
             }
         }
         ui.add_space(10.0);
+        let user_ok = original_user.is_none() || !pending.user.trim().is_empty();
         ui.horizontal(|ui| {
-            if ui.button(t("확인", "OK")).clicked() || enter {
+            if ui.add_enabled(user_ok, egui::Button::new(t("확인", "OK"))).clicked() || (enter && user_ok) {
                 submit = Some(true);
             }
             if ui.button(t("취소", "Cancel")).clicked() {
@@ -371,9 +400,18 @@ pub fn auth(ctx: &egui::Context, session: &mut Session) {
             }
         });
     });
-    if let Some(ok) = submit
-        && let Some(pending) = session.auth.take()
-    {
-        pending.prompt.answer(ok.then_some(pending.answers));
+    let ok = submit?;
+    let pending = session.auth.take()?;
+    let user = pending.user.trim().to_owned();
+    if ok && let Some(original) = &pending.prompt.user && &user != original {
+        // A password prompt's answer is that user's password; other questions start over.
+        let password = match pending.prompt.fields.as_slice() {
+            [only] if !only.echo => pending.answers.into_iter().next().filter(|p| !p.is_empty()),
+            _ => None,
+        };
+        pending.prompt.answer(None);
+        return Some(Relogin { user, password, save: pending.save_user });
     }
+    pending.prompt.answer(ok.then_some(pending.answers));
+    None
 }

@@ -292,7 +292,8 @@ impl PlaytermApp {
             user: profile.username.clone(),
             password: params.password.clone().map(Zeroizing::new),
         });
-        self.open_spec(SessionSpec { params, charset: profile.charset, name, log, login });
+        let site = self.store.get(&profile.id).map(|p| p.id.clone());
+        self.open_spec(SessionSpec { params, charset: profile.charset, name, log, login, site });
     }
 
     /// Connects a saved profile, unlocking the vault first if its password is stored there.
@@ -963,7 +964,18 @@ impl PlaytermApp {
         }
         if let Some(index) = self.sessions.iter().position(|s| s.auth.is_some()) {
             self.active = index;
-            dialogs::auth(ctx, &mut self.sessions[index]);
+            let site = self.sessions[index].site().and_then(|id| self.store.get(id)).cloned();
+            if let Some(relogin) = dialogs::auth(ctx, &mut self.sessions[index], site.is_some()) {
+                if relogin.save
+                    && let Some(mut profile) = site
+                {
+                    profile.username = relogin.user.clone();
+                    let r = self.store.upsert(profile);
+                    self.report(t("사이트 저장 실패", "Could not save the site"), r);
+                }
+                let waker = self.waker.clone();
+                self.sessions[index].relogin(relogin.user, relogin.password, &self.net, waker);
+            }
             return true;
         }
         false

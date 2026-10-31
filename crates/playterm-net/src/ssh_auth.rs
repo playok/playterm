@@ -178,6 +178,7 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> Option<Private
                 tr!("키 암호: {name}", "Key passphrase: {name}"),
                 path.display().to_string(),
                 vec![PromptField { label: t("암호 (passphrase)", "Passphrase").into(), echo: false }],
+                None,
             )
             .await?;
         let passphrase = Zeroizing::new(answers.into_iter().next().unwrap_or_default());
@@ -304,6 +305,7 @@ async fn passwords(
                     tr!("{target} 비밀번호", "Password for {target}"),
                     String::new(),
                     vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
+                    Some(user),
                 )
                 .await
             else {
@@ -378,7 +380,7 @@ async fn keyboard_interactive(
                         .into_iter()
                         .map(|p| PromptField { label: p.prompt.trim().to_owned(), echo: p.echo })
                         .collect();
-                    match sink.prompt(title, instructions, fields).await {
+                    match sink.prompt(title, instructions, fields, Some(user)).await {
                         Some(answers) => answers,
                         None => return Ok(Outcome::Cancelled),
                     }

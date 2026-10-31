@@ -139,6 +139,11 @@ pub struct AuthPrompt {
     pub title: String,
     pub instructions: String,
     pub fields: Vec<PromptField>,
+    /// The user being logged in, when the answers are that user's (password,
+    /// keyboard-interactive); `None` for other questions such as a key passphrase. The UI may
+    /// offer to log in as someone else, which takes a new connection: servers do not allow
+    /// changing the user in the middle of authentication.
+    pub user: Option<String>,
     reply: oneshot::Sender<Option<Vec<String>>>,
 }
 
@@ -240,15 +245,18 @@ impl EventSink {
         rx.await.unwrap_or(false)
     }
 
-    /// Asks the user for credentials. `None` means cancelled.
+    /// Asks the user for credentials (of `user`, see [`AuthPrompt::user`]). `None` means
+    /// cancelled.
     pub async fn prompt(
         &self,
         title: String,
         instructions: String,
         fields: Vec<PromptField>,
+        user: Option<&str>,
     ) -> Option<Vec<String>> {
         let (reply, rx) = oneshot::channel();
-        self.send(SessionEvent::AuthPrompt(AuthPrompt { title, instructions, fields, reply }));
+        let user = user.map(str::to_owned);
+        self.send(SessionEvent::AuthPrompt(AuthPrompt { title, instructions, fields, user, reply }));
         rx.await.ok().flatten()
     }
 }

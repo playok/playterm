@@ -338,6 +338,7 @@ fn wrong_password_falls_back_to_prompt() {
     let prompt = expect_prompt(&h);
     assert_eq!(prompt.fields.len(), 1);
     assert!(!prompt.fields[0].echo);
+    assert_eq!(prompt.user.as_deref(), Some("tester"), "a login prompt says whose password it wants");
     prompt.answer(Some(vec!["secret".into()]));
     expect_connected(&h);
 }
