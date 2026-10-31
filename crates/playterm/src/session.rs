@@ -33,6 +33,19 @@ pub struct SessionSpec {
     pub log: Option<LogPlan>,
 }
 
+/// Mouse reporting state (application mouse modes).
+#[derive(Default)]
+pub struct MouseReport {
+    /// Button pressed while reporting, so its release and drags are reported too.
+    pub pressed: Option<crate::mouse::MouseButton>,
+    /// Last reported cell; motion is only reported when it changes.
+    pub last_cell: Option<(usize, usize)>,
+    /// Focus state last frame, for DECSET 1004 focus reports.
+    pub last_focus: bool,
+    /// Fractional wheel notches not yet reported (touchpads scroll in small steps).
+    pub wheel_accum: f32,
+}
+
 /// Mouse selection gesture state.
 #[derive(Default)]
 pub struct ClickState {
@@ -60,6 +73,7 @@ pub struct Session {
     /// Clipboard text the remote side asked us to store (OSC 52).
     pub clipboard_store: Option<String>,
     pub click: ClickState,
+    pub mouse: MouseReport,
     pub sftp: Option<SftpBrowser>,
     /// An SFTP channel was requested and has not answered yet.
     sftp_pending: bool,
@@ -87,6 +101,7 @@ impl Session {
             scroll_accum: 0.0,
             clipboard_store: None,
             click: ClickState::default(),
+            mouse: MouseReport::default(),
             sftp: None,
             sftp_pending: false,
             log_plan: log.clone(),

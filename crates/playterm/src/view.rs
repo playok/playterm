@@ -7,6 +7,7 @@ use eframe::egui::{
 use playterm_term::{Cell, CursorShape, Flags, Point, Rgb, SelectionType, Side, TermMode};
 
 use crate::input::{key_bytes, paste_bytes};
+use crate::mouse::{self, MouseAction, MouseButton, MouseMods};
 use crate::session::Session;
 use crate::{boxdraw, clipboard};
 
@@ -63,14 +64,36 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) {
     let rows = (rect.height() / cell.h).floor().max(1.0) as usize;
     session.resize(cols, rows);
 
+    let mode = *session.terminal.term().mode();
+    // Focus reports follow the OS window as well (switching to another application).
+    let has_focus = focused && ui.input(|i| i.focused);
+    if let Some(report) = mouse::focus(mode, has_focus).filter(|_| has_focus != session.mouse.last_focus) {
+        session.send_bytes(report.to_vec());
+    }
+    session.mouse.last_focus = has_focus;
+
     if focused {
         handle_keyboard(ui, session);
     }
-    handle_mouse(ui, session, &response, rect, cell);
-    if response.hovered() {
-        handle_wheel(ui, session, cell.h);
+
+    // Mouse goes to the application when it asked for it (vim `mouse=a`, htop, mc, tmux),
+    // except with Shift held, which always selects locally like xterm and Windows Terminal.
+    // A gesture already in progress keeps its route until the button is released.
+    let shift = ui.input(|i| i.modifiers.shift);
+    let report = !session.click.dragging
+        && (session.mouse.pressed.is_some() || (mouse::reporting(mode) && !shift && !behind_modal));
+    if report {
+        report_mouse(ui, session, &response, rect, cell, mode);
+    } else {
+        handle_mouse(ui, session, &response, rect, cell);
     }
-    response.context_menu(|ui| context_menu(ui, session));
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(if report { egui::CursorIcon::Default } else { egui::CursorIcon::Text });
+        handle_wheel(ui, session, rect, cell, report);
+    }
+    if !report {
+        response.context_menu(|ui| context_menu(ui, session));
+    }
 
     paint(ui, session, rect, cell, focused);
 
@@ -218,17 +241,120 @@ fn handle_mouse(ui: &egui::Ui, session: &mut Session, response: &egui::Response,
     }
 }
 
-fn handle_wheel(ui: &egui::Ui, session: &mut Session, cell_h: f32) {
+/// 0-based viewport cell under a screen position, clamped to the grid.
+fn viewport_cell(session: &Session, rect: Rect, cell: CellSize, pos: Pos2) -> (usize, usize) {
+    let col = ((pos.x - rect.left()) / cell.w).floor().max(0.0) as usize;
+    let row = ((pos.y - rect.top()) / cell.h).floor().max(0.0) as usize;
+    (col.min(session.terminal.cols() - 1), row.min(session.terminal.rows() - 1))
+}
+
+fn mouse_mods(m: egui::Modifiers) -> MouseMods {
+    MouseMods { shift: m.shift, alt: m.alt, ctrl: m.ctrl }
+}
+
+/// Forwards clicks, drags and motion to the application as xterm mouse reports.
+fn report_mouse(
+    ui: &egui::Ui,
+    session: &mut Session,
+    response: &egui::Response,
+    rect: Rect,
+    cell: CellSize,
+    mode: TermMode,
+) {
+    let (events, modifiers) = ui.input(|i| (i.events.clone(), i.modifiers));
+    let over_terminal = |pos: Pos2| response.hovered() && rect.contains(pos);
+
+    for event in events {
+        match event {
+            Event::PointerButton { pos, button, pressed, modifiers } => {
+                let button = match button {
+                    egui::PointerButton::Primary => MouseButton::Left,
+                    egui::PointerButton::Secondary => MouseButton::Right,
+                    egui::PointerButton::Middle => MouseButton::Middle,
+                    _ => continue,
+                };
+                let (col, row) = viewport_cell(session, rect, cell, pos);
+                let action = if pressed {
+                    // Presses outside the terminal belong to other widgets.
+                    if !over_terminal(pos) || session.mouse.pressed.is_some() {
+                        continue;
+                    }
+                    session.mouse.pressed = Some(button);
+                    MouseAction::Press
+                } else {
+                    // Releases are reported wherever they happen, but only for our own press.
+                    if session.mouse.pressed != Some(button) {
+                        continue;
+                    }
+                    session.mouse.pressed = None;
+                    MouseAction::Release
+                };
+                session.mouse.last_cell = Some((col, row));
+                if let Some(bytes) = mouse::encode(mode, button, action, col, row, mouse_mods(modifiers)) {
+                    session.send_bytes(bytes);
+                }
+            }
+            Event::PointerMoved(pos) => {
+                let at = viewport_cell(session, rect, cell, pos);
+                if session.mouse.last_cell == Some(at) {
+                    continue; // only cell changes are reported
+                }
+                let button = match session.mouse.pressed {
+                    Some(b) => b,
+                    None if over_terminal(pos) => MouseButton::None,
+                    None => continue,
+                };
+                session.mouse.last_cell = Some(at);
+                if let Some(bytes) = mouse::encode(mode, button, MouseAction::Motion, at.0, at.1, mouse_mods(modifiers)) {
+                    session.send_bytes(bytes);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Wheel events for the application: one report per wheel notch, like xterm. Uses the raw
+/// events (smoothed deltas would turn one notch into 1 or 2 reports depending on rounding).
+fn report_wheel(ui: &egui::Ui, session: &mut Session, rect: Rect, cell: CellSize) {
+    let (events, hover) = ui.input(|i| (i.events.clone(), i.pointer.hover_pos()));
+    let Some(pos) = hover else { return };
+    let mode = *session.terminal.term().mode();
+    for event in events {
+        let Event::MouseWheel { unit, delta, modifiers, .. } = event else { continue };
+        session.mouse.wheel_accum += match unit {
+            egui::MouseWheelUnit::Line => delta.y,
+            egui::MouseWheelUnit::Point => delta.y / cell.h, // precision touchpads
+            egui::MouseWheelUnit::Page => delta.y * session.terminal.rows() as f32,
+        };
+        let notches = session.mouse.wheel_accum.trunc() as i32;
+        if notches == 0 {
+            continue;
+        }
+        session.mouse.wheel_accum -= notches as f32;
+        let (col, row) = viewport_cell(session, rect, cell, pos);
+        // Content moving down (positive delta) means scrolling up.
+        let button = if notches > 0 { MouseButton::WheelUp } else { MouseButton::WheelDown };
+        let one = mouse::encode(mode, button, MouseAction::Press, col, row, mouse_mods(modifiers)).unwrap_or_default();
+        session.send_bytes(one.repeat(notches.unsigned_abs() as usize));
+    }
+}
+
+fn handle_wheel(ui: &egui::Ui, session: &mut Session, rect: Rect, cell: CellSize, report: bool) {
+    if report {
+        report_wheel(ui, session, rect, cell);
+        return;
+    }
     let dy = ui.input(|i| i.smooth_scroll_delta().y);
     if dy == 0.0 {
         return;
     }
     session.scroll_accum += dy;
-    let lines = (session.scroll_accum / cell_h).trunc() as i32;
+    let lines = (session.scroll_accum / cell.h).trunc() as i32;
     if lines == 0 {
         return;
     }
-    session.scroll_accum -= lines as f32 * cell_h;
+    session.scroll_accum -= lines as f32 * cell.h;
 
     let mode = *session.terminal.term().mode();
     if mode.contains(TermMode::ALT_SCREEN) {

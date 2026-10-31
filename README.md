@@ -93,6 +93,7 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 | Ctrl+Shift+B | 세션 목록 표시/숨김 |
 | Ctrl+Shift+F | SFTP 파일 브라우저 |
 | 드래그 / 더블클릭 / 트리플클릭 | 문자 / 단어 / 줄 선택 (Shift+클릭으로 확장) |
+| Shift+드래그 | 마우스를 쓰는 프로그램(vim `mouse=a`, htop, mc, tmux) 안에서도 로컬 선택 |
 | Ctrl+C | 선택 영역이 있으면 복사, 없으면 ^C 전송 |
 | Ctrl+Shift+C / Ctrl+Shift+V | 복사 / 붙여넣기 |
 | Ctrl+V, Shift+Insert | 붙여넣기 |
