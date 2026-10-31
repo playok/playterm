@@ -1,0 +1,15 @@
+[package]
+name = "playterm-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+log = "0.4.35"
+russh = { version = "0.65.0", default-features = false, features = ["ring", "flate2", "rsa"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "sync", "time", "io-util", "macros"] }
+
+[dev-dependencies]
+rand = { version = "0.10", features = ["thread_rng"] }
