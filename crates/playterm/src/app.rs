@@ -1105,6 +1105,28 @@ fn apply_ui(ctx: &egui::Context, settings: &AppSettings) {
         UiTheme::Light => egui::ThemePreference::Light,
         UiTheme::System => egui::ThemePreference::System,
     });
+    ctx.set_visuals_of(egui::Theme::Light, soft_light());
+}
+
+/// egui's light look with the pure whites toned down to light grays (easier on the eyes,
+/// close to Windows 11 light mode): panels, dialogs and text fields a step darker, buttons and
+/// separators darker still so they keep their contrast.
+fn soft_light() -> egui::Visuals {
+    let gray = Color32::from_gray;
+    let mut v = egui::Visuals::light();
+    v.panel_fill = gray(234);
+    v.window_fill = gray(240);
+    v.extreme_bg_color = gray(246); // text fields
+    v.code_bg_color = gray(222);
+    let w = &mut v.widgets;
+    w.noninteractive.weak_bg_fill = gray(234);
+    w.noninteractive.bg_fill = gray(234);
+    w.noninteractive.bg_stroke.color = gray(178); // separators
+    for (state, fill) in [(&mut w.inactive, 218), (&mut w.hovered, 206), (&mut w.open, 206), (&mut w.active, 160)] {
+        state.weak_bg_fill = gray(fill);
+        state.bg_fill = gray(fill);
+    }
+    v
 }
 
 /// Loads `sessions.toml`. A file that cannot be parsed is moved aside, never overwritten.
