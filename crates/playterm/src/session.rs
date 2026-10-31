@@ -107,6 +107,10 @@ pub struct Session {
     pub in_broadcast: bool,
     /// An SFTP channel was requested and has not answered yet.
     sftp_pending: bool,
+    /// Open the window when the requested SFTP channel arrives (not just for the side panel).
+    sftp_window: bool,
+    /// Why SFTP could not be opened on this connection; the side panel does not retry by itself.
+    sftp_error: Option<String>,
     /// Auto-log settings of the profile, kept so duplicates log to their own file.
     log_plan: Option<LogPlan>,
     /// The site's automatic login, kept for reconnects and duplicates.
@@ -168,6 +172,8 @@ impl Session {
             search: None,
             in_broadcast: true,
             sftp_pending: false,
+            sftp_window: false,
+            sftp_error: None,
             log_plan: None,
             login_script: None,
             site: None,
@@ -200,6 +206,7 @@ impl Session {
         self.auth = None;
         self.sftp = None;
         self.sftp_pending = false;
+        self.sftp_error = None;
         self.requests.clear();
         self.log_plan = log.clone();
         self.login = login.clone().map(LoginRunner::new);
@@ -354,8 +361,16 @@ impl Session {
                 SessionEvent::Sftp(result) => {
                     self.sftp_pending = false;
                     match result {
-                        Ok(conn) => self.sftp = Some(SftpBrowser::new(conn)),
-                        Err(e) => self.notice(&tr!("SFTP 열기 실패: {e}", "Could not open SFTP: {e}"), "31"),
+                        Ok(conn) => {
+                            let mut browser = SftpBrowser::new(conn);
+                            browser.open = std::mem::take(&mut self.sftp_window);
+                            self.sftp = Some(browser);
+                        }
+                        Err(e) => {
+                            self.sftp_window = false;
+                            self.notice(&tr!("SFTP 열기 실패: {e}", "Could not open SFTP: {e}"), "31");
+                            self.sftp_error = Some(e);
+                        }
                     }
                 }
                 SessionEvent::Closed(reason) => {
@@ -364,6 +379,8 @@ impl Session {
                     self.auth = None;
                     self.sftp = None;
                     self.sftp_pending = false;
+                    self.sftp_window = false;
+                    self.sftp_error = None;
                     self.terminal.reset_modes();
                     match reason {
                         Some(reason) => self.notice(&tr!("연결 종료: {reason}", "Disconnected: {reason}"), "31"),
@@ -594,14 +611,41 @@ impl Session {
     }
 
     /// Shows the SFTP browser, opening the SFTP channel on first use.
+    /// Opens the SFTP window (asking the server for SFTP first if needed).
     pub fn open_sftp(&mut self) {
         if let Some(browser) = &mut self.sftp {
             browser.open = true;
-        } else if self.can_sftp() && !self.sftp_pending {
+        } else if self.can_sftp() {
+            self.sftp_window = true;
+            self.sftp_error = None;
+            self.request_sftp();
+        }
+    }
+
+    /// Starts SFTP for the side panel, without the window. Does nothing after a failure on
+    /// this connection until [`Self::retry_sftp`].
+    pub fn ensure_sftp(&mut self) {
+        if self.sftp.is_none() && self.sftp_error.is_none() && self.can_sftp() {
+            self.request_sftp();
+        }
+    }
+
+    pub fn retry_sftp(&mut self) {
+        self.sftp_error = None;
+        self.ensure_sftp();
+    }
+
+    /// Why SFTP could not be opened on this connection.
+    pub fn sftp_error(&self) -> Option<&str> {
+        self.sftp_error.as_deref()
+    }
+
+    fn request_sftp(&mut self) {
+        if !self.sftp_pending
+            && let Some(remote) = &self.remote
+        {
             self.sftp_pending = true;
-            if let Some(remote) = &self.remote {
-                remote.handle.open_sftp();
-            }
+            remote.handle.open_sftp();
         }
     }
 

@@ -37,6 +37,7 @@ const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
     (KeyboardShortcut::new(CTRL_SHIFT, Key::F), Shortcut::Find),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::I), Shortcut::Broadcast),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::E), Shortcut::Sftp),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::X), Shortcut::SftpPanel),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::Tab), Shortcut::PrevTab),
     (KeyboardShortcut::new(Modifiers::CTRL, Key::Tab), Shortcut::NextTab),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::W), Shortcut::CloseTab),
@@ -59,6 +60,7 @@ enum Shortcut {
     Find,
     Broadcast,
     Sftp,
+    SftpPanel,
     PrevTab,
     NextTab,
     CloseTab,
@@ -140,6 +142,8 @@ pub struct PlaytermApp {
     sleep_guard: SleepGuard,
     /// Keeps the screen saver away while the Tools menu item is checked.
     screensaver_guard: ScreenSaverGuard,
+    /// The SFTP explorer side panel is open.
+    sftp_panel: bool,
 }
 
 impl PlaytermApp {
@@ -195,6 +199,7 @@ impl PlaytermApp {
             broadcast: false,
             sleep_guard: SleepGuard::default(),
             screensaver_guard: ScreenSaverGuard::default(),
+            sftp_panel: false,
         };
         for profile in initial {
             app.open_session(&profile, None, None);
@@ -753,6 +758,7 @@ impl PlaytermApp {
                     s.open_sftp();
                 }
             }
+            Command::ToggleSftpPanel => self.sftp_panel = !self.sftp_panel,
             Command::Break(i) => {
                 if let Some(s) = self.sessions.get_mut(i) {
                     s.send_break();
@@ -996,6 +1002,7 @@ impl PlaytermApp {
                 Shortcut::Find => Command::Find,
                 Shortcut::Broadcast => Command::ToggleBroadcast,
                 Shortcut::Sftp => Command::Sftp(i),
+                Shortcut::SftpPanel => Command::ToggleSftpPanel,
                 Shortcut::PrevTab => Command::PrevTab,
                 Shortcut::NextTab => Command::NextTab,
                 Shortcut::CloseTab => Command::Close(i),
@@ -1021,6 +1028,7 @@ impl PlaytermApp {
             always_on_top: self.always_on_top,
             broadcast: self.broadcast,
             prevent_screensaver: self.settings.prevent_screensaver,
+            sftp_panel: self.sftp_panel,
         };
         if let Some(command) = menu::menu_bar(ui, &state) {
             let ctx = ui.ctx().clone();
@@ -1157,17 +1165,56 @@ impl PlaytermApp {
         if paths.is_empty() {
             return;
         }
-        match self.sessions.get_mut(self.active).and_then(|s| s.sftp.as_mut()).filter(|b| b.open) {
+        let panel = self.sftp_panel;
+        match self.sessions.get_mut(self.active).and_then(|s| s.sftp.as_mut()).filter(|b| b.open || panel) {
             Some(browser) => browser.upload_paths(paths),
             None => {
                 self.status = Some(
                     t(
-                        "파일을 올리려면 먼저 SFTP 창을 여세요 (Ctrl+Shift+E)",
-                        "Open the SFTP window first to upload files (Ctrl+Shift+E)",
+                        "파일을 올리려면 먼저 SFTP 탐색기(Ctrl+Shift+X)나 SFTP 창(Ctrl+Shift+E)을 여세요",
+                        "Open the SFTP explorer (Ctrl+Shift+X) or the SFTP window (Ctrl+Shift+E) first to upload files",
                     )
                     .into(),
                 )
             }
+        }
+    }
+
+    /// The SFTP explorer side panel: the active tab's remote files.
+    fn sftp_panel_ui(&mut self, ui: &mut egui::Ui) {
+        let mut close = false;
+        ui.horizontal(|ui| {
+            ui.strong(t("SFTP 탐색기", "SFTP explorer"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                close = ui.small_button("✕").on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)")).clicked();
+            });
+        });
+        if close {
+            self.sftp_panel = false;
+        }
+        let Some(session) = self.sessions.get_mut(self.active) else { return };
+        ui.weak(session.tab_title());
+        ui.separator();
+        if session.sftp.is_none() && !session.can_sftp() {
+            ui.weak(t(
+                "SSH 로 연결된 탭에서 원격 파일을 보고 올리거나 받을 수 있습니다.",
+                "Shows, uploads and downloads remote files in a tab connected over SSH.",
+            ));
+            return;
+        }
+        if let Some(browser) = &mut session.sftp {
+            browser.panel(ui);
+        } else if let Some(err) = session.sftp_error() {
+            ui.colored_label(ui.visuals().error_fg_color, tr!("SFTP 열기 실패: {err}", "Could not open SFTP: {err}"));
+            if ui.button(t("다시 시도", "Try again")).clicked() {
+                session.retry_sftp();
+            }
+        } else {
+            session.ensure_sftp();
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak(t("SFTP 여는 중…", "Opening SFTP…"));
+            });
         }
     }
 
@@ -1302,13 +1349,22 @@ impl eframe::App for PlaytermApp {
             }
         }
 
+        // Slides in from the right edge; added before the terminal so it takes its room.
+        let mut sftp_panel = self.sftp_panel;
+        egui::Panel::right("sftp-panel")
+            .resizable(true)
+            .default_size(340.0)
+            .min_size(240.0)
+            .drag_to_open(false)
+            .show_collapsible(ui, &mut sftp_panel, |ui| self.sftp_panel_ui(ui));
+        // Closed with its ✕ (inside) or by dragging the edge (outside).
+        self.sftp_panel = self.sftp_panel && sftp_panel;
+
         for session in &mut self.sessions {
             let title = session.tab_title();
             if let Some(browser) = &mut session.sftp {
                 browser.poll();
-                if browser.open {
-                    browser.show(&ctx, session.id, &title);
-                }
+                browser.show(&ctx, session.id, &title);
                 if browser.has_running_transfers() {
                     // Progress arrives at most every 100 ms; keep the bars moving.
                     ctx.request_repaint_after(std::time::Duration::from_millis(100));

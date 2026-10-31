@@ -1,4 +1,4 @@
-//! SFTP file browser window for one SSH session.
+//! SFTP file browser of one SSH session, shown as a window and/or in the side panel.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -191,35 +191,71 @@ impl SftpBrowser {
         self.entries.iter().filter(|e| self.selected.contains(&e.name)).cloned().collect()
     }
 
+    /// The window (while [`Self::open`]) and the browser's dialogs (new folder, rename, delete),
+    /// which the side panel uses too.
     pub fn show(&mut self, ctx: &egui::Context, id: u64, title: &str) {
-        let mut open = self.open;
-        egui::Window::new(format!("SFTP — {title}"))
-            .id(egui::Id::unique(("sftp", id)))
-            .open(&mut open)
-            .default_size([680.0, 440.0])
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
-            .resizable(true)
-            .show(ctx, |ui| self.contents(ui));
-        self.open = open;
+        if self.open {
+            let mut open = self.open;
+            egui::Window::new(format!("SFTP — {title}"))
+                .id(egui::Id::unique(("sftp", id)))
+                .open(&mut open)
+                .default_size([680.0, 440.0])
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center())
+                .resizable(true)
+                .show(ctx, |ui| self.contents(ui));
+            self.open = open;
+        }
         self.show_prompt(ctx, id);
+    }
+
+    /// The browser laid out for the narrow side panel: path on its own line, wrapped buttons,
+    /// name and size columns (the other details in the tooltip).
+    pub fn panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            self.nav_buttons(ui);
+            self.path_field(ui, ui.available_width());
+        });
+        ui.horizontal_wrapped(|ui| self.action_buttons(ui));
+        ui.separator();
+        self.listing(ui, true);
+        ui.weak(t(
+            "더블클릭: 폴더 열기 / 파일 다운로드 · 탐색기에서 파일을 끌어다 놓으면 업로드",
+            "Double-click: open a folder / download a file · Drop files from Explorer to upload",
+        ));
     }
 
     fn contents(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button(t("상위", "Up")).clicked() && !self.cwd.is_empty() {
-                let parent = remote_parent(&self.cwd);
-                self.navigate(&parent);
-            }
-            if ui.button(t("새로고침", "Refresh")).clicked() {
-                self.refresh();
-            }
-            let path = ui.add(egui::TextEdit::singleline(&mut self.path_input).desired_width(260.0));
-            if path.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                let target = self.path_input.trim().to_owned();
-                self.navigate(&target);
-            }
+            self.nav_buttons(ui);
+            self.path_field(ui, 260.0);
             ui.separator();
+            self.action_buttons(ui);
+        });
+        ui.separator();
+        self.listing(ui, false);
+    }
+
+    fn nav_buttons(&mut self, ui: &mut egui::Ui) {
+        if ui.button(t("상위", "Up")).clicked() && !self.cwd.is_empty() {
+            let parent = remote_parent(&self.cwd);
+            self.navigate(&parent);
+        }
+        if ui.button(t("새로고침", "Refresh")).clicked() {
+            self.refresh();
+        }
+    }
+
+    fn path_field(&mut self, ui: &mut egui::Ui, width: f32) {
+        let path = ui.add(egui::TextEdit::singleline(&mut self.path_input).desired_width(width));
+        if path.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            let target = self.path_input.trim().to_owned();
+            self.navigate(&target);
+        }
+    }
+
+    fn action_buttons(&mut self, ui: &mut egui::Ui) {
+        {
             if ui.button(t("새 폴더", "New folder")).clicked() {
                 self.prompt = Some(Prompt::NewFolder(String::new()));
             }
@@ -245,9 +281,11 @@ impl SftpBrowser {
                 let items = self.selected_entries().into_iter().map(|e| (e.name, e.is_dir)).collect();
                 self.prompt = Some(Prompt::Delete(items));
             }
-        });
-        ui.separator();
+        }
+    }
 
+    /// Entries, transfers and the status line.
+    fn listing(&mut self, ui: &mut egui::Ui, compact: bool) {
         let transfers_height = if self.transfers.is_empty() { 0.0 } else { 120.0 };
         let list_height = (ui.available_height() - transfers_height - 30.0).max(80.0);
         egui::ScrollArea::vertical().id_salt("sftp-list").max_height(list_height).auto_shrink([false, false]).show(
@@ -256,7 +294,7 @@ impl SftpBrowser {
                 if self.loading && self.entries.is_empty() {
                     ui.spinner();
                 }
-                self.entry_grid(ui);
+                self.entry_grid(ui, compact);
             },
         );
 
@@ -270,15 +308,21 @@ impl SftpBrowser {
         }
     }
 
-    fn entry_grid(&mut self, ui: &mut egui::Ui) {
+    /// `compact`: name and size only (side panel); long names are cut short.
+    fn entry_grid(&mut self, ui: &mut egui::Ui, compact: bool) {
         let mut enter_dir = None;
         let mut download = None;
         let mut prompt = None;
-        egui::Grid::new("sftp-grid").num_columns(4).striped(true).spacing([16.0, 4.0]).show(ui, |ui| {
+        let columns = if compact { 2 } else { 4 };
+        // Side panel: the name column takes the width the size column leaves.
+        let name_width = (ui.available_width() - 110.0).max(80.0);
+        egui::Grid::new("sftp-grid").num_columns(columns).striped(true).spacing([16.0, 4.0]).show(ui, |ui| {
             ui.strong(t("이름", "Name"));
             ui.strong(t("크기", "Size"));
-            ui.strong(t("수정 시각", "Modified"));
-            ui.strong(t("권한", "Permissions"));
+            if !compact {
+                ui.strong(t("수정 시각", "Modified"));
+                ui.strong(t("권한", "Permissions"));
+            }
             ui.end_row();
             for entry in &self.entries {
                 let label = if entry.is_dir { format!("{}/", entry.name) } else { entry.name.clone() };
@@ -287,7 +331,23 @@ impl SftpBrowser {
                     text = text.strong();
                 }
                 let selected = self.selected.contains(&entry.name);
-                let response = ui.push_id(&entry.name, |ui| ui.selectable_label(selected, text)).inner;
+                let response = ui
+                    .push_id(&entry.name, |ui| {
+                        if compact {
+                            ui.set_min_width(name_width);
+                            ui.set_max_width(name_width);
+                            let details = format!(
+                                "{}\n{}",
+                                entry.mtime.map(format_time).unwrap_or_default(),
+                                entry.permissions.map(|m| mode_string(m, entry.is_dir)).unwrap_or_default()
+                            );
+                            ui.add(egui::Button::selectable(selected, text).truncate())
+                                .on_hover_text(format!("{}\n{}", entry.name, details.trim()))
+                        } else {
+                            ui.selectable_label(selected, text)
+                        }
+                    })
+                    .inner;
                 if response.clicked() {
                     if ui.input(|i| i.modifiers.ctrl) {
                         if !self.selected.remove(&entry.name) {
@@ -315,8 +375,10 @@ impl SftpBrowser {
                     }
                 });
                 ui.label(if entry.is_dir { String::new() } else { human_size(entry.size) });
-                ui.label(entry.mtime.map(format_time).unwrap_or_default());
-                ui.monospace(entry.permissions.map(|m| mode_string(m, entry.is_dir)).unwrap_or_default());
+                if !compact {
+                    ui.label(entry.mtime.map(format_time).unwrap_or_default());
+                    ui.monospace(entry.permissions.map(|m| mode_string(m, entry.is_dir)).unwrap_or_default());
+                }
                 ui.end_row();
             }
         });
@@ -347,7 +409,8 @@ impl SftpBrowser {
                         TransferState::Running => {
                             let frac = if t.total > 0 { t.done as f32 / t.total as f32 } else { 0.0 };
                             let text = format!("{} / {}", human_size(t.done), human_size(t.total));
-                            ui.add(egui::ProgressBar::new(frac).text(text).desired_width(220.0));
+                            let width = (ui.available_width() - 50.0).clamp(60.0, 220.0);
+                            ui.add(egui::ProgressBar::new(frac).text(text).desired_width(width));
                             // `t` is the transfer here, hence the full path.
                             if ui.small_button(playterm_i18n::t("취소", "Cancel")).clicked() {
                                 self.conn.cancel(t.id);

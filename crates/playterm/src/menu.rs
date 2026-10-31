@@ -33,6 +33,8 @@ pub enum Command {
     Settings,
 
     Sftp(usize),
+    /// The SFTP explorer sliding in at the right edge, following the active tab.
+    ToggleSftpPanel,
     Break(usize),
     StartLog(usize, LogMode),
     StopLog(usize),
@@ -74,6 +76,7 @@ pub struct MenuState<'a> {
     pub always_on_top: bool,
     pub broadcast: bool,
     pub prevent_screensaver: bool,
+    pub sftp_panel: bool,
 }
 
 /// Adds a menu item; a click records `command` and closes the menu.
@@ -160,6 +163,14 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                     item(ui, out, t("로그 폴더 열기", "Open log folder"), "", true, Command::OpenLogFolder);
                 }
             }
+            check(
+                ui,
+                out,
+                t("SFTP 탐색기 (옆 패널)", "SFTP explorer (side panel)"),
+                "Ctrl+Shift+X",
+                st.sftp_panel,
+                Command::ToggleSftpPanel,
+            );
             ui.separator();
             match st.vault {
                 VaultState::Missing => {
