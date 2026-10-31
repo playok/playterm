@@ -12,6 +12,7 @@ use crate::dialogs::{
 };
 use crate::session::{Session, SessionSpec, SessionState};
 use crate::sidebar::{Sidebar, SidebarAction, VaultState};
+use crate::profile_form::expand_home;
 use crate::{clipboard, fonts, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
@@ -112,12 +113,23 @@ impl PlaytermApp {
     }
 
     fn open_session(&mut self, profile: &SessionProfile, password: Option<String>, name: Option<String>) {
+        let identity_file = (!profile.identity_file.is_empty()).then(|| expand_home(&profile.identity_file));
+        // Like OpenSSH, the usual key files are tried when present.
+        let default_identity_files = ["id_ed25519", "id_ecdsa", "id_rsa"]
+            .iter()
+            .map(|name| expand_home(&format!("~/.ssh/{name}")))
+            .filter(|p| p.is_file() && Some(p) != identity_file.as_ref())
+            .collect();
         let params = ConnectParams {
             protocol: profile.protocol,
             host: profile.host.clone(),
             port: profile.port,
             username: profile.username.clone(),
             password,
+            identity_file,
+            default_identity_files,
+            use_agent: profile.use_agent,
+            agent_pipe: None,
             term_type: profile.term_type.clone(),
             cols: 80,
             rows: 24,
@@ -285,7 +297,7 @@ impl PlaytermApp {
                 QuickConnectResult::Cancel => {}
                 QuickConnectResult::Connect { profile, password, save } => {
                     if save {
-                        let r = self.store.upsert(profile.clone());
+                        let r = self.store.upsert((*profile).clone());
                         self.report("세션 저장 실패", r);
                     }
                     let name = save.then(|| profile.display_name());
@@ -295,7 +307,7 @@ impl PlaytermApp {
             Modal::Editor(mut editor) => match editor.show(ctx, &self.store.folders()) {
                 EditorResult::Open => self.modal = Some(Modal::Editor(editor)),
                 EditorResult::Cancel => {}
-                EditorResult::Save { profile, password, connect } => self.save_profile(profile, password, connect),
+                EditorResult::Save { profile, password, connect } => self.save_profile(*profile, password, connect),
             },
             Modal::Vault(mut dialog, pending) => match dialog.show(ctx) {
                 VaultResult::Open => self.modal = Some(Modal::Vault(dialog, pending)),

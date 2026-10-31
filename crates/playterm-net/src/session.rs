@@ -43,6 +43,15 @@ pub struct ConnectParams {
     /// SSH user name. Unused for Telnet (the remote login prompt asks for it).
     pub username: String,
     pub password: Option<String>,
+    /// Private key chosen for this connection; tried first.
+    pub identity_file: Option<PathBuf>,
+    /// Keys tried after the agent if they exist (`~/.ssh/id_ed25519`, ...).
+    pub default_identity_files: Vec<PathBuf>,
+    /// Offer keys from running SSH agents (Windows OpenSSH agent, Pageant).
+    pub use_agent: bool,
+    /// Agent named pipe to use instead of `SSH_AUTH_SOCK` / the OpenSSH service pipe.
+    /// When set, Pageant is not consulted.
+    pub agent_pipe: Option<String>,
     /// Value for the `TERM` variable / Telnet terminal type.
     pub term_type: String,
     pub cols: u16,
@@ -59,6 +68,8 @@ impl fmt::Debug for ConnectParams {
             .field("port", &self.port)
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("identity_file", &self.identity_file)
+            .field("use_agent", &self.use_agent)
             .field("term_type", &self.term_type)
             .finish_non_exhaustive()
     }

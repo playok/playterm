@@ -17,7 +17,7 @@ fn modal(id: impl std::hash::Hash + std::fmt::Debug, ctx: &egui::Context, add: i
 pub enum QuickConnectResult {
     Open,
     Cancel,
-    Connect { profile: SessionProfile, password: Option<Zeroizing<String>>, save: bool },
+    Connect { profile: Box<SessionProfile>, password: Option<Zeroizing<String>>, save: bool },
 }
 
 pub struct QuickConnect {
@@ -48,7 +48,7 @@ impl QuickConnect {
                 }
             });
             if submit && let Some((profile, password)) = self.form.validate() {
-                result = QuickConnectResult::Connect { profile, password, save: self.save };
+                result = QuickConnectResult::Connect { profile: Box::new(profile), password, save: self.save };
             }
         });
         if close && matches!(result, QuickConnectResult::Open) {
@@ -64,7 +64,7 @@ impl QuickConnect {
 pub enum EditorResult {
     Open,
     Cancel,
-    Save { profile: SessionProfile, password: Option<Zeroizing<String>>, connect: bool },
+    Save { profile: Box<SessionProfile>, password: Option<Zeroizing<String>>, connect: bool },
 }
 
 pub struct SessionEditor {
@@ -101,7 +101,7 @@ impl SessionEditor {
                 }
             });
             if submit && let Some((profile, password)) = self.form.validate() {
-                result = EditorResult::Save { profile, password, connect };
+                result = EditorResult::Save { profile: Box::new(profile), password, connect };
             }
         });
         if close && matches!(result, EditorResult::Open) {

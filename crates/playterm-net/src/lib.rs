@@ -6,6 +6,7 @@
 
 mod session;
 mod ssh;
+mod ssh_auth;
 mod telnet;
 
 use std::io;

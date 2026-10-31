@@ -1,6 +1,8 @@
 //! Connection form shared by the quick-connect dialog and the session editor,
 //! plus parsing of `ssh://` / `telnet://` URLs from the command line.
 
+use std::path::PathBuf;
+
 use eframe::egui;
 use playterm_config::SessionProfile;
 use playterm_net::Protocol;
@@ -45,6 +47,33 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
     }
 
     Ok(SessionProfile { protocol, host: host.to_owned(), port, username, ..Default::default() })
+}
+
+/// Expands a leading `~` to the user's home directory.
+pub fn expand_home(path: &str) -> PathBuf {
+    match path.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            match directories::BaseDirs::new() {
+                Some(dirs) => dirs.home_dir().join(rest.trim_start_matches(['/', '\\'])),
+                None => PathBuf::from(path),
+            }
+        }
+        _ => PathBuf::from(path),
+    }
+}
+
+/// Native file dialog for choosing a private key, starting in `~/.ssh`.
+fn pick_key_file(current: &str) -> Option<PathBuf> {
+    let start = match current.trim() {
+        "" => expand_home("~/.ssh"),
+        c => expand_home(c).parent().map(PathBuf::from).unwrap_or_default(),
+    };
+    rfd::FileDialog::new()
+        .set_title("SSH 개인 키 선택")
+        .set_directory(start)
+        .add_filter("모든 파일", &["*"])
+        .add_filter("PuTTY 키 (*.ppk)", &["ppk"])
+        .pick_file()
 }
 
 /// Which optional parts of the form to show.
@@ -165,6 +194,26 @@ impl ProfileForm {
                     ui.checkbox(&mut p.save_password, "비밀번호 저장 (마스터 비밀번호로 암호화)");
                     ui.end_row();
                 }
+
+                ui.label("키 파일");
+                ui.horizontal(|ui| {
+                    let key = ui.add(
+                        egui::TextEdit::singleline(&mut p.identity_file)
+                            .hint_text("없음 (에이전트·기본 키 사용)")
+                            .desired_width(220.0),
+                    );
+                    submit |= enter(ui, &key);
+                    if ui.button("찾아보기").clicked()
+                        && let Some(path) = pick_key_file(&p.identity_file)
+                    {
+                        p.identity_file = path.display().to_string();
+                    }
+                });
+                ui.end_row();
+
+                ui.label("");
+                ui.checkbox(&mut p.use_agent, "SSH 에이전트 사용 (Pageant / Windows OpenSSH)");
+                ui.end_row();
             }
 
             ui.label("인코딩");
@@ -204,6 +253,7 @@ impl ProfileForm {
         p.folder = p.folder.trim().to_owned();
         p.host = p.host.trim().to_owned();
         p.username = p.username.trim().to_owned();
+        p.identity_file = p.identity_file.trim().trim_matches('"').to_owned();
         if p.host.is_empty() {
             return Err("호스트를 입력하세요".into());
         }
@@ -228,6 +278,7 @@ impl ProfileForm {
                 // Telnet logs in through the remote prompt; nothing to store.
                 p.username.clear();
                 p.save_password = false;
+                p.identity_file.clear();
                 None
             }
         };
@@ -257,6 +308,15 @@ mod tests {
         assert!(parse_url("ftp://host").is_err());
         assert!(parse_url("telnet://host:0").is_err());
         assert!(parse_url("telnet://:23").is_err());
+    }
+
+    #[test]
+    fn home_expansion() {
+        let home = directories::BaseDirs::new().unwrap().home_dir().to_owned();
+        assert_eq!(expand_home("~/.ssh/id_rsa"), home.join(".ssh").join("id_rsa"));
+        assert_eq!(expand_home("~"), home);
+        assert_eq!(expand_home(r"C:\keys.ppk"), PathBuf::from(r"C:\keys.ppk"));
+        assert_eq!(expand_home("~other/x"), PathBuf::from("~other/x"));
     }
 
     #[test]

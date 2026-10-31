@@ -23,6 +23,10 @@ pub struct SessionProfile {
     pub term_type: String,
     /// Whether the password for this profile is kept in the vault.
     pub save_password: bool,
+    /// Private key file (OpenSSH or PuTTY .ppk); empty for none. `~` expands to the home dir.
+    pub identity_file: String,
+    /// Offer keys from a running SSH agent (Pageant, Windows OpenSSH agent).
+    pub use_agent: bool,
 }
 
 impl Default for SessionProfile {
@@ -38,6 +42,8 @@ impl Default for SessionProfile {
             charset: Charset::Utf8,
             term_type: "xterm-256color".into(),
             save_password: false,
+            identity_file: String::new(),
+            use_agent: true,
         }
     }
 }
@@ -183,6 +189,7 @@ mod tests {
         let store = ProfileStore::load(&path).unwrap();
         let p = &store.profiles()[0];
         assert_eq!((p.id.as_str(), p.port, p.protocol), ("x", 22, Protocol::Ssh));
+        assert!(p.use_agent && p.identity_file.is_empty(), "files from older versions keep agent auth on");
     }
 
     #[test]

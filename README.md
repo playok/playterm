@@ -27,7 +27,18 @@ cargo build --release
 playterm                                  # 연결 대화상자
 playterm ssh://user@host:22               # 바로 접속
 playterm --cp949 telnet://192.168.0.1     # CP949(EUC-KR) 구형 장비
+playterm -i ~/.ssh/id_ed25519 ssh://user@host   # 키 파일 지정
 ```
+
+## SSH 인증 순서
+
+1. 세션에 지정한 키 파일 (OpenSSH 형식 / PuTTY `.ppk`, 암호가 걸려 있으면 passphrase 입력)
+2. SSH 에이전트 — `SSH_AUTH_SOCK` 이 named pipe 이면 그것, 아니면 Windows OpenSSH 에이전트(`\\.\pipe\openssh-ssh-agent`), 그다음 Pageant
+3. 기본 키 파일 `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa` (있을 때만)
+4. 저장된 비밀번호
+5. keyboard-interactive / 비밀번호 입력
+
+RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명합니다.
 
 ## 설정 파일
 
@@ -58,6 +69,7 @@ playterm --cp949 telnet://192.168.0.1     # CP949(EUC-KR) 구형 장비
 ```powershell
 cargo test --workspace                              # 단위 + SSH 루프백 통합 테스트
 cargo run -p playterm-net --example dev_sshd        # 127.0.0.1:2222 테스트 SSH 서버 (tester / secret)
+cargo run -p playterm-net --example dev_sshd -- --authorized-keys key.pub   # 공개키 인증 허용
 cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 ```
 
@@ -66,6 +78,6 @@ cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 1. ~~워크스페이스 뼈대~~
 2. ~~터미널 렌더링 + SSH/Telnet 접속~~
 3. ~~세션 관리자(저장, 마스터 비밀번호 볼트) · 탭 개선 · 텍스트 선택/복사~~
-4. SSH 키 인증 · Pageant / Windows OpenSSH 에이전트
+4. ~~SSH 키 인증 · Pageant / Windows OpenSSH 에이전트~~
 5. SFTP · 포트 포워딩
 6. 시리얼(COM) · 세션 로깅

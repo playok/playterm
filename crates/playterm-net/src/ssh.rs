@@ -3,18 +3,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
-use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse};
+use russh::client;
 use russh::keys::{HashAlg, PublicKeyOrCertificate, known_hosts};
-use russh::{ChannelMsg, Disconnect, MethodKind, MethodSet};
+use russh::{ChannelMsg, Disconnect};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-use crate::session::{ConnectParams, EventSink, PromptField, SessionCommand, SessionEvent};
+use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
+use crate::ssh_auth::authenticate;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_AUTH_ROUNDS: usize = 3;
 
-struct ClientHandler {
+pub(crate) struct ClientHandler {
     host: String,
     port: u16,
     known_hosts: PathBuf,
@@ -137,137 +137,4 @@ pub(crate) async fn run(
 
     let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
     Ok(())
-}
-
-async fn authenticate(
-    session: &mut client::Handle<ClientHandler>,
-    params: &ConnectParams,
-    sink: &EventSink,
-) -> anyhow::Result<()> {
-    let user = params.username.as_str();
-    if user.is_empty() {
-        bail!("SSH 사용자 이름이 필요합니다");
-    }
-
-    // First attempt: the stored password if we have one, otherwise "none" to learn which
-    // methods the server accepts.
-    let first = match &params.password {
-        Some(password) => session.authenticate_password(user, password).await?,
-        None => session.authenticate_none(user).await?,
-    };
-    let mut methods: Option<MethodSet> = match first {
-        AuthResult::Success => return Ok(()),
-        AuthResult::Failure { remaining_methods, .. } => Some(remaining_methods),
-    };
-    // A stored password may also answer a single keyboard-interactive password prompt
-    // (servers with `PasswordAuthentication no` but PAM keyboard-interactive).
-    let mut autofill = params.password.clone();
-
-    let target = format!("{user}@{}", params.host);
-    // Some servers advertise keyboard-interactive but reject it without asking anything;
-    // after that we fall back to plain password prompts.
-    let mut keyboard_interactive_usable = true;
-    let mut attempts = 0;
-    while attempts < MAX_AUTH_ROUNDS {
-        let allows = |kind: MethodKind| methods.as_ref().is_none_or(|m| m.contains(&kind));
-
-        let outcome = if keyboard_interactive_usable && allows(MethodKind::KeyboardInteractive) {
-            match keyboard_interactive(session, user, &target, &mut autofill, sink).await? {
-                Outcome::Unavailable(remaining) => {
-                    keyboard_interactive_usable = false;
-                    methods = Some(remaining);
-                    continue;
-                }
-                outcome => outcome,
-            }
-        } else if allows(MethodKind::Password) {
-            let Some(answers) = sink
-                .prompt(
-                    format!("{target} 비밀번호"),
-                    String::new(),
-                    vec![PromptField { label: "비밀번호".into(), echo: false }],
-                )
-                .await
-            else {
-                bail!("인증이 취소되었습니다");
-            };
-            let password = answers.into_iter().next().unwrap_or_default();
-            match session.authenticate_password(user, password).await? {
-                AuthResult::Success => Outcome::Success,
-                AuthResult::Failure { remaining_methods, .. } => Outcome::Failure(remaining_methods),
-            }
-        } else {
-            let names: Vec<&str> = methods.iter().flat_map(|m| m.iter()).map(<&str>::from).collect();
-            bail!(
-                "서버가 허용하는 인증 방식({})을 아직 지원하지 않습니다",
-                names.join(", ")
-            );
-        };
-
-        attempts += 1;
-        match outcome {
-            Outcome::Success => return Ok(()),
-            Outcome::Cancelled => bail!("인증이 취소되었습니다"),
-            Outcome::Unavailable(remaining) | Outcome::Failure(remaining) => {
-                sink.notice("인증 실패, 다시 시도하세요.");
-                methods = Some(remaining);
-            }
-        }
-    }
-    bail!("인증 실패: 시도 횟수를 초과했습니다")
-}
-
-enum Outcome {
-    Success,
-    Failure(MethodSet),
-    /// Rejected before any question was asked: the method is not really available.
-    Unavailable(MethodSet),
-    Cancelled,
-}
-
-async fn keyboard_interactive(
-    session: &mut client::Handle<ClientHandler>,
-    user: &str,
-    target: &str,
-    autofill: &mut Option<String>,
-    sink: &EventSink,
-) -> anyhow::Result<Outcome> {
-    let mut response = session
-        .authenticate_keyboard_interactive_start(user, None::<String>)
-        .await?;
-    let mut asked = false;
-    loop {
-        response = match response {
-            KeyboardInteractiveAuthResponse::Success => return Ok(Outcome::Success),
-            KeyboardInteractiveAuthResponse::Failure { remaining_methods, .. } => {
-                return Ok(if asked {
-                    Outcome::Failure(remaining_methods)
-                } else {
-                    Outcome::Unavailable(remaining_methods)
-                });
-            }
-            KeyboardInteractiveAuthResponse::InfoRequest { name, instructions, prompts } => {
-                asked |= !prompts.is_empty();
-                let answers = if prompts.is_empty() {
-                    Vec::new()
-                } else if let [only] = prompts.as_slice()
-                    && !only.echo
-                    && let Some(password) = autofill.take()
-                {
-                    vec![password]
-                } else {
-                    let title = if name.is_empty() { format!("{target} 인증") } else { name };
-                    let fields = prompts
-                        .into_iter()
-                        .map(|p| PromptField { label: p.prompt.trim().to_owned(), echo: p.echo })
-                        .collect();
-                    match sink.prompt(title, instructions, fields).await {
-                        Some(answers) => answers,
-                        None => return Ok(Outcome::Cancelled),
-                    }
-                };
-                session.authenticate_keyboard_interactive_respond(answers).await?
-            }
-        };
-    }
 }

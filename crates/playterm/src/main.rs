@@ -15,7 +15,7 @@ use eframe::egui;
 
 use playterm_config::SessionProfile;
 
-const USAGE: &str = "사용법: playterm [--cp949] [ssh://[user@]host[:port] | telnet://host[:port]]...";
+const USAGE: &str = "사용법: playterm [--cp949] [-i 키파일] [ssh://[user@]host[:port] | telnet://host[:port]]...";
 
 fn main() -> eframe::Result {
     env_logger::init();
@@ -52,15 +52,19 @@ fn main() -> eframe::Result {
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<SessionProfile>, String> {
+    let mut args = args;
     let mut charset = playterm_term::Charset::Utf8;
+    let mut identity_file = String::new();
     let mut requests = Vec::new();
-    for arg in args {
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cp949" | "--euc-kr" => charset = playterm_term::Charset::Cp949,
+            "-i" => identity_file = args.next().ok_or("-i 다음에 키 파일 경로가 필요합니다")?,
             "-h" | "--help" => return Err(String::new()),
             url => {
                 let mut profile = profile_form::parse_url(url)?;
                 profile.charset = charset;
+                profile.identity_file = identity_file.clone();
                 requests.push(profile);
             }
         }
