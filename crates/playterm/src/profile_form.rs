@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use playterm_config::SessionProfile;
-use playterm_net::Protocol;
+use playterm_net::{ForwardKind, ForwardRule, Protocol};
 use playterm_term::Charset;
 use zeroize::Zeroizing;
 
@@ -86,9 +86,51 @@ pub struct FormOptions<'a> {
     pub folders: &'a [String],
 }
 
+/// Editable text form of a [`ForwardRule`] (ports stay strings while typing).
+struct ForwardRow {
+    kind: ForwardKind,
+    bind_host: String,
+    bind_port: String,
+    dest_host: String,
+    dest_port: String,
+}
+
+impl ForwardRow {
+    fn from_rule(r: &ForwardRule) -> Self {
+        Self {
+            kind: r.kind,
+            bind_host: r.bind_host.clone(),
+            bind_port: r.bind_port.to_string(),
+            dest_host: r.dest_host.clone(),
+            dest_port: if r.kind == ForwardKind::Dynamic { String::new() } else { r.dest_port.to_string() },
+        }
+    }
+
+    fn to_rule(&self, n: usize) -> Result<ForwardRule, String> {
+        let port = |s: &str, what: &str| {
+            s.trim().parse::<u16>().ok().filter(|&p| p > 0).ok_or_else(|| format!("포워딩 {n}: {what} 포트가 잘못되었습니다"))
+        };
+        let mut rule = ForwardRule {
+            kind: self.kind,
+            bind_host: self.bind_host.trim().to_owned(),
+            bind_port: port(&self.bind_port, "수신")?,
+            ..Default::default()
+        };
+        if self.kind != ForwardKind::Dynamic {
+            rule.dest_host = self.dest_host.trim().to_owned();
+            if rule.dest_host.is_empty() {
+                return Err(format!("포워딩 {n}: 대상 호스트를 입력하세요"));
+            }
+            rule.dest_port = port(&self.dest_port, "대상")?;
+        }
+        Ok(rule)
+    }
+}
+
 pub struct ProfileForm {
     pub profile: SessionProfile,
     port: String,
+    forwards: Vec<ForwardRow>,
     password: Zeroizing<String>,
     /// The vault already holds a password for this profile.
     has_saved_password: bool,
@@ -100,6 +142,7 @@ impl ProfileForm {
     pub fn new(profile: SessionProfile, has_saved_password: bool) -> Self {
         Self {
             port: profile.port.to_string(),
+            forwards: profile.forwards.iter().map(ForwardRow::from_rule).collect(),
             profile,
             password: Zeroizing::default(),
             has_saved_password,
@@ -229,11 +272,68 @@ impl ProfileForm {
             ui.end_row();
         });
 
+        if self.profile.protocol == Protocol::Ssh {
+            ui.add_space(4.0);
+            self.forwards_ui(ui);
+        }
+
         if let Some(err) = &self.error {
             ui.add_space(6.0);
             ui.colored_label(ui.visuals().error_fg_color, err);
         }
         submit
+    }
+
+    fn forwards_ui(&mut self, ui: &mut egui::Ui) {
+        let title = format!("포트 포워딩 ({})", self.forwards.len());
+        egui::CollapsingHeader::new(title).id_salt("forwards").default_open(!self.forwards.is_empty()).show(ui, |ui| {
+            let mut remove = None;
+            egui::Grid::new("forward-rows").num_columns(5).spacing([6.0, 4.0]).show(ui, |ui| {
+                for (i, row) in self.forwards.iter_mut().enumerate() {
+                    egui::ComboBox::from_id_salt(("fwd-kind", i))
+                        .width(110.0)
+                        .selected_text(row.kind.to_string())
+                        .show_ui(ui, |ui| {
+                            for k in ForwardKind::ALL {
+                                ui.selectable_value(&mut row.kind, k, k.to_string());
+                            }
+                        });
+                    ui.horizontal(|ui| {
+                        let hint = if row.kind == ForwardKind::Remote { "(서버)" } else { "127.0.0.1" };
+                        ui.add(egui::TextEdit::singleline(&mut row.bind_host).hint_text(hint).desired_width(80.0));
+                        ui.label(":");
+                        ui.add(egui::TextEdit::singleline(&mut row.bind_port).hint_text("포트").desired_width(45.0));
+                    });
+                    if row.kind == ForwardKind::Dynamic {
+                        ui.label("SOCKS5");
+                        ui.label("");
+                    } else {
+                        ui.label("→");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut row.dest_host).hint_text("호스트").desired_width(90.0));
+                            ui.label(":");
+                            ui.add(egui::TextEdit::singleline(&mut row.dest_port).hint_text("포트").desired_width(45.0));
+                        });
+                    }
+                    if ui.small_button("✕").on_hover_text("삭제").clicked() {
+                        remove = Some(i);
+                    }
+                    ui.end_row();
+                }
+            });
+            if let Some(i) = remove {
+                self.forwards.remove(i);
+            }
+            if ui.button("+ 포워딩 추가").clicked() {
+                self.forwards.push(ForwardRow {
+                    kind: ForwardKind::Local,
+                    bind_host: String::new(),
+                    bind_port: String::new(),
+                    dest_host: "localhost".into(),
+                    dest_port: String::new(),
+                });
+            }
+        });
     }
 
     /// Checks the input. On success returns the profile and the typed password, if any.
@@ -272,6 +372,8 @@ impl ProfileForm {
                 if p.username.is_empty() {
                     return Err("SSH 사용자 이름을 입력하세요".into());
                 }
+                p.forwards =
+                    self.forwards.iter().enumerate().map(|(i, r)| r.to_rule(i + 1)).collect::<Result<_, _>>()?;
                 (!self.password.is_empty()).then(|| self.password.clone())
             }
             Protocol::Telnet => {
@@ -279,6 +381,7 @@ impl ProfileForm {
                 p.username.clear();
                 p.save_password = false;
                 p.identity_file.clear();
+                p.forwards.clear();
                 None
             }
         };
@@ -336,6 +439,25 @@ mod tests {
         assert!(pw.is_none() && !p.save_password && p.username.is_empty());
 
         form.port = "70000".into();
+        assert!(form.validate().is_none());
+    }
+
+    #[test]
+    fn forward_rows_validate() {
+        let rule = ForwardRule::parse(ForwardKind::Local, "8080:db:5432").unwrap();
+        let profile = SessionProfile {
+            host: "h".into(),
+            username: "u".into(),
+            forwards: vec![rule.clone(), ForwardRule::parse(ForwardKind::Dynamic, "1080").unwrap()],
+            ..Default::default()
+        };
+        let mut form = ProfileForm::new(profile, false);
+        assert_eq!(form.validate().unwrap().0.forwards[0], rule);
+
+        form.forwards[0].dest_port = "x".into();
+        assert!(form.validate().is_none());
+        form.forwards[0].dest_port = "5432".into();
+        form.forwards[0].dest_host = " ".into();
         assert!(form.validate().is_none());
     }
 }

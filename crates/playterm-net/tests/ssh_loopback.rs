@@ -1,11 +1,18 @@
 //! End-to-end SSH tests against an in-process russh server on 127.0.0.1.
 
+mod common;
+
+use std::collections::HashMap;
+use std::io::{Read as _, Write as _};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use playterm_net::{AuthPrompt, ConnectParams, NetRuntime, Protocol, SessionEvent, SessionHandle};
+use playterm_net::{
+    AuthPrompt, ConnectParams, ForwardKind, ForwardRule, NetRuntime, Protocol, SessionEvent, SessionHandle,
+    SftpConnection, SftpEvent, TransferState,
+};
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::{Algorithm, PrivateKey, PublicKey, known_hosts};
 use russh::server::{self, Auth, Msg, Server as _, Session, VerifiedPublicKey};
@@ -16,6 +23,12 @@ use tokio::net::TcpListener;
 struct TestServer {
     /// Public keys accepted for user `tester`.
     keys: Arc<Vec<PublicKey>>,
+    /// Directory served over SFTP.
+    sftp_root: PathBuf,
+    /// Session channels not yet claimed by a shell, so a subsystem request can take them.
+    channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
+    /// Channels running the echo "shell"; other channels (SFTP, forwards) carry raw streams.
+    shells: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
 }
 
 impl server::Server for TestServer {
@@ -45,12 +58,64 @@ impl server::Handler for TestServer {
 
     async fn channel_open_session(
         &mut self,
-        _channel: Channel<Msg>,
+        channel: Channel<Msg>,
         reply: server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.channels.lock().unwrap().insert(channel.id(), channel);
         reply.accept().await;
         Ok(())
+    }
+
+    async fn subsystem_request(&mut self, id: ChannelId, name: &str, session: &mut Session) -> Result<(), Self::Error> {
+        let channel = self.channels.lock().unwrap().remove(&id);
+        match channel {
+            Some(channel) if name == "sftp" => {
+                session.channel_success(id)?;
+                russh_sftp::server::run(channel.into_stream(), common::sftp_fs::FsHandler::new(&self.sftp_root)).await;
+            }
+            _ => session.channel_failure(id)?,
+        }
+        Ok(())
+    }
+
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host: &str,
+        port: u32,
+        _originator: &str,
+        _originator_port: u32,
+        reply: server::ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let Ok(mut tcp) = tokio::net::TcpStream::connect((host, port as u16)).await else {
+            reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+            return Ok(());
+        };
+        reply.accept().await;
+        tokio::spawn(async move {
+            let _ = tokio::io::copy_bidirectional(&mut tcp, &mut channel.into_stream()).await;
+        });
+        Ok(())
+    }
+
+    async fn tcpip_forward(&mut self, address: &str, port: &mut u32, session: &mut Session) -> Result<bool, Self::Error> {
+        let Ok(listener) = TcpListener::bind(("127.0.0.1", *port as u16)).await else { return Ok(false) };
+        let (handle, address, port) = (session.handle(), address.to_owned(), *port);
+        tokio::spawn(async move {
+            while let Ok((mut tcp, peer)) = listener.accept().await {
+                let channel = handle
+                    .channel_open_forwarded_tcpip(address.clone(), port, peer.ip().to_string(), peer.port().into())
+                    .await;
+                if let Ok(channel) = channel {
+                    tokio::spawn(async move {
+                        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut channel.into_stream()).await;
+                    });
+                }
+            }
+        });
+        Ok(true)
     }
 
     async fn pty_request(
@@ -68,10 +133,16 @@ impl server::Handler for TestServer {
     }
 
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
+        // The shell is driven through the handler callbacks; release the channel object.
+        self.channels.lock().unwrap().remove(&channel);
+        self.shells.lock().unwrap().insert(channel);
         session.data(channel, b"welcome\r\n".to_vec())
     }
 
     async fn data(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
+        if !self.shells.lock().unwrap().contains(&channel) {
+            return Ok(());
+        }
         session.data(channel, [b"echo:".as_slice(), data].concat())
     }
 
@@ -119,15 +190,20 @@ impl Fixture {
         });
         let listener = server_rt.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
         let port = listener.local_addr().unwrap().port();
-        let keys = Arc::new(client_keys.iter().map(|k| k.public_key().clone()).collect());
-        server_rt.spawn(async move {
-            let _ = TestServer { keys }.run_on_socket(config, &listener).await;
-        });
-
         let dir = std::env::temp_dir().join(format!("playterm-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("sftp")).unwrap();
         let known_hosts = dir.join("known_hosts");
+
+        let server = TestServer {
+            keys: Arc::new(client_keys.iter().map(|k| k.public_key().clone()).collect()),
+            sftp_root: dir.join("sftp"),
+            channels: Arc::default(),
+            shells: Arc::default(),
+        };
+        server_rt.spawn(async move {
+            let _ = { server }.run_on_socket(config, &listener).await;
+        });
 
         Self { server_rt, port, host_key, dir, known_hosts, net: NetRuntime::new().unwrap() }
     }
@@ -148,6 +224,7 @@ impl Fixture {
             default_identity_files: Vec::new(),
             use_agent: false,
             agent_pipe: None,
+            forwards: Vec::new(),
             term_type: "xterm-256color".into(),
             cols: 80,
             rows: 24,
@@ -392,4 +469,237 @@ fn agent_on_named_pipe_authenticates() {
 
     let h = fx.connect(ConnectParams { use_agent: true, agent_pipe: Some(pipe), ..fx.params() });
     expect_connected(&h);
+}
+
+// -------------------------------------------------------------------------------------------------
+// SFTP
+
+fn open_sftp(h: &SessionHandle) -> SftpConnection {
+    h.open_sftp();
+    loop {
+        match next_event(h) {
+            SessionEvent::Sftp(Ok(conn)) => return conn,
+            SessionEvent::Sftp(Err(e)) => panic!("sftp failed: {e}"),
+            SessionEvent::Data(_) | SessionEvent::Notice(_) => {}
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+}
+
+fn next_sftp(conn: &SftpConnection) -> SftpEvent {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(e) = conn.try_recv() {
+            return e;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for sftp event");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Waits until transfer `id` ends and returns its final state.
+fn transfer_result(conn: &SftpConnection, id: u64) -> TransferState {
+    loop {
+        if let SftpEvent::Transfer(u) = next_sftp(conn)
+            && u.id == id
+            && u.state != TransferState::Running
+        {
+            return u.state;
+        }
+    }
+}
+
+fn op_result(conn: &SftpConnection) -> Result<(), String> {
+    loop {
+        if let SftpEvent::OpDone { result, .. } = next_sftp(conn) {
+            return result;
+        }
+    }
+}
+
+fn listing(conn: &SftpConnection, path: &str) -> (String, Vec<(String, bool)>) {
+    conn.list(path);
+    loop {
+        if let SftpEvent::Listing { path, result } = next_sftp(conn) {
+            let entries = result.expect("listing").into_iter().map(|e| (e.name, e.is_dir)).collect();
+            return (path, entries);
+        }
+    }
+}
+
+#[test]
+fn sftp_browse_transfer_and_manage() {
+    let fx = Fixture::new("sftp", &[]);
+    fx.trust_host();
+    let root = fx.dir.join("sftp");
+    std::fs::write(root.join("hello.txt"), "안녕 sftp").unwrap();
+    std::fs::create_dir_all(root.join("docs").join("deep")).unwrap();
+    std::fs::write(root.join("docs").join("deep").join("a.txt"), "aaa").unwrap();
+
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+
+    let (path, entries) = listing(&sftp, ".");
+    assert_eq!(path, "/");
+    assert_eq!(entries, vec![("docs".to_owned(), true), ("hello.txt".to_owned(), false)], "dirs first");
+
+    // Download a file and a directory tree.
+    let local = fx.dir.join("local");
+    std::fs::create_dir_all(&local).unwrap();
+    let id = sftp.download("/hello.txt", &local.join("hello.txt"), false);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(local.join("hello.txt")).unwrap(), "안녕 sftp");
+
+    let id = sftp.download("/docs", &local.join("docs"), true);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(local.join("docs").join("deep").join("a.txt")).unwrap(), "aaa");
+
+    // Upload a multi-chunk file and a directory tree.
+    let big: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(local.join("big.bin"), &big).unwrap();
+    let id = sftp.upload(&local.join("big.bin"), "/big.bin");
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read(root.join("big.bin")).unwrap(), big);
+
+    let id = sftp.upload(&local.join("docs"), "/docs-copy");
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(root.join("docs-copy").join("deep").join("a.txt")).unwrap(), "aaa");
+
+    // Manage entries.
+    sftp.mkdir("/new");
+    op_result(&sftp).unwrap();
+    sftp.rename("/new", "/renamed");
+    op_result(&sftp).unwrap();
+    sftp.remove("/docs-copy", true);
+    op_result(&sftp).unwrap();
+    sftp.remove("/missing.txt", false);
+    assert!(op_result(&sftp).is_err());
+
+    let (_, entries) = listing(&sftp, "/");
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["docs", "renamed", "big.bin", "hello.txt"]);
+}
+
+#[test]
+fn sftp_cancel_removes_partial_upload() {
+    let fx = Fixture::new("sftp-cancel", &[]);
+    fx.trust_host();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+
+    let local = fx.dir.join("huge.bin");
+    std::fs::write(&local, vec![7u8; 64 * 1024 * 1024]).unwrap();
+    let id = sftp.upload(&local, "/huge.bin");
+    sftp.cancel(id);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Cancelled);
+    assert!(!fx.dir.join("sftp").join("huge.bin").exists(), "partial upload must be removed");
+}
+
+// -------------------------------------------------------------------------------------------------
+// Port forwarding
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// TCP echo server on the fixture's runtime; returns its port.
+fn echo_server(fx: &Fixture) -> u16 {
+    let listener = fx.server_rt.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    fx.server_rt.spawn(async move {
+        while let Ok((tcp, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let (mut r, mut w) = tcp.into_split();
+                let _ = tokio::io::copy(&mut r, &mut w).await;
+            });
+        }
+    });
+    port
+}
+
+fn assert_echo(mut tcp: std::net::TcpStream, message: &[u8]) {
+    tcp.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    tcp.write_all(message).unwrap();
+    let mut buf = vec![0u8; message.len()];
+    tcp.read_exact(&mut buf).unwrap();
+    assert_eq!(buf, message);
+}
+
+fn rule(kind: ForwardKind, bind_port: u16, dest_port: u16) -> ForwardRule {
+    ForwardRule { kind, bind_host: String::new(), bind_port, dest_host: "127.0.0.1".into(), dest_port }
+}
+
+#[test]
+fn local_remote_and_dynamic_forwarding() {
+    let fx = Fixture::new("forward", &[]);
+    fx.trust_host();
+    let echo = echo_server(&fx);
+    let (l_port, r_port, d_port) = (free_port(), free_port(), free_port());
+
+    let params = ConnectParams {
+        password: Some("secret".into()),
+        forwards: vec![
+            rule(ForwardKind::Local, l_port, echo),
+            rule(ForwardKind::Remote, r_port, echo),
+            rule(ForwardKind::Dynamic, d_port, 0),
+        ],
+        ..fx.params()
+    };
+    let h = fx.connect(params);
+    expect_connected(&h);
+
+    // -L: local port → server → echo.
+    assert_echo(std::net::TcpStream::connect(("127.0.0.1", l_port)).unwrap(), b"through local forward");
+
+    // -R: server port → client → echo.
+    assert_echo(std::net::TcpStream::connect(("127.0.0.1", r_port)).unwrap(), b"through remote forward");
+
+    // -D: SOCKS5 CONNECT to the echo server.
+    let mut socks = std::net::TcpStream::connect(("127.0.0.1", d_port)).unwrap();
+    socks.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    socks.write_all(&[5, 1, 0]).unwrap();
+    let mut greeting = [0u8; 2];
+    socks.read_exact(&mut greeting).unwrap();
+    assert_eq!(greeting, [5, 0]);
+    let mut request = vec![5, 1, 0, 1, 127, 0, 0, 1];
+    request.extend_from_slice(&echo.to_be_bytes());
+    socks.write_all(&request).unwrap();
+    let mut reply = [0u8; 10];
+    socks.read_exact(&mut reply).unwrap();
+    assert_eq!(reply[1], 0, "SOCKS5 CONNECT succeeded");
+    assert_echo(socks, b"through socks");
+
+    // Closing the session stops the local listeners.
+    h.close();
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(None)));
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(std::net::TcpStream::connect(("127.0.0.1", l_port)).is_err());
+}
+
+#[test]
+fn forward_to_unreachable_target_reports_notice() {
+    let fx = Fixture::new("forward-fail", &[]);
+    fx.trust_host();
+    let l_port = free_port();
+    let dead = free_port(); // nothing listens here
+    let h = fx.connect(ConnectParams {
+        password: Some("secret".into()),
+        forwards: vec![rule(ForwardKind::Local, l_port, dead)],
+        ..fx.params()
+    });
+    expect_connected(&h);
+
+    let mut tcp = std::net::TcpStream::connect(("127.0.0.1", l_port)).unwrap();
+    tcp.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut buf = [0u8; 1];
+    assert_eq!(tcp.read(&mut buf).unwrap_or(0), 0, "connection is closed");
+    loop {
+        if let SessionEvent::Notice(n) = next_event(&h)
+            && n.contains("포워딩 연결 실패")
+        {
+            break;
+        }
+    }
 }

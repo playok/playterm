@@ -24,6 +24,7 @@ const SC_NEXT_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key
 const SC_COPY: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::C);
 const SC_PASTE: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::V);
 const SC_SIDEBAR: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::B);
+const SC_SFTP: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::F);
 
 /// What to do once the vault dialog succeeds (or is cancelled).
 enum Pending {
@@ -130,6 +131,7 @@ impl PlaytermApp {
             default_identity_files,
             use_agent: profile.use_agent,
             agent_pipe: None,
+            forwards: profile.forwards.clone(),
             term_type: profile.term_type.clone(),
             cols: 80,
             rows: 24,
@@ -375,6 +377,11 @@ impl PlaytermApp {
         if pressed(&SC_SIDEBAR) {
             self.show_sidebar = !self.show_sidebar;
         }
+        if pressed(&SC_SFTP)
+            && let Some(s) = self.sessions.get_mut(self.active)
+        {
+            s.open_sftp();
+        }
         // Ctrl+Shift+Tab must be consumed before Ctrl+Tab, whose pattern also matches it.
         let n = self.sessions.len();
         if pressed(&SC_PREV_TAB) && n > 0 {
@@ -411,6 +418,7 @@ impl PlaytermApp {
             CloseOthers(usize),
             Duplicate(usize),
             Reconnect(usize),
+            Sftp(usize),
         }
         let mut action = None;
         ui.horizontal_wrapped(|ui| {
@@ -434,6 +442,10 @@ impl PlaytermApp {
                     action = Some(TabAction::Close(i));
                 }
                 tab.context_menu(|ui| {
+                    if ui.add_enabled(s.can_sftp(), egui::Button::new("SFTP 파일 브라우저")).clicked() {
+                        action = Some(TabAction::Sftp(i));
+                        ui.close();
+                    }
                     let entries = [
                         ("복제", TabAction::Duplicate(i)),
                         ("다시 연결", TabAction::Reconnect(i)),
@@ -451,6 +463,11 @@ impl PlaytermApp {
                     action = Some(TabAction::Close(i));
                 }
                 ui.add_space(6.0);
+            }
+            if self.sessions.get(self.active).is_some_and(|s| s.can_sftp())
+                && ui.button("SFTP").on_hover_text("파일 브라우저 (Ctrl+Shift+F)").clicked()
+            {
+                action = Some(TabAction::Sftp(self.active));
             }
             if self.sessions.get(self.active).is_some_and(|s| s.state == SessionState::Closed) {
                 ui.separator();
@@ -483,6 +500,7 @@ impl PlaytermApp {
                 let spec = self.sessions[i].spec();
                 self.open_spec(spec);
             }
+            Some(TabAction::Sftp(i)) => self.sessions[i].open_sftp(),
             Some(TabAction::Reconnect(i)) => {
                 let waker = self.waker.clone();
                 self.sessions[i].reconnect(&self.net, waker);
@@ -500,6 +518,19 @@ impl PlaytermApp {
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
+        }
+    }
+
+    /// Files dropped on the window are uploaded into the active session's SFTP directory.
+    fn dropped_files(&mut self, ctx: &egui::Context) {
+        let paths: Vec<PathBuf> =
+            ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_owned()).filter(|p| p.exists()).collect());
+        if paths.is_empty() {
+            return;
+        }
+        match self.sessions.get_mut(self.active).and_then(|s| s.sftp.as_mut()).filter(|b| b.open) {
+            Some(browser) => browser.upload_paths(paths),
+            None => self.status = Some("파일을 올리려면 먼저 SFTP 창을 여세요 (Ctrl+Shift+F)".into()),
         }
     }
 
@@ -543,6 +574,7 @@ impl eframe::App for PlaytermApp {
                 ctx.copy_text(text);
             }
         }
+        self.dropped_files(&ctx);
 
         let prompt_open = self.show_session_prompts(&ctx);
         if !prompt_open {
@@ -564,6 +596,20 @@ impl eframe::App for PlaytermApp {
                 .inner;
             if let Some(action) = action {
                 self.sidebar_action(action);
+            }
+        }
+
+        for session in &mut self.sessions {
+            let title = session.tab_title();
+            if let Some(browser) = &mut session.sftp {
+                browser.poll();
+                if browser.open {
+                    browser.show(&ctx, session.id, &title);
+                }
+                if browser.has_running_transfers() {
+                    // Progress arrives at most every 100 ms; keep the bars moving.
+                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                }
             }
         }
 

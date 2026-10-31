@@ -1,7 +1,9 @@
 //! One open tab: a terminal screen bound to a network session.
 
-use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, SessionEvent, SessionHandle, Waker};
+use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
 use playterm_term::{Charset, Point, Terminal, TerminalEvent};
+
+use crate::sftp_view::SftpBrowser;
 
 const SCROLLBACK_LINES: usize = 10_000;
 
@@ -55,6 +57,9 @@ pub struct Session {
     /// Clipboard text the remote side asked us to store (OSC 52).
     pub clipboard_store: Option<String>,
     pub click: ClickState,
+    pub sftp: Option<SftpBrowser>,
+    /// An SFTP channel was requested and has not answered yet.
+    sftp_pending: bool,
     handle: SessionHandle,
 }
 
@@ -81,6 +86,8 @@ impl Session {
             scroll_accum: 0.0,
             clipboard_store: None,
             click: ClickState::default(),
+            sftp: None,
+            sftp_pending: false,
             handle,
         }
     }
@@ -129,10 +136,19 @@ impl Session {
                     let answers = vec![String::new(); prompt.fields.len()];
                     self.auth = Some(PendingAuth { prompt, answers, focus_requested: false });
                 }
+                SessionEvent::Sftp(result) => {
+                    self.sftp_pending = false;
+                    match result {
+                        Ok(conn) => self.sftp = Some(SftpBrowser::new(conn)),
+                        Err(e) => self.notice(&format!("SFTP 열기 실패: {e}"), "31"),
+                    }
+                }
                 SessionEvent::Closed(reason) => {
                     self.state = SessionState::Closed;
                     self.host_key = None;
                     self.auth = None;
+                    self.sftp = None;
+                    self.sftp_pending = false;
                     match reason {
                         Some(reason) => self.notice(&format!("연결 종료: {reason}"), "31"),
                         None => self.notice("연결이 종료되었습니다", "90"),
@@ -175,6 +191,20 @@ impl Session {
     pub fn resize(&mut self, cols: usize, rows: usize) {
         if self.terminal.resize(cols, rows) {
             self.handle.resize(cols as u16, rows as u16);
+        }
+    }
+
+    pub fn can_sftp(&self) -> bool {
+        self.params.protocol == Protocol::Ssh && self.state == SessionState::Connected
+    }
+
+    /// Shows the SFTP browser, opening the SFTP channel on first use.
+    pub fn open_sftp(&mut self) {
+        if let Some(browser) = &mut self.sftp {
+            browser.open = true;
+        } else if self.can_sftp() && !self.sftp_pending {
+            self.sftp_pending = true;
+            self.handle.open_sftp();
         }
     }
 

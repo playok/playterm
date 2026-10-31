@@ -4,7 +4,9 @@
 //! [`SessionHandle`]: commands go in over a tokio channel, events come back over a std channel
 //! (so the UI thread can poll without async), and a waker callback tells the UI to repaint.
 
+mod forward;
 mod session;
+mod sftp;
 mod ssh;
 mod ssh_auth;
 mod telnet;
@@ -15,6 +17,8 @@ pub use session::{
     AuthPrompt, ConnectParams, HostKeyCheck, PromptField, Protocol, SessionEvent, SessionHandle,
     Waker,
 };
+pub use forward::{ForwardKind, ForwardRule};
+pub use sftp::{RemoteEntry, SftpConnection, SftpEvent, TransferState, TransferUpdate, remote_join, remote_parent};
 pub use telnet::TelnetCodec;
 
 pub struct NetRuntime {

@@ -8,8 +8,11 @@ use russh::keys::{HashAlg, PublicKeyOrCertificate, known_hosts};
 use russh::{ChannelMsg, Disconnect};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 
+use crate::forward::{self, ForwardKind, ForwardRule};
 use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
+use crate::sftp::SftpConnection;
 use crate::ssh_auth::authenticate;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -19,6 +22,8 @@ pub(crate) struct ClientHandler {
     port: u16,
     known_hosts: PathBuf,
     sink: EventSink,
+    /// Remote (-R) rules, to route channels the server opens back to us.
+    remote_forwards: Vec<ForwardRule>,
 }
 
 impl client::Handler for ClientHandler {
@@ -65,6 +70,33 @@ impl client::Handler for ClientHandler {
         self.sink.notice(banner.to_owned());
         Ok(())
     }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        // Servers report the bound address in different spellings (``, `localhost`,
+        // `127.0.0.1`), so rules are matched by port; two -R rules cannot share one anyway.
+        let Some(rule) = self.remote_forwards.iter().find(|r| u32::from(r.bind_port) == connected_port).cloned()
+        else {
+            reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
+            return Ok(());
+        };
+        reply.accept().await;
+        let sink = self.sink.clone();
+        tokio::spawn(async move {
+            if let Err(e) = forward::handle_remote(channel, rule.clone()).await {
+                sink.notice(format!("포워딩 연결 실패 ({rule}): {e:#}"));
+            }
+        });
+        Ok(())
+    }
 }
 
 pub(crate) async fn run(
@@ -92,10 +124,15 @@ pub(crate) async fn run(
         port: params.port,
         known_hosts: params.known_hosts.clone(),
         sink: sink.clone(),
+        remote_forwards: params.forwards.iter().filter(|r| r.kind == ForwardKind::Remote).cloned().collect(),
     };
     let mut session = client::connect_stream(config, stream, handler).await?;
 
     authenticate(&mut session, &params, &sink).await?;
+    // Shared with forwarding listeners and SFTP, which open their own channels.
+    let session = Arc::new(session);
+    let mut tasks = JoinSet::new();
+    forward::start(&session, &params.forwards, &sink, &mut tasks).await;
 
     let channel = session.channel_open_session().await?;
     channel
@@ -130,11 +167,28 @@ pub(crate) async fn run(
                 Some(SessionCommand::Resize { cols, rows }) => {
                     writer.window_change(cols.into(), rows.into(), 0, 0).await?;
                 }
+                Some(SessionCommand::OpenSftp) => {
+                    let (session, sink) = (session.clone(), sink.clone());
+                    tasks.spawn(async move {
+                        let result = open_sftp(&session, &sink).await.map_err(|e| format!("{e:#}"));
+                        sink.send(SessionEvent::Sftp(result));
+                    });
+                }
                 Some(SessionCommand::Close) | None => break,
             },
         }
     }
 
+    tasks.abort_all();
     let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
     Ok(())
+}
+
+async fn open_sftp(session: &client::Handle<ClientHandler>, sink: &EventSink) -> anyhow::Result<SftpConnection> {
+    let channel = session.channel_open_session().await?;
+    channel.request_subsystem(true, "sftp").await?;
+    let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
+        .await
+        .context("서버가 SFTP를 지원하지 않습니다")?;
+    Ok(SftpConnection::new(sftp, sink.waker()))
 }

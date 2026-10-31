@@ -4,6 +4,9 @@ use std::sync::{Arc, mpsc as std_mpsc};
 
 use tokio::sync::{mpsc, oneshot};
 
+use crate::forward::ForwardRule;
+use crate::sftp::SftpConnection;
+
 /// Called from network threads whenever a new event is queued, so the UI can wake up.
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
@@ -52,6 +55,8 @@ pub struct ConnectParams {
     /// Agent named pipe to use instead of `SSH_AUTH_SOCK` / the OpenSSH service pipe.
     /// When set, Pageant is not consulted.
     pub agent_pipe: Option<String>,
+    /// Port forwardings started once the SSH session is authenticated.
+    pub forwards: Vec<ForwardRule>,
     /// Value for the `TERM` variable / Telnet terminal type.
     pub term_type: String,
     pub cols: u16,
@@ -70,6 +75,7 @@ impl fmt::Debug for ConnectParams {
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("identity_file", &self.identity_file)
             .field("use_agent", &self.use_agent)
+            .field("forwards", &self.forwards)
             .field("term_type", &self.term_type)
             .finish_non_exhaustive()
     }
@@ -88,6 +94,8 @@ pub enum SessionEvent {
     HostKeyCheck(HostKeyCheck),
     /// The server is asking for credentials.
     AuthPrompt(AuthPrompt),
+    /// Answer to [`SessionHandle::open_sftp`].
+    Sftp(Result<SftpConnection, String>),
     /// Session ended. `Some` carries an error description.
     Closed(Option<String>),
 }
@@ -134,6 +142,7 @@ impl AuthPrompt {
 pub(crate) enum SessionCommand {
     Input(Vec<u8>),
     Resize { cols: u16, rows: u16 },
+    OpenSftp,
     Close,
 }
 
@@ -164,6 +173,11 @@ impl SessionHandle {
         let _ = self.commands.send(SessionCommand::Close);
     }
 
+    /// Opens an SFTP channel on this SSH connection; answered with [`SessionEvent::Sftp`].
+    pub fn open_sftp(&self) {
+        let _ = self.commands.send(SessionCommand::OpenSftp);
+    }
+
     pub fn try_recv(&self) -> Option<SessionEvent> {
         self.events.try_recv().ok()
     }
@@ -179,6 +193,10 @@ impl EventSink {
     pub fn send(&self, event: SessionEvent) {
         let _ = self.tx.send(event);
         (self.waker)();
+    }
+
+    pub fn waker(&self) -> Waker {
+        self.waker.clone()
     }
 
     pub fn notice(&self, text: impl Into<String>) {

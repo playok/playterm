@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use playterm_net::Protocol;
+use playterm_net::{ForwardRule, Protocol};
 use playterm_term::Charset;
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,9 @@ pub struct SessionProfile {
     pub identity_file: String,
     /// Offer keys from a running SSH agent (Pageant, Windows OpenSSH agent).
     pub use_agent: bool,
+    /// Port forwardings started with the session.
+    #[serde(rename = "forward")]
+    pub forwards: Vec<ForwardRule>,
 }
 
 impl Default for SessionProfile {
@@ -44,6 +47,7 @@ impl Default for SessionProfile {
             save_password: false,
             identity_file: String::new(),
             use_agent: true,
+            forwards: Vec::new(),
         }
     }
 }
@@ -161,7 +165,12 @@ mod tests {
             charset: Charset::Cp949,
             ..Default::default()
         };
-        let b = SessionProfile { host: "web01".into(), username: "deploy".into(), ..Default::default() };
+        let b = SessionProfile {
+            host: "web01".into(),
+            username: "deploy".into(),
+            forwards: vec![ForwardRule::parse(playterm_net::ForwardKind::Local, "8080:db:5432").unwrap()],
+            ..Default::default()
+        };
         store.upsert(a.clone()).unwrap();
         store.upsert(b.clone()).unwrap();
 

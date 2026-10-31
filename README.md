@@ -28,7 +28,17 @@ playterm                                  # 연결 대화상자
 playterm ssh://user@host:22               # 바로 접속
 playterm --cp949 telnet://192.168.0.1     # CP949(EUC-KR) 구형 장비
 playterm -i ~/.ssh/id_ed25519 ssh://user@host   # 키 파일 지정
+playterm -L 8080:db:5432 -D 1080 ssh://user@host   # 포트 포워딩 (OpenSSH 와 같은 형식, -R 도 지원)
 ```
+
+## SFTP · 포트 포워딩
+
+- SSH 탭에서 **Ctrl+Shift+F** (또는 탭 바의 [SFTP] / 탭 우클릭 메뉴) → 파일 브라우저.
+  폴더 이동, 업로드(파일/폴더, 창에 끌어다 놓기), 다운로드(폴더는 통째로), 새 폴더, 이름 바꾸기, 삭제, 전송 진행률/취소.
+- 포트 포워딩은 세션 편집 창의 "포트 포워딩" 에서 설정하며, 접속하면 자동으로 시작됩니다.
+  - 로컬 (L): 이 PC 의 포트 → 서버에서 대상으로 연결
+  - 원격 (R): 서버의 포트 → 이 PC 에서 대상으로 연결
+  - 동적 (D): 이 PC 에 SOCKS5 프록시
 
 ## SSH 인증 순서
 
@@ -59,6 +69,7 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 | Ctrl+Shift+D | 탭 복제 |
 | Ctrl+Tab / Ctrl+Shift+Tab | 다음 / 이전 탭 |
 | Ctrl+Shift+B | 세션 목록 표시/숨김 |
+| Ctrl+Shift+F | SFTP 파일 브라우저 |
 | 드래그 / 더블클릭 / 트리플클릭 | 문자 / 단어 / 줄 선택 (Shift+클릭으로 확장) |
 | Ctrl+C | 선택 영역이 있으면 복사, 없으면 ^C 전송 |
 | Ctrl+Shift+C / Ctrl+Shift+V | 복사 / 붙여넣기 |
@@ -69,7 +80,7 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 ```powershell
 cargo test --workspace                              # 단위 + SSH 루프백 통합 테스트
 cargo run -p playterm-net --example dev_sshd        # 127.0.0.1:2222 테스트 SSH 서버 (tester / secret)
-cargo run -p playterm-net --example dev_sshd -- --authorized-keys key.pub   # 공개키 인증 허용
+cargo run -p playterm-net --example dev_sshd -- --authorized-keys key.pub --sftp-root C:\temp   # 공개키 인증 / SFTP 루트
 cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 ```
 
@@ -79,5 +90,5 @@ cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 2. ~~터미널 렌더링 + SSH/Telnet 접속~~
 3. ~~세션 관리자(저장, 마스터 비밀번호 볼트) · 탭 개선 · 텍스트 선택/복사~~
 4. ~~SSH 키 인증 · Pageant / Windows OpenSSH 에이전트~~
-5. SFTP · 포트 포워딩
+5. ~~SFTP · 포트 포워딩~~
 6. 시리얼(COM) · 세션 로깅

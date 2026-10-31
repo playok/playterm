@@ -45,7 +45,10 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) {
     if response.clicked() || (autofocus && ui.memory(|m| m.focused().is_none())) {
         response.request_focus();
     }
-    let focused = response.has_focus();
+    // A modal above the terminal (confirmations, SFTP prompts) must not leak keys into the
+    // shell even though the terminal may still hold keyboard focus underneath it.
+    let behind_modal = !ui.memory(|m| m.allows_interaction(ui.layer_id()));
+    let focused = response.has_focus() && !behind_modal;
     if focused {
         // Keep Tab/arrows/Escape for the terminal instead of egui focus navigation.
         ui.memory_mut(|m| {

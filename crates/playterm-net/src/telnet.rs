@@ -285,6 +285,9 @@ pub(crate) async fn run(
                         writer.write_all(&naws).await?;
                     }
                 }
+                Some(SessionCommand::OpenSftp) => {
+                    sink.send(SessionEvent::Sftp(Err("Telnet 세션에서는 SFTP를 쓸 수 없습니다".into())));
+                }
                 Some(SessionCommand::Close) | None => {
                     let _ = writer.shutdown().await;
                     return Ok(());
