@@ -22,6 +22,7 @@ use crate::session::{Session, SessionSpec, SessionState, TermSetup};
 use crate::settings_dialog::{SettingsDialog, SettingsResult};
 use crate::sidebar::{self, Sidebar, SidebarAction, VaultState};
 use crate::site_manager::{SiteManager, SiteManagerResult};
+use crate::view::UserInput;
 use crate::{clipboard, fonts, status_bar, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
@@ -33,6 +34,7 @@ const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
     (KeyboardShortcut::new(CTRL_SHIFT, Key::S), Shortcut::SiteManager),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::B), Shortcut::Sidebar),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::F), Shortcut::Find),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::I), Shortcut::Broadcast),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::E), Shortcut::Sftp),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::Tab), Shortcut::PrevTab),
     (KeyboardShortcut::new(Modifiers::CTRL, Key::Tab), Shortcut::NextTab),
@@ -54,6 +56,7 @@ enum Shortcut {
     SiteManager,
     Sidebar,
     Find,
+    Broadcast,
     Sftp,
     PrevTab,
     NextTab,
@@ -89,6 +92,9 @@ enum Modal {
 
 /// Font size changes from zooming are saved once they have settled for this long.
 const SETTINGS_SAVE_DELAY: Duration = Duration::from_secs(1);
+
+/// Simultaneous input: the banner and the receiving tabs.
+const BROADCAST_COLOR: Color32 = Color32::from_rgb(230, 140, 30);
 
 /// Whether the vault holds a password for `p` (while locked, the profile flag is the best guess).
 fn has_secret(vault: &Vault, p: &SessionProfile) -> bool {
@@ -127,6 +133,8 @@ pub struct PlaytermApp {
     settings_unsaved: Option<Instant>,
     /// Ctrl+wheel / pinch steps not yet turned into a whole font size step.
     zoom_accum: f32,
+    /// Simultaneous input: typing in the active tab also goes to the other included tabs.
+    broadcast: bool,
 }
 
 impl PlaytermApp {
@@ -179,6 +187,7 @@ impl PlaytermApp {
             settings_path,
             settings_unsaved: None,
             zoom_accum: 0.0,
+            broadcast: false,
         };
         for profile in initial {
             app.open_session(&profile, None, None);
@@ -579,6 +588,31 @@ impl PlaytermApp {
         out
     }
 
+    // -- simultaneous input ---------------------------------------------------------------------
+
+    /// The connected tabs, other than the active one, that receive simultaneous input.
+    fn broadcast_targets(&self) -> Vec<usize> {
+        if !self.broadcast {
+            return Vec::new();
+        }
+        (0..self.sessions.len())
+            .filter(|&i| i != self.active)
+            .filter(|&i| self.sessions[i].in_broadcast && self.sessions[i].state == SessionState::Connected)
+            .collect()
+    }
+
+    /// Repeats input typed in the active tab in the other receiving tabs.
+    fn broadcast_input(&mut self, inputs: &[UserInput]) {
+        if inputs.is_empty() {
+            return;
+        }
+        for i in self.broadcast_targets() {
+            for input in inputs {
+                input.send_to(&mut self.sessions[i]);
+            }
+        }
+    }
+
     // -- settings -------------------------------------------------------------------------------
 
     fn term_setup(&self) -> TermSetup {
@@ -669,6 +703,7 @@ impl PlaytermApp {
                     && let Some(text) = clipboard::read_text()
                 {
                     view::paste(s, &text);
+                    self.broadcast_input(&[UserInput::Paste(text)]);
                 }
             }
             Command::SelectAll => {
@@ -769,6 +804,12 @@ impl PlaytermApp {
                 self.active = 0;
             }
             Command::CloseOthers(_) => {}
+            Command::ToggleBroadcast => self.broadcast = !self.broadcast,
+            Command::ToggleInBroadcast(i) => {
+                if let Some(s) = self.sessions.get_mut(i) {
+                    s.in_broadcast = !s.in_broadcast;
+                }
+            }
             Command::CloseAll => {
                 for mut s in self.sessions.drain(..) {
                     s.close();
@@ -928,6 +969,7 @@ impl PlaytermApp {
                 Shortcut::SiteManager => Command::SiteManager,
                 Shortcut::Sidebar => Command::ToggleSidebar,
                 Shortcut::Find => Command::Find,
+                Shortcut::Broadcast => Command::ToggleBroadcast,
                 Shortcut::Sftp => Command::Sftp(i),
                 Shortcut::PrevTab => Command::PrevTab,
                 Shortcut::NextTab => Command::NextTab,
@@ -952,6 +994,7 @@ impl PlaytermApp {
             show_status_bar: self.settings.status_bar,
             vault: self.vault_state(),
             always_on_top: self.always_on_top,
+            broadcast: self.broadcast,
         };
         if let Some(command) = menu::menu_bar(ui, &state) {
             let ctx = ui.ctx().clone();
@@ -967,7 +1010,24 @@ impl PlaytermApp {
             if ui.button(t("+ 빠른 연결", "+ Quick Connect")).on_hover_text("Ctrl+Shift+T").clicked() {
                 action = Some(Command::QuickConnect);
             }
+            if self.broadcast {
+                ui.separator();
+                let others = self.broadcast_targets().len();
+                ui.label(
+                    RichText::new(tr!("동시 입력 켜짐 · 다른 탭 {others}개", "Typing into all tabs · {others} other"))
+                        .strong()
+                        .color(BROADCAST_COLOR),
+                )
+                .on_hover_text(t(
+                    "이 탭에 치는 내용이 주황색 탭에도 똑같이 입력됩니다. 탭 우클릭으로 뺄 수 있습니다.",
+                    "What you type here also goes to the orange tabs. Right-click a tab to leave it out.",
+                ));
+                if ui.button(t("끄기", "Turn off")).on_hover_text("Ctrl+Shift+I").clicked() {
+                    action = Some(Command::ToggleBroadcast);
+                }
+            }
             ui.separator();
+            let receiving = |s: &Session| self.broadcast && s.in_broadcast && s.state == SessionState::Connected;
             for (i, s) in self.sessions.iter().enumerate() {
                 let dot = match s.state {
                     SessionState::Local => Color32::from_rgb(140, 140, 140),
@@ -980,7 +1040,9 @@ impl PlaytermApp {
                     ui.label(RichText::new("REC").small().color(Color32::from_rgb(220, 60, 60)))
                         .on_hover_text(s.terminal.log().map(|l| l.path().display().to_string()).unwrap_or_default());
                 }
-                let tab = ui.selectable_label(i == self.active, s.tab_title());
+                let title = RichText::new(s.tab_title());
+                let title = if receiving(s) { title.color(BROADCAST_COLOR) } else { title };
+                let tab = ui.selectable_label(i == self.active, title);
                 if tab.clicked() {
                     self.active = i;
                 }
@@ -989,6 +1051,12 @@ impl PlaytermApp {
                 }
                 tab.context_menu(|ui| {
                     menu::session_items(ui, &mut action, i, s);
+                    ui.separator();
+                    let mark = if s.in_broadcast { "✔" } else { "  " };
+                    if ui.button(format!("{mark} {}", t("동시 입력에 포함", "Include in simultaneous input"))).clicked() {
+                        action = Some(Command::ToggleInBroadcast(i));
+                        ui.close();
+                    }
                     ui.separator();
                     let entries = [
                         (t("복제", "Duplicate"), Command::Duplicate(i)),
@@ -1219,8 +1287,11 @@ impl eframe::App for PlaytermApp {
         let output = egui::CentralPanel::no_frame()
             .show(ui, |ui| self.sessions.get_mut(self.active).map(|s| view::show(ui, s, !modal_open, &style)))
             .inner;
-        if let Some(steps) = output.map(|o| o.zoom_steps).filter(|s| *s != 0.0) {
-            self.zoom(steps);
+        if let Some(output) = output {
+            if output.zoom_steps != 0.0 {
+                self.zoom(output.zoom_steps);
+            }
+            self.broadcast_input(&output.inputs);
         }
         if let Some(changed) = self.settings_unsaved {
             if changed.elapsed() >= SETTINGS_SAVE_DELAY {

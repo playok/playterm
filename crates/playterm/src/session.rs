@@ -97,6 +97,8 @@ pub struct Session {
     pub sftp: Option<SftpBrowser>,
     /// The find bar, while open.
     pub search: Option<SearchBar>,
+    /// Receives what is typed in another tab while simultaneous input is on.
+    pub in_broadcast: bool,
     /// An SFTP channel was requested and has not answered yet.
     sftp_pending: bool,
     /// Auto-log settings of the profile, kept so duplicates log to their own file.
@@ -156,6 +158,7 @@ impl Session {
             mouse: MouseReport::default(),
             sftp: None,
             search: None,
+            in_broadcast: true,
             sftp_pending: false,
             log_plan: None,
             login_script: None,

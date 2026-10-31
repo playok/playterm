@@ -49,6 +49,10 @@ pub enum Command {
     Close(usize),
     CloseOthers(usize),
     CloseAll,
+    /// Simultaneous input: what is typed in the active tab also goes to the other tabs.
+    ToggleBroadcast,
+    /// Whether this tab receives simultaneous input.
+    ToggleInBroadcast(usize),
 
     Minimize,
     ToggleMaximize,
@@ -66,6 +70,7 @@ pub struct MenuState<'a> {
     pub show_status_bar: bool,
     pub vault: VaultState,
     pub always_on_top: bool,
+    pub broadcast: bool,
 }
 
 /// Adds a menu item; a click records `command` and closes the menu.
@@ -181,6 +186,15 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("탭 닫기", "Close tab"), "Ctrl+Shift+W", active.is_some(), Command::Close(i));
             item(ui, out, t("다른 탭 모두 닫기", "Close other tabs"), "", n > 1, Command::CloseOthers(i));
             item(ui, out, t("모든 탭 닫기", "Close all tabs"), "", n > 0, Command::CloseAll);
+            ui.separator();
+            check(
+                ui,
+                out,
+                t("모든 탭에 동시 입력", "Type into all tabs"),
+                "Ctrl+Shift+I",
+                st.broadcast,
+                Command::ToggleBroadcast,
+            );
             if n > 0 {
                 ui.separator();
                 for (k, s) in st.sessions.iter().enumerate() {

@@ -25,6 +25,36 @@ pub struct ViewStyle {
 pub struct ViewOutput {
     /// Ctrl+wheel notches or a touchpad pinch, in font size steps (positive = larger).
     pub zoom_steps: f32,
+    /// What was typed in this tab, for simultaneous input to other tabs.
+    pub inputs: Vec<UserInput>,
+}
+
+/// Keyboard input as typed (before encoding), so it can be repeated in another tab with that
+/// tab's own key modes and charset.
+#[derive(Clone, Debug)]
+pub enum UserInput {
+    Text(String),
+    Key { key: egui::Key, modifiers: egui::Modifiers },
+    /// Control bytes that are the same everywhere (Ctrl+C, Ctrl+X).
+    Bytes(Vec<u8>),
+    Paste(String),
+}
+
+impl UserInput {
+    /// Types this into `session`.
+    pub fn send_to(&self, session: &mut Session) {
+        match self {
+            UserInput::Text(text) => session.send_text(text),
+            UserInput::Key { key, modifiers } => {
+                let app_cursor = session.terminal.term().mode().contains(TermMode::APP_CURSOR);
+                if let Some(bytes) = key_bytes(*key, *modifiers, app_cursor) {
+                    session.send_bytes(bytes);
+                }
+            }
+            UserInput::Bytes(bytes) => session.send_bytes(bytes.clone()),
+            UserInput::Paste(text) => paste(session, text),
+        }
+    }
 }
 /// Max time between presses that still counts as a double/triple click, in seconds.
 const MULTI_CLICK_SECS: f64 = 0.4;
@@ -87,7 +117,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     session.mouse.last_focus = has_focus;
 
     if focused {
-        handle_keyboard(ui, session);
+        handle_keyboard(ui, session, &mut output.inputs);
     }
 
     // Mouse goes to the application when it asked for it (vim `mouse=a`, htop, mc, tmux),
@@ -143,7 +173,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     output
 }
 
-fn handle_keyboard(ui: &egui::Ui, session: &mut Session) {
+fn handle_keyboard(ui: &egui::Ui, session: &mut Session, inputs: &mut Vec<UserInput>) {
     let events = ui.input(|i| i.events.clone());
     let mode = *session.terminal.term().mode();
     let app_cursor = mode.contains(TermMode::APP_CURSOR);
@@ -155,12 +185,14 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session) {
             Event::Text(text) => {
                 if !std::mem::take(&mut skip_text) {
                     session.send_text(&text);
+                    inputs.push(UserInput::Text(text));
                 }
             }
             Event::Key { key, pressed: true, modifiers, .. } => {
                 if let Some(bytes) = key_bytes(key, modifiers, app_cursor) {
                     skip_text = modifiers.alt && !modifiers.ctrl;
                     session.send_bytes(bytes);
+                    inputs.push(UserInput::Key { key, modifiers });
                 }
             }
             // egui turns Ctrl+C / Ctrl+X into clipboard events. Like Windows Terminal, Ctrl+C
@@ -168,14 +200,22 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session) {
             Event::Copy => {
                 if !copy_selection(ui.ctx(), session) {
                     session.send_bytes(vec![0x03]);
+                    inputs.push(UserInput::Bytes(vec![0x03]));
                 }
             }
-            Event::Cut => session.send_bytes(vec![0x18]),
-            Event::Paste(text) => paste(session, &text),
+            Event::Cut => {
+                session.send_bytes(vec![0x18]);
+                inputs.push(UserInput::Bytes(vec![0x18]));
+            }
+            Event::Paste(text) => {
+                paste(session, &text);
+                inputs.push(UserInput::Paste(text));
+            }
             Event::Ime(ImeEvent::Preedit { text, .. }) => session.preedit = text,
             Event::Ime(ImeEvent::Commit(text)) => {
                 session.preedit.clear();
                 session.send_text(&text);
+                inputs.push(UserInput::Text(text));
             }
             _ => {}
         }

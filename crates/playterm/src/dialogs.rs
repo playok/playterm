@@ -226,7 +226,7 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
 // Help
 
 /// Keys and what they do, in the current language.
-fn shortcut_list() -> [(&'static str, &'static str); 16] {
+fn shortcut_list() -> [(&'static str, &'static str); 17] {
     [
         ("Ctrl+Shift+N", t("새 탭 (로컬 명령 프롬프트)", "New tab (local prompt)")),
         ("Ctrl+Shift+T", t("빠른 연결", "Quick Connect")),
@@ -240,6 +240,7 @@ fn shortcut_list() -> [(&'static str, &'static str); 16] {
             ),
         ),
         ("Ctrl+Shift+E", t("SFTP 파일 브라우저", "SFTP file browser")),
+        ("Ctrl+Shift+I", t("모든 탭에 동시 입력 (켜기/끄기)", "Type into all tabs (on/off)")),
         ("Ctrl+Tab / Ctrl+Shift+Tab", t("다음 / 이전 탭", "Next / previous tab")),
         ("Ctrl+Shift+D", t("탭 복제", "Duplicate tab")),
         ("Ctrl+Shift+W", t("탭 닫기", "Close tab")),
