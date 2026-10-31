@@ -170,8 +170,18 @@ impl Sidebar {
             let selected = self.selected.as_deref() == Some(p.id.as_str());
             // Explicit id: auto ids inside a collapsing body are not stable across frames,
             // which loses the context-menu popup state.
+            // A site with a tab color shows it as a bar before its name.
             let response = ui
-                .push_id(&p.id, |ui| ui.selectable_label(selected, p.display_name()))
+                .push_id(&p.id, |ui| {
+                    ui.horizontal(|ui| {
+                        if let Some(color) = p.tab_color.map(crate::menu::color32) {
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(4.0, 16.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 1.0, color);
+                        }
+                        ui.selectable_label(selected, p.display_name())
+                    })
+                    .inner
+                })
                 .inner
                 .on_hover_text(tr!("{}  (더블클릭: 연결)", "{}  (double-click: connect)", summary(p)));
             if response.clicked() {

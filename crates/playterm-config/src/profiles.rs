@@ -54,6 +54,65 @@ impl AutoLogin {
     }
 }
 
+/// Color that marks a site's tabs (e.g. red for production).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabColor {
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Teal,
+    Blue,
+    Purple,
+    Pink,
+    Gray,
+}
+
+impl TabColor {
+    pub const ALL: [TabColor; 9] = [
+        TabColor::Red,
+        TabColor::Orange,
+        TabColor::Yellow,
+        TabColor::Green,
+        TabColor::Teal,
+        TabColor::Blue,
+        TabColor::Purple,
+        TabColor::Pink,
+        TabColor::Gray,
+    ];
+
+    /// The color, readable on both the light and the dark theme.
+    pub fn rgb(self) -> [u8; 3] {
+        match self {
+            TabColor::Red => [220, 60, 60],
+            TabColor::Orange => [235, 130, 30],
+            TabColor::Yellow => [215, 180, 20],
+            TabColor::Green => [50, 170, 80],
+            TabColor::Teal => [20, 160, 160],
+            TabColor::Blue => [50, 120, 230],
+            TabColor::Purple => [150, 90, 210],
+            TabColor::Pink => [220, 80, 160],
+            TabColor::Gray => [130, 130, 130],
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        use playterm_i18n::t;
+        match self {
+            TabColor::Red => t("빨강", "Red"),
+            TabColor::Orange => t("주황", "Orange"),
+            TabColor::Yellow => t("노랑", "Yellow"),
+            TabColor::Green => t("초록", "Green"),
+            TabColor::Teal => t("청록", "Teal"),
+            TabColor::Blue => t("파랑", "Blue"),
+            TabColor::Purple => t("보라", "Purple"),
+            TabColor::Pink => t("분홍", "Pink"),
+            TabColor::Gray => t("회색", "Gray"),
+        }
+    }
+}
+
 /// A saved connection. Passwords are never stored here, only in the [`crate::Vault`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -83,6 +142,8 @@ pub struct SessionProfile {
     pub auto_login: AutoLogin,
     /// Keeps the connection from timing out while idle.
     pub keepalive: KeepAlive,
+    /// Color of the site's tabs; `None` for the usual look.
+    pub tab_color: Option<TabColor>,
 }
 
 impl Default for SessionProfile {
@@ -105,6 +166,7 @@ impl Default for SessionProfile {
             log: LogSettings::default(),
             auto_login: AutoLogin::default(),
             keepalive: KeepAlive::default(),
+            tab_color: None,
         }
     }
 }
@@ -236,6 +298,7 @@ mod tests {
         let mut a = a;
         a.auto_login = AutoLogin { enabled: true, steps: AutoLogin::standard_steps() };
         a.keepalive = KeepAlive { mode: playterm_net::KeepAliveMode::Text, interval: 300, text: "\\r".into() };
+        a.tab_color = Some(TabColor::Red);
         store.upsert(a.clone()).unwrap();
         assert_eq!(ProfileStore::load(&path).unwrap().get(&a.id), Some(&a), "login steps are saved");
 
@@ -259,6 +322,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("protocol = \"telnet\""), "{text}");
         assert!(text.contains("charset = \"cp949\""), "{text}");
+        assert!(text.contains("tab_color = \"red\""), "{text}");
 
         store.upsert(SessionProfile { name: "core".into(), ..a.clone() }).unwrap();
         store.remove(&b.id).unwrap();

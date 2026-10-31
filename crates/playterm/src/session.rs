@@ -1,6 +1,7 @@
 //! One open tab: a terminal screen, bound to a network session while connected and running
 //! the local command prompt ([`crate::console`]) while not.
 
+use playterm_config::TabColor;
 use playterm_i18n::{t, tr};
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
 use playterm_term::{Charset, LogMode, Palette, Point, Terminal, TerminalEvent};
@@ -52,6 +53,8 @@ pub struct SessionSpec {
     pub login: Option<LoginScript>,
     /// Id of the saved site this was opened from.
     pub site: Option<String>,
+    /// The site's tab color.
+    pub tab_color: Option<TabColor>,
 }
 
 /// Mouse reporting state (application mouse modes).
@@ -105,6 +108,8 @@ pub struct Session {
     pub search: Option<SearchBar>,
     /// Receives what is typed in another tab while simultaneous input is on.
     pub in_broadcast: bool,
+    /// Color of the tab in the tab bar.
+    pub tab_color: Option<TabColor>,
     /// An SFTP channel was requested and has not answered yet.
     sftp_pending: bool,
     /// Open the window when the requested SFTP channel arrives (not just for the side panel).
@@ -171,6 +176,7 @@ impl Session {
             sftp: None,
             search: None,
             in_broadcast: true,
+            tab_color: None,
             sftp_pending: false,
             sftp_window: false,
             sftp_error: None,
@@ -189,7 +195,7 @@ impl Session {
 
     /// Connects this tab (from the prompt, or as a new tab), keeping the screen contents.
     pub fn start(&mut self, spec: SessionSpec, net: &NetRuntime, waker: Waker) {
-        let SessionSpec { mut params, charset, name, log, login, site } = spec;
+        let SessionSpec { mut params, charset, name, log, login, site, tab_color } = spec;
         if let Some(remote) = &self.remote {
             remote.handle.close();
         }
@@ -212,6 +218,7 @@ impl Session {
         self.login = login.clone().map(LoginRunner::new);
         self.login_script = login;
         self.site = site;
+        self.tab_color = tab_color;
         self.rx_bytes = 0;
         self.tx_bytes = 0;
         let handle = net.connect(params.clone(), waker);
@@ -307,6 +314,7 @@ impl Session {
             log: self.log_plan.clone(),
             login: self.login_script.clone(),
             site: self.site.clone(),
+            tab_color: self.tab_color,
         })
     }
 

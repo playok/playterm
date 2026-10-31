@@ -1,6 +1,7 @@
 //! Menu bar at the top of the window, and the per-session menu shared with the tab context menu.
 
 use eframe::egui::{self, Button};
+use playterm_config::TabColor;
 use playterm_i18n::t;
 use playterm_term::LogMode;
 
@@ -56,6 +57,7 @@ pub enum Command {
     ToggleBroadcast,
     /// Whether this tab receives simultaneous input.
     ToggleInBroadcast(usize),
+    SetTabColor(usize, Option<TabColor>),
 
     TogglePreventScreensaver,
 
@@ -97,6 +99,33 @@ fn check(ui: &mut egui::Ui, out: &mut Option<Command>, label: &str, shortcut: &s
         *out = Some(command);
         ui.close();
     }
+}
+
+pub fn color32(c: TabColor) -> egui::Color32 {
+    let [r, g, b] = c.rgb();
+    egui::Color32::from_rgb(r, g, b)
+}
+
+/// "Tab color" submenu for tab `i`, whose color is `current`.
+pub fn tab_color_menu(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, current: Option<TabColor>) {
+    ui.menu_button(t("탭 색상", "Tab color"), |ui| {
+        if ui.add(Button::selectable(current.is_none(), t("없음", "None"))).clicked() {
+            *out = Some(Command::SetTabColor(i, None));
+            ui.close();
+        }
+        for c in TabColor::ALL {
+            let clicked = ui
+                .horizontal(|ui| {
+                    ui.label(egui::RichText::new("■").color(color32(c)));
+                    ui.add(Button::selectable(current == Some(c), c.name())).clicked()
+                })
+                .inner;
+            if clicked {
+                *out = Some(Command::SetTabColor(i, Some(c)));
+                ui.close();
+            }
+        }
+    });
 }
 
 /// SFTP, BREAK and logging for tab `i`. Used by the tools menu and the tab context menu.
@@ -213,6 +242,9 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("이전 탭", "Previous tab"), "Ctrl+Shift+Tab", n > 1, Command::PrevTab);
             ui.separator();
             item(ui, out, t("탭 복제", "Duplicate tab"), "Ctrl+Shift+D", active.is_some(), Command::Duplicate(i));
+            if let Some(s) = active {
+                tab_color_menu(ui, out, i, s.tab_color);
+            }
             let can_reconnect = active.is_some_and(|s| s.has_target());
             item(ui, out, t("다시 연결", "Reconnect"), "", can_reconnect, Command::Reconnect(i));
             ui.separator();

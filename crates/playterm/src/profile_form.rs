@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use playterm_config::{AutoLogin, LoginStep, SessionProfile};
+use playterm_config::{AutoLogin, LoginStep, SessionProfile, TabColor};
 use playterm_i18n::{t, tr};
 use playterm_net::{
     ForwardKind, ForwardRule, KeepAlive, KeepAliveMode, Protocol, SerialFlow, SerialParity, SerialPortEntry,
@@ -201,6 +201,31 @@ fn log_ui(ui: &mut egui::Ui, log: &mut playterm_config::LogSettings) {
                 log.dir = dir.display().to_string();
             }
         });
+    });
+}
+
+/// Swatches to pick the site's tab color, "none" first.
+fn tab_color_row(ui: &mut egui::Ui, color: &mut Option<TabColor>) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let none = ui.add(egui::Button::selectable(color.is_none(), t("없음", "None")));
+        if none.clicked() {
+            *color = None;
+        }
+        for c in TabColor::ALL {
+            let fill = crate::menu::color32(c);
+            let selected = *color == Some(c);
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
+            let painter = ui.painter();
+            painter.rect_filled(rect.shrink(2.0), 3.0, fill);
+            if selected || response.hovered() {
+                let stroke = egui::Stroke::new(2.0, ui.visuals().strong_text_color());
+                painter.rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Inside);
+            }
+            if response.on_hover_text(c.name()).clicked() {
+                *color = Some(c);
+            }
+        }
     });
 }
 
@@ -413,6 +438,10 @@ impl ProfileForm {
                         });
                     }
                 });
+                ui.end_row();
+
+                ui.label(t("탭 색상", "Tab color"));
+                tab_color_row(ui, &mut p.tab_color);
                 ui.end_row();
             }
 

@@ -304,7 +304,8 @@ impl PlaytermApp {
             password: params.password.clone().map(Zeroizing::new),
         });
         let site = self.store.get(&profile.id).map(|p| p.id.clone());
-        self.open_spec(SessionSpec { params, charset: profile.charset, name, log, login, site });
+        let tab_color = profile.tab_color;
+        self.open_spec(SessionSpec { params, charset: profile.charset, name, log, login, site, tab_color });
     }
 
     /// Connects a saved profile, unlocking the vault first if its password is stored there.
@@ -855,6 +856,11 @@ impl PlaytermApp {
             }
             Command::CloseOthers(_) => {}
             Command::ToggleBroadcast => self.broadcast = !self.broadcast,
+            Command::SetTabColor(i, color) => {
+                if let Some(s) = self.sessions.get_mut(i) {
+                    s.tab_color = color;
+                }
+            }
             Command::ToggleInBroadcast(i) => {
                 if let Some(s) = self.sessions.get_mut(i) {
                     s.in_broadcast = !s.in_broadcast;
@@ -1113,7 +1119,18 @@ impl PlaytermApp {
                 }
                 let title = RichText::new(s.tab_title());
                 let title = if receiving(s) { title.color(BROADCAST_COLOR) } else { title };
+                // The color goes behind the tab (a tint) and under it (a bar).
+                let tint = ui.painter().add(egui::Shape::Noop);
                 let tab = ui.selectable_label(i == self.active, title);
+                if let Some(color) = s.tab_color.map(menu::color32) {
+                    let rect = tab.rect;
+                    ui.painter().set(tint, egui::Shape::rect_filled(rect, 4.0, color.gamma_multiply(0.3)));
+                    let bar = egui::Rect::from_min_max(
+                        egui::pos2(rect.left() + 2.0, rect.bottom() - 3.0),
+                        egui::pos2(rect.right() - 2.0, rect.bottom()),
+                    );
+                    ui.painter().rect_filled(bar, 1.5, color);
+                }
                 if tab.clicked() {
                     self.active = i;
                 }
@@ -1128,6 +1145,7 @@ impl PlaytermApp {
                         action = Some(Command::ToggleInBroadcast(i));
                         ui.close();
                     }
+                    menu::tab_color_menu(ui, &mut action, i, s.tab_color);
                     ui.separator();
                     let entries = [
                         (t("복제", "Duplicate"), Command::Duplicate(i)),
