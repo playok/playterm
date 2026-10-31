@@ -57,7 +57,11 @@ impl LoginRunner {
             let Some(password) = &self.script.password else {
                 self.next = self.script.steps.len();
                 return Some(LoginAction::Stop(
-                    "자동 로그인: 저장된 비밀번호가 없어 멈춥니다. 직접 입력하세요".into(),
+                    playterm_i18n::t(
+                        "자동 로그인: 저장된 비밀번호가 없어 멈춥니다. 직접 입력하세요",
+                        "Automatic login: stopped, no saved password. Type it yourself",
+                    )
+                    .into(),
                 ));
             };
             text = text.replace("{password}", password);

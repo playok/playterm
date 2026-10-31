@@ -4,6 +4,7 @@ use eframe::egui::{
     self, Color32, Event, EventFilter, FontFamily, FontId, ImeEvent, Pos2, Rect, Sense,
     Shape, Stroke, Vec2,
 };
+use playterm_i18n::t;
 use playterm_term::{Cell, CursorShape, Flags, Point, Rgb, SearchMatch, SelectionType, Side, TermMode};
 
 use crate::input::{key_bytes, paste_bytes};
@@ -200,20 +201,20 @@ pub fn paste(session: &mut Session, text: &str) {
 
 fn context_menu(ui: &mut egui::Ui, session: &mut Session) {
     if ui
-        .add_enabled(session.terminal.has_selection(), egui::Button::new("복사").shortcut_text("Ctrl+Shift+C"))
+        .add_enabled(session.terminal.has_selection(), egui::Button::new(t("복사", "Copy")).shortcut_text("Ctrl+Shift+C"))
         .clicked()
     {
         copy_selection(ui.ctx(), session);
         ui.close();
     }
-    if ui.add(egui::Button::new("붙여넣기").shortcut_text("Ctrl+Shift+V")).clicked() {
+    if ui.add(egui::Button::new(t("붙여넣기", "Paste")).shortcut_text("Ctrl+Shift+V")).clicked() {
         if let Some(text) = clipboard::read_text() {
             paste(session, &text);
         }
         ui.close();
     }
     ui.separator();
-    if ui.button("모두 선택").clicked() {
+    if ui.button(t("모두 선택", "Select all")).clicked() {
         session.terminal.select_all();
         ui.close();
     }

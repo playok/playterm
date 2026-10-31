@@ -2,6 +2,7 @@
 //! commands it understands (`ssh`, `telnet`, `serial`, `open`, `ls`, ...).
 
 use playterm_config::SessionProfile;
+use playterm_i18n::{t, tr};
 use playterm_net::{ForwardKind, ForwardRule};
 use playterm_term::Charset;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -11,7 +12,12 @@ use crate::profile_form::parse_url;
 
 pub const PROMPT: &str = "\x1b[1;36mplayterm\x1b[0m> ";
 
-pub const HELP: &str = "\
+/// The `help` text in the current language.
+pub fn help() -> &'static str {
+    t(HELP_KO, HELP_EN)
+}
+
+const HELP_KO: &str = "\
 \x1b[1m사용할 수 있는 명령\x1b[0m
   ssh [-p 포트] [-l 사용자] [-i 키파일] [-L|-R 포트:호스트:포트] [-D 포트] [--cp949] [사용자@]호스트[:포트]
   telnet 호스트 [포트]              Telnet 접속 (--cp949: 한글 구형 장비)
@@ -30,6 +36,26 @@ pub const HELP: &str = "\
   help, ?                           이 도움말
 
   ←/→, Home/End: 커서 이동   ↑/↓: 이전 명령   Ctrl+C: 입력 취소   Ctrl+L: 화면 지우기";
+
+const HELP_EN: &str = "\
+\x1b[1mAvailable commands\x1b[0m
+  ssh [-p port] [-l user] [-i keyfile] [-L|-R port:host:port] [-D port] [--cp949] [user@]host[:port]
+  telnet host [port]                Telnet connection (--cp949: older Korean devices)
+  serial COM3 [speed]               Serial console (default 9600 8N1)
+  open                              Open the Site Manager
+  open name|number                  Connect to a saved site (number as listed by sites)
+  sites [filter]                    List saved sites
+  ls [-l] [-a] [path]               List files (-l: details, -a: include hidden files, patterns like *.log)
+  dir [/a] [path]                   List files (details)
+  cd [path], pwd                    Change folder (cd alone: home, cd .., cd D:) / current folder
+  new                               Create a new site
+  quick                             Quick Connect
+  r, reconnect                      Reconnect to the last connection
+  clear, cls                        Clear the screen
+  exit                              Close the tab
+  help, ?                           This help
+
+  ←/→, Home/End: move cursor   ↑/↓: previous command   Ctrl+C: cancel input   Ctrl+L: clear screen";
 
 /// Something a command asks the app to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,7 +117,7 @@ fn split_args(line: &str) -> Vec<String> {
 }
 
 fn parse_port(s: &str) -> Result<u16, String> {
-    s.parse().ok().filter(|&p: &u16| p > 0).ok_or_else(|| format!("잘못된 포트: {s}"))
+    s.parse().ok().filter(|&p: &u16| p > 0).ok_or_else(|| tr!("잘못된 포트: {s}", "Invalid port: {s}"))
 }
 
 /// Local Windows user name, the default SSH user (like OpenSSH).
@@ -104,30 +130,32 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
     let mut user = None;
     let mut identity = String::new();
     let mut forwards = Vec::new();
-    let mut charset = Charset::Utf8;
+    let mut charset = Charset::Auto;
     let mut target = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let mut value = |what: &str| it.next().cloned().ok_or_else(|| format!("{arg} 다음에 {what}이(가) 필요합니다"));
+        let mut value = |what: &str| {
+            it.next().cloned().ok_or_else(|| tr!("{arg} 다음에 {what}이(가) 필요합니다", "Missing {what} after {arg}"))
+        };
         match arg.as_str() {
-            "-p" => port = Some(parse_port(&value("포트")?)?),
-            "-l" => user = Some(value("사용자 이름")?),
-            "-i" => identity = value("키 파일")?,
+            "-p" => port = Some(parse_port(&value(t("포트", "port"))?)?),
+            "-l" => user = Some(value(t("사용자 이름", "user name"))?),
+            "-i" => identity = value(t("키 파일", "key file"))?,
             "-L" | "-R" | "-D" => {
                 let kind = match arg.as_str() {
                     "-L" => ForwardKind::Local,
                     "-R" => ForwardKind::Remote,
                     _ => ForwardKind::Dynamic,
                 };
-                forwards.push(ForwardRule::parse(kind, &value("포워딩 설정")?)?);
+                forwards.push(ForwardRule::parse(kind, &value(t("포워딩 설정", "forwarding spec"))?)?);
             }
             "--cp949" | "--euc-kr" => charset = Charset::Cp949,
-            a if a.starts_with('-') => return Err(format!("알 수 없는 옵션: {a}")),
+            a if a.starts_with('-') => return Err(tr!("알 수 없는 옵션: {a}", "Unknown option: {a}")),
             a if target.is_none() => target = Some(a.to_owned()),
-            a => return Err(format!("인수가 너무 많습니다: {a}")),
+            a => return Err(tr!("인수가 너무 많습니다: {a}", "Too many arguments: {a}")),
         }
     }
-    let target = target.ok_or("사용법: ssh [옵션] [사용자@]호스트[:포트]")?;
+    let target = target.ok_or(t("사용법: ssh [옵션] [사용자@]호스트[:포트]", "Usage: ssh [options] [user@]host[:port]"))?;
     let target = match (target.contains('@'), user) {
         (true, _) => target,
         (false, Some(u)) => format!("{u}@{target}"),
@@ -144,19 +172,19 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
 }
 
 fn parse_telnet(args: &[String]) -> Result<SessionProfile, String> {
-    let mut charset = Charset::Utf8;
+    let mut charset = Charset::Auto;
     let mut rest = Vec::new();
     for a in args {
         match a.as_str() {
             "--cp949" | "--euc-kr" => charset = Charset::Cp949,
-            a if a.starts_with('-') => return Err(format!("알 수 없는 옵션: {a}")),
+            a if a.starts_with('-') => return Err(tr!("알 수 없는 옵션: {a}", "Unknown option: {a}")),
             a => rest.push(a),
         }
     }
     let (host, port) = match rest.as_slice() {
         [host] => (*host, None),
         [host, port] => (*host, Some(parse_port(port)?)),
-        _ => return Err("사용법: telnet 호스트 [포트]".into()),
+        _ => return Err(t("사용법: telnet 호스트 [포트]", "Usage: telnet host [port]").into()),
     };
     let mut profile = parse_url(&format!("telnet://{host}"))?;
     if let Some(port) = port {
@@ -170,7 +198,7 @@ fn parse_serial(args: &[String]) -> Result<SessionProfile, String> {
     match args {
         [port] => parse_url(&format!("serial://{port}")),
         [port, baud] => parse_url(&format!("serial://{port}:{baud}")),
-        _ => Err("사용법: serial COM3 [속도]".into()),
+        _ => Err(t("사용법: serial COM3 [속도]", "Usage: serial COM3 [speed]").into()),
     }
 }
 
@@ -203,7 +231,10 @@ pub fn parse(line: &str) -> Parsed {
         "quick" => Parsed::Request(Request::QuickConnect),
         "r" | "reconnect" => Parsed::Request(Request::Reconnect),
         "exit" | "quit" | "close" => Parsed::Request(Request::Exit),
-        other => Parsed::Error(format!("알 수 없는 명령: {other}  (help 로 목록 보기)")),
+        other => Parsed::Error(tr!(
+            "알 수 없는 명령: {other}  (help 로 목록 보기)",
+            "Unknown command: {other}  (type help for a list)"
+        )),
     }
 }
 
@@ -220,9 +251,9 @@ fn parse_ls(args: &[String], dir: bool) -> Parsed {
                 opts.long |= f.contains(['l', 'L']);
                 opts.all |= f.contains(['a', 'A']);
             }
-            Some(_) if dash.is_some() => return Parsed::Error(format!("알 수 없는 옵션: {a}")),
+            Some(_) if dash.is_some() => return Parsed::Error(tr!("알 수 없는 옵션: {a}", "Unknown option: {a}")),
             _ if opts.path.is_none() => opts.path = Some(a.clone()),
-            _ => return Parsed::Error("경로는 하나만 쓸 수 있습니다".into()),
+            _ => return Parsed::Error(t("경로는 하나만 쓸 수 있습니다", "Only one path is allowed").into()),
         }
     }
     Parsed::Ls(opts)

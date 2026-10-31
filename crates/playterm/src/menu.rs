@@ -1,6 +1,7 @@
 //! Menu bar at the top of the window, and the per-session menu shared with the tab context menu.
 
 use eframe::egui::{self, Button};
+use playterm_i18n::t;
 use playterm_term::LogMode;
 
 use crate::session::Session;
@@ -87,17 +88,18 @@ fn check(ui: &mut egui::Ui, out: &mut Option<Command>, label: &str, shortcut: &s
 
 /// SFTP, BREAK and logging for tab `i`. Used by the tools menu and the tab context menu.
 pub fn session_items(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, s: &Session) {
-    item(ui, out, "SFTP 파일 브라우저", "Ctrl+Shift+E", s.can_sftp(), Command::Sftp(i));
-    item(ui, out, "BREAK 신호 보내기", "", s.can_break(), Command::Break(i));
-    ui.menu_button("로그", |ui| {
+    item(ui, out, t("SFTP 파일 브라우저", "SFTP file browser"), "Ctrl+Shift+E", s.can_sftp(), Command::Sftp(i));
+    item(ui, out, t("BREAK 신호 보내기", "Send BREAK"), "", s.can_break(), Command::Break(i));
+    ui.menu_button(t("로그", "Log"), |ui| {
         if s.terminal.log().is_some() {
-            item(ui, out, "로그 기록 중지", "", true, Command::StopLog(i));
-            item(ui, out, "로그 파일 위치 열기", "", true, Command::RevealLog(i));
+            item(ui, out, t("로그 기록 중지", "Stop logging"), "", true, Command::StopLog(i));
+            item(ui, out, t("로그 파일 위치 열기", "Show log file"), "", true, Command::RevealLog(i));
         } else {
-            item(ui, out, "텍스트 로그 시작…", "", true, Command::StartLog(i, LogMode::Text { timestamps: true }));
-            item(ui, out, "원본(raw) 로그 시작…", "", true, Command::StartLog(i, LogMode::Raw));
+            let text = Command::StartLog(i, LogMode::Text { timestamps: true });
+            item(ui, out, t("텍스트 로그 시작…", "Start text log…"), "", true, text);
+            item(ui, out, t("원본(raw) 로그 시작…", "Start raw log…"), "", true, Command::StartLog(i, LogMode::Raw));
         }
-        item(ui, out, "로그 폴더 열기", "", true, Command::OpenLogFolder);
+        item(ui, out, t("로그 폴더 열기", "Open log folder"), "", true, Command::OpenLogFolder);
     });
 }
 
@@ -111,67 +113,74 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
         ui.input(|inp| (inp.viewport().maximized.unwrap_or(false), inp.viewport().fullscreen.unwrap_or(false)));
 
     egui::MenuBar::new().ui(ui, |ui| {
-        ui.menu_button("파일", |ui| {
-            item(ui, out, "새 탭", "Ctrl+Shift+N", true, Command::NewTab);
-            item(ui, out, "빠른 연결…", "Ctrl+Shift+T", true, Command::QuickConnect);
-            item(ui, out, "사이트 관리…", "Ctrl+Shift+S", true, Command::SiteManager);
-            item(ui, out, "새 사이트…", "", true, Command::NewSite);
-            item(ui, out, "PuTTY 세션 가져오기…", "", true, Command::ImportPutty);
+        ui.menu_button(t("파일", "File"), |ui| {
+            item(ui, out, t("새 탭", "New tab"), "Ctrl+Shift+N", true, Command::NewTab);
+            item(ui, out, t("빠른 연결…", "Quick Connect…"), "Ctrl+Shift+T", true, Command::QuickConnect);
+            item(ui, out, t("사이트 관리…", "Site Manager…"), "Ctrl+Shift+S", true, Command::SiteManager);
+            item(ui, out, t("새 사이트…", "New site…"), "", true, Command::NewSite);
+            item(ui, out, t("PuTTY 세션 가져오기…", "Import PuTTY sessions…"), "", true, Command::ImportPutty);
             ui.separator();
-            item(ui, out, "끝내기", "Alt+F4", true, Command::Quit);
+            item(ui, out, t("끝내기", "Exit"), "Alt+F4", true, Command::Quit);
         });
 
-        ui.menu_button("편집", |ui| {
+        ui.menu_button(t("편집", "Edit"), |ui| {
             let has_selection = active.is_some_and(|s| s.terminal.has_selection());
-            item(ui, out, "복사", "Ctrl+Shift+C", has_selection, Command::Copy);
-            item(ui, out, "붙여넣기", "Ctrl+Shift+V", active.is_some(), Command::Paste);
-            item(ui, out, "모두 선택", "", active.is_some(), Command::SelectAll);
-            item(ui, out, "찾기…", "Ctrl+Shift+F", active.is_some(), Command::Find);
+            item(ui, out, t("복사", "Copy"), "Ctrl+Shift+C", has_selection, Command::Copy);
+            item(ui, out, t("붙여넣기", "Paste"), "Ctrl+Shift+V", active.is_some(), Command::Paste);
+            item(ui, out, t("모두 선택", "Select all"), "", active.is_some(), Command::SelectAll);
+            item(ui, out, t("찾기…", "Find…"), "Ctrl+Shift+F", active.is_some(), Command::Find);
             ui.separator();
-            item(ui, out, "스크롤백 지우기", "", active.is_some(), Command::ClearScrollback);
+            item(ui, out, t("스크롤백 지우기", "Clear scrollback"), "", active.is_some(), Command::ClearScrollback);
         });
 
-        ui.menu_button("보기", |ui| {
-            check(ui, out, "사이트 목록", "Ctrl+Shift+B", st.show_sidebar, Command::ToggleSidebar);
-            check(ui, out, "상태 표시줄", "", st.show_status_bar, Command::ToggleStatusBar);
-            check(ui, out, "전체 화면", "F11", fullscreen, Command::ToggleFullscreen);
+        ui.menu_button(t("보기", "View"), |ui| {
+            check(ui, out, t("사이트 목록", "Site list"), "Ctrl+Shift+B", st.show_sidebar, Command::ToggleSidebar);
+            check(ui, out, t("상태 표시줄", "Status bar"), "", st.show_status_bar, Command::ToggleStatusBar);
+            check(ui, out, t("전체 화면", "Full screen"), "F11", fullscreen, Command::ToggleFullscreen);
             ui.separator();
-            item(ui, out, "글꼴 크게", "Ctrl+=", true, Command::ZoomIn);
-            item(ui, out, "글꼴 작게", "Ctrl+-", true, Command::ZoomOut);
-            item(ui, out, "기본 크기", "Ctrl+0", true, Command::ZoomReset);
+            item(ui, out, t("글꼴 크게", "Larger font"), "Ctrl+=", true, Command::ZoomIn);
+            item(ui, out, t("글꼴 작게", "Smaller font"), "Ctrl+-", true, Command::ZoomOut);
+            item(ui, out, t("기본 크기", "Default size"), "Ctrl+0", true, Command::ZoomReset);
         });
 
-        ui.menu_button("도구", |ui| {
+        ui.menu_button(t("도구", "Tools"), |ui| {
             match active {
                 Some(s) => session_items(ui, out, i, s),
                 None => {
-                    item(ui, out, "SFTP 파일 브라우저", "Ctrl+Shift+E", false, Command::Sftp(i));
-                    item(ui, out, "BREAK 신호 보내기", "", false, Command::Break(i));
-                    item(ui, out, "로그 폴더 열기", "", true, Command::OpenLogFolder);
+                    item(ui, out, t("SFTP 파일 브라우저", "SFTP file browser"), "Ctrl+Shift+E", false, Command::Sftp(i));
+                    item(ui, out, t("BREAK 신호 보내기", "Send BREAK"), "", false, Command::Break(i));
+                    item(ui, out, t("로그 폴더 열기", "Open log folder"), "", true, Command::OpenLogFolder);
                 }
             }
             ui.separator();
             match st.vault {
-                VaultState::Missing => item(ui, out, "비밀번호 볼트 없음", "", false, Command::UnlockVault),
-                VaultState::Locked => item(ui, out, "비밀번호 볼트 잠금 해제…", "", true, Command::UnlockVault),
-                VaultState::Unlocked => item(ui, out, "비밀번호 볼트 잠그기", "", true, Command::LockVault),
+                VaultState::Missing => {
+                    item(ui, out, t("비밀번호 볼트 없음", "No password vault"), "", false, Command::UnlockVault)
+                }
+                VaultState::Locked => {
+                    item(ui, out, t("비밀번호 볼트 잠금 해제…", "Unlock password vault…"), "", true, Command::UnlockVault)
+                }
+                VaultState::Unlocked => {
+                    item(ui, out, t("비밀번호 볼트 잠그기", "Lock password vault"), "", true, Command::LockVault)
+                }
             }
             ui.separator();
-            item(ui, out, "설정…", "", true, Command::Settings);
+            item(ui, out, t("설정…", "Settings…"), "", true, Command::Settings);
         });
 
-        ui.menu_button("탭", |ui| {
-            item(ui, out, "새 탭", "Ctrl+Shift+N", true, Command::NewTab);
+        ui.menu_button(t("탭", "Tab"), |ui| {
+            item(ui, out, t("새 탭", "New tab"), "Ctrl+Shift+N", true, Command::NewTab);
             ui.separator();
-            item(ui, out, "다음 탭", "Ctrl+Tab", n > 1, Command::NextTab);
-            item(ui, out, "이전 탭", "Ctrl+Shift+Tab", n > 1, Command::PrevTab);
+            item(ui, out, t("다음 탭", "Next tab"), "Ctrl+Tab", n > 1, Command::NextTab);
+            item(ui, out, t("이전 탭", "Previous tab"), "Ctrl+Shift+Tab", n > 1, Command::PrevTab);
             ui.separator();
-            item(ui, out, "탭 복제", "Ctrl+Shift+D", active.is_some(), Command::Duplicate(i));
-            item(ui, out, "다시 연결", "", active.is_some_and(|s| s.has_target()), Command::Reconnect(i));
+            item(ui, out, t("탭 복제", "Duplicate tab"), "Ctrl+Shift+D", active.is_some(), Command::Duplicate(i));
+            let can_reconnect = active.is_some_and(|s| s.has_target());
+            item(ui, out, t("다시 연결", "Reconnect"), "", can_reconnect, Command::Reconnect(i));
             ui.separator();
-            item(ui, out, "탭 닫기", "Ctrl+Shift+W", active.is_some(), Command::Close(i));
-            item(ui, out, "다른 탭 모두 닫기", "", n > 1, Command::CloseOthers(i));
-            item(ui, out, "모든 탭 닫기", "", n > 0, Command::CloseAll);
+            item(ui, out, t("탭 닫기", "Close tab"), "Ctrl+Shift+W", active.is_some(), Command::Close(i));
+            item(ui, out, t("다른 탭 모두 닫기", "Close other tabs"), "", n > 1, Command::CloseOthers(i));
+            item(ui, out, t("모든 탭 닫기", "Close all tabs"), "", n > 0, Command::CloseAll);
             if n > 0 {
                 ui.separator();
                 for (k, s) in st.sessions.iter().enumerate() {
@@ -183,18 +192,18 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             }
         });
 
-        ui.menu_button("창", |ui| {
-            item(ui, out, "최소화", "", true, Command::Minimize);
-            let label = if maximized { "이전 크기로" } else { "최대화" };
+        ui.menu_button(t("창", "Window"), |ui| {
+            item(ui, out, t("최소화", "Minimize"), "", true, Command::Minimize);
+            let label = if maximized { t("이전 크기로", "Restore") } else { t("최대화", "Maximize") };
             item(ui, out, label, "", !fullscreen, Command::ToggleMaximize);
-            check(ui, out, "전체 화면", "F11", fullscreen, Command::ToggleFullscreen);
-            check(ui, out, "항상 위에 표시", "", st.always_on_top, Command::ToggleAlwaysOnTop);
+            check(ui, out, t("전체 화면", "Full screen"), "F11", fullscreen, Command::ToggleFullscreen);
+            check(ui, out, t("항상 위에 표시", "Always on top"), "", st.always_on_top, Command::ToggleAlwaysOnTop);
         });
 
-        ui.menu_button("도움말", |ui| {
-            item(ui, out, "단축키", "", true, Command::Shortcuts);
+        ui.menu_button(t("도움말", "Help"), |ui| {
+            item(ui, out, t("단축키", "Keyboard shortcuts"), "", true, Command::Shortcuts);
             ui.separator();
-            item(ui, out, "playterm 정보", "", true, Command::About);
+            item(ui, out, t("playterm 정보", "About playterm"), "", true, Command::About);
         });
     });
     out.take()

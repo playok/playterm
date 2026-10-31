@@ -3,6 +3,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
+use playterm_i18n::{t, tr};
 use unicode_width::UnicodeWidthStr;
 
 use crate::console::pad;
@@ -68,9 +69,9 @@ pub fn change_dir(cwd: &Path, arg: Option<&str>) -> Result<PathBuf, String> {
     if target.is_dir() {
         Ok(target)
     } else if target.exists() {
-        Err(format!("cd: 폴더가 아닙니다: {}", target.display()))
+        Err(tr!("cd: 폴더가 아닙니다: {}", "cd: not a folder: {}", target.display()))
     } else {
-        Err(format!("cd: 경로를 찾을 수 없습니다: {}", target.display()))
+        Err(tr!("cd: 경로를 찾을 수 없습니다: {}", "cd: path not found: {}", target.display()))
     }
 }
 
@@ -133,7 +134,7 @@ pub fn list(cwd: &Path, opts: &ListOptions, cols: usize) -> Result<String, Strin
         pattern = Some(name.to_owned());
         target.pop();
     }
-    let meta = std::fs::metadata(&target).map_err(|_| format!("경로를 찾을 수 없습니다: {}", target.display()))?;
+    let meta = std::fs::metadata(&target).map_err(|_| tr!("경로를 찾을 수 없습니다: {}", "Path not found: {}", target.display()))?;
     let mut entries = Vec::new();
     if meta.is_dir() {
         let read = std::fs::read_dir(&target).map_err(|e| format!("{}: {e}", target.display()))?;
@@ -173,7 +174,7 @@ fn thousands(n: u64) -> String {
 }
 
 fn long_listing(dir: &Path, entries: &[Entry]) -> String {
-    let mut out = format!("\x1b[90m{} 폴더\x1b[0m\n\n", dir.display());
+    let mut out = tr!("\x1b[90m{} 폴더\x1b[0m\n\n", "\x1b[90mFolder {}\x1b[0m\n\n", dir.display());
     let (mut files, mut dirs, mut total) = (0, 0, 0u64);
     for e in entries {
         let time = e
@@ -189,14 +190,18 @@ fn long_listing(dir: &Path, entries: &[Entry]) -> String {
             out.push_str(&format!("{time}    {:>14} {}\n", thousands(e.size), e.name));
         }
     }
-    out.push_str(&format!("\x1b[90m파일 {files}개 ({} 바이트), 폴더 {dirs}개\x1b[0m", thousands(total)));
+    out.push_str(&tr!(
+        "\x1b[90m파일 {files}개 ({} 바이트), 폴더 {dirs}개\x1b[0m",
+        "\x1b[90m{files} files ({} bytes), {dirs} folders\x1b[0m",
+        thousands(total)
+    ));
     out
 }
 
 /// Names in columns, filled top to bottom like `ls`.
 fn short_listing(entries: &[Entry], cols: usize) -> String {
     if entries.is_empty() {
-        return "\x1b[90m(비어 있음)\x1b[0m".into();
+        return t("\x1b[90m(비어 있음)\x1b[0m", "\x1b[90m(empty)\x1b[0m").into();
     }
     let label = |e: &Entry| if e.is_dir { format!("{}\\", e.name) } else { e.name.clone() };
     let width = entries.iter().map(|e| label(e).width()).max().unwrap_or(1) + 2;

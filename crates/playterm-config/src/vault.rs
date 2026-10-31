@@ -14,6 +14,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
+use playterm_i18n::{t, tr};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -27,22 +28,49 @@ const NONCE_LEN: usize = 24;
 const MAX_M_COST_KIB: u32 = 1024 * 1024;
 const MAX_T_COST: u32 = 16;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum VaultError {
-    #[error("마스터 비밀번호가 틀렸습니다")]
     WrongPassword,
-    #[error("볼트가 잠겨 있습니다")]
     Locked,
-    #[error("볼트가 이미 존재합니다")]
     AlreadyExists,
-    #[error("볼트 파일이 없습니다")]
     Missing,
-    #[error("마스터 비밀번호는 비워둘 수 없습니다")]
     EmptyPassword,
-    #[error("볼트 파일 형식 오류: {0}")]
     Format(String),
-    #[error(transparent)]
-    Io(#[from] io::Error),
+    Io(io::Error),
+}
+
+impl std::fmt::Display for VaultError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VaultError::WrongPassword => f.write_str(t("마스터 비밀번호가 틀렸습니다", "Wrong master password")),
+            VaultError::Locked => f.write_str(t("볼트가 잠겨 있습니다", "The password vault is locked")),
+            VaultError::AlreadyExists => f.write_str(t("볼트가 이미 존재합니다", "The password vault already exists")),
+            VaultError::Missing => f.write_str(t("볼트 파일이 없습니다", "The password vault file does not exist")),
+            VaultError::EmptyPassword => {
+                f.write_str(t("마스터 비밀번호는 비워둘 수 없습니다", "The master password cannot be empty"))
+            }
+            VaultError::Format(detail) => {
+                f.write_str(&tr!("볼트 파일 형식 오류: {detail}", "Invalid password vault file: {detail}"))
+            }
+            // Transparent, like the inner error.
+            VaultError::Io(e) => std::fmt::Display::fmt(e, f),
+        }
+    }
+}
+
+impl std::error::Error for VaultError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            VaultError::Io(e) => e.source(),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for VaultError {
+    fn from(e: io::Error) -> Self {
+        VaultError::Io(e)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -80,7 +108,7 @@ impl Kdf {
 
     fn derive(&self, master: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, VaultError> {
         let params = Params::new(self.m_cost, self.t_cost, self.p_cost, Some(32))
-            .map_err(|e| VaultError::Format(format!("KDF 파라미터: {e}")))?;
+            .map_err(|e| VaultError::Format(tr!("KDF 파라미터: {e}", "KDF parameters: {e}")))?;
         let mut key = Zeroizing::new([0u8; 32]);
         Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
             .hash_password_into(master.as_bytes(), salt, key.as_mut())
@@ -150,10 +178,15 @@ impl Vault {
         };
         let file: VaultFile = toml::from_str(&text).map_err(|e| VaultError::Format(e.to_string()))?;
         if file.version != FORMAT_VERSION || file.kdf != KDF_NAME {
-            return Err(VaultError::Format(format!("지원하지 않는 버전: v{} {}", file.version, file.kdf)));
+            return Err(VaultError::Format(tr!(
+                "지원하지 않는 버전: v{} {}",
+                "Unsupported version: v{} {}",
+                file.version,
+                file.kdf
+            )));
         }
         if file.m_cost > MAX_M_COST_KIB || file.t_cost > MAX_T_COST {
-            return Err(VaultError::Format("KDF 비용이 비정상적으로 큽니다".into()));
+            return Err(VaultError::Format(t("KDF 비용이 비정상적으로 큽니다", "The KDF cost is abnormally high").into()));
         }
         let salt: [u8; SALT_LEN] = decode_fixed(&file.salt, "salt")?;
         let nonce: [u8; NONCE_LEN] = decode_fixed(&file.nonce, "nonce")?;
@@ -234,7 +267,7 @@ impl Vault {
         let aad = unlocked.kdf.aad(&unlocked.salt);
         let ciphertext = cipher
             .encrypt(&XNonce::from(nonce), Payload { msg: plaintext.as_bytes(), aad: &aad })
-            .map_err(|_| VaultError::Format("암호화 실패".into()))?;
+            .map_err(|_| VaultError::Format(t("암호화 실패", "Encryption failed").into()))?;
 
         let file = VaultFile {
             version: FORMAT_VERSION,
@@ -256,7 +289,7 @@ fn decode_fixed<const N: usize>(b64: &str, what: &str) -> Result<[u8; N], VaultE
     B64.decode(b64)
         .ok()
         .and_then(|v| <[u8; N]>::try_from(v).ok())
-        .ok_or_else(|| VaultError::Format(format!("{what} 값이 잘못되었습니다")))
+        .ok_or_else(|| VaultError::Format(tr!("{what} 값이 잘못되었습니다", "Invalid {what} value")))
 }
 
 #[cfg(test)]

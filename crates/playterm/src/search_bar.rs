@@ -2,6 +2,7 @@
 //! the visible matches and selects the current one.
 
 use eframe::egui::{self, Color32, Key, Rect, RichText, UiBuilder, Vec2};
+use playterm_i18n::t;
 use playterm_term::{SearchDirection, SearchMatch, Terminal, TextSearch};
 
 /// Background of the other visible matches (the current one is shown as the selection).
@@ -76,7 +77,9 @@ impl SearchBar {
             egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let edit = ui.add(
-                        egui::TextEdit::singleline(&mut self.query).hint_text("찾기 (스크롤백 포함)").desired_width(170.0),
+                        egui::TextEdit::singleline(&mut self.query)
+                            .hint_text(t("찾기 (스크롤백 포함)", "Find (including scrollback)"))
+                            .desired_width(170.0),
                     );
                     if !self.focus_requested {
                         edit.request_focus();
@@ -98,15 +101,15 @@ impl SearchBar {
                     }
 
                     if self.not_found {
-                        ui.label(RichText::new("없음").color(ui.visuals().error_fg_color));
+                        ui.label(RichText::new(t("없음", "No matches")).color(ui.visuals().error_fg_color));
                     }
-                    if ui.small_button("▲").on_hover_text("위로 (Enter)").clicked() {
+                    if ui.small_button("▲").on_hover_text(t("위로 (Enter)", "Up (Enter)")).clicked() {
                         step = Some(SearchDirection::Older);
                     }
-                    if ui.small_button("▼").on_hover_text("아래로 (Shift+Enter)").clicked() {
+                    if ui.small_button("▼").on_hover_text(t("아래로 (Shift+Enter)", "Down (Shift+Enter)")).clicked() {
                         step = Some(SearchDirection::Newer);
                     }
-                    if ui.small_button("✕").on_hover_text("닫기 (Esc)").clicked() {
+                    if ui.small_button("✕").on_hover_text(t("닫기 (Esc)", "Close (Esc)")).clicked() {
                         action = BarAction::Close;
                     }
                 });

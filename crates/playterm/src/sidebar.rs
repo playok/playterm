@@ -3,6 +3,7 @@
 
 use eframe::egui::{self, RichText};
 use playterm_config::{ProfileStore, SessionProfile};
+use playterm_i18n::{t, tr};
 
 pub enum SidebarAction {
     Connect(String),
@@ -76,12 +77,18 @@ pub fn find(sites: &[&SessionProfile], query: &str) -> Result<String, String> {
     match hits.as_slice() {
         [p] => Ok(p.id.clone()),
         [] if number.is_some() => {
-            Err(format!("{query}번 사이트가 없고, '{query}' 와 일치하는 사이트도 없습니다 (sites 로 확인)"))
+            Err(tr!(
+                "{query}번 사이트가 없고, '{query}' 와 일치하는 사이트도 없습니다 (sites 로 확인)",
+                "There is no site number {query} and no site matches '{query}' (check with sites)"
+            ))
         }
-        [] => Err(format!("'{query}' 사이트를 찾을 수 없습니다 (sites 로 목록 보기)")),
+        [] => Err(tr!(
+            "'{query}' 사이트를 찾을 수 없습니다 (sites 로 목록 보기)",
+            "Site '{query}' not found (type sites for a list)"
+        )),
         many => {
             let names: Vec<String> = many.iter().map(|p| p.display_name()).collect();
-            Err(format!("여러 사이트가 일치합니다: {}", names.join(", ")))
+            Err(tr!("여러 사이트가 일치합니다: {}", "Several sites match: {}", names.join(", ")))
         }
     }
 }
@@ -102,23 +109,33 @@ impl Sidebar {
         let mut action = None;
 
         ui.horizontal(|ui| {
-            ui.strong("사이트");
+            ui.strong(t("사이트", "Sites"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("관리").on_hover_text("사이트 관리 (Ctrl+Shift+S)").clicked() {
+                if ui
+                    .button(t("관리", "Manage"))
+                    .on_hover_text(t("사이트 관리 (Ctrl+Shift+S)", "Site Manager (Ctrl+Shift+S)"))
+                    .clicked()
+                {
                     action = Some(SidebarAction::Manage(self.selected.clone()));
                 }
-                if ui.button("+").on_hover_text("새 사이트").clicked() {
+                if ui.button("+").on_hover_text(t("새 사이트", "New site")).clicked() {
                     action = Some(SidebarAction::New);
                 }
             });
         });
-        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("검색").desired_width(f32::INFINITY));
+        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t("검색", "Search")).desired_width(f32::INFINITY));
 
         ui.horizontal(|ui| {
             let (text, button) = match vault {
-                VaultState::Missing => ("비밀번호 볼트: 없음", None),
-                VaultState::Locked => ("비밀번호 볼트: 잠김", Some(("잠금 해제", SidebarAction::UnlockVault))),
-                VaultState::Unlocked => ("비밀번호 볼트: 열림", Some(("잠그기", SidebarAction::LockVault))),
+                VaultState::Missing => (t("비밀번호 볼트: 없음", "Password vault: none"), None),
+                VaultState::Locked => (
+                    t("비밀번호 볼트: 잠김", "Password vault: locked"),
+                    Some((t("잠금 해제", "Unlock"), SidebarAction::UnlockVault)),
+                ),
+                VaultState::Unlocked => (
+                    t("비밀번호 볼트: 열림", "Password vault: unlocked"),
+                    Some((t("잠그기", "Lock"), SidebarAction::LockVault)),
+                ),
             };
             ui.small(text);
             if let Some((label, a)) = button
@@ -131,7 +148,7 @@ impl Sidebar {
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             if store.profiles().is_empty() {
-                ui.weak("저장된 사이트가 없습니다.\n[+] 로 추가하세요.");
+                ui.weak(t("저장된 사이트가 없습니다.\n[+] 로 추가하세요.", "No saved sites.\nAdd one with [+]."));
                 return;
             }
             for (folder, items) in grouped(store, &self.filter) {
@@ -156,7 +173,7 @@ impl Sidebar {
             let response = ui
                 .push_id(&p.id, |ui| ui.selectable_label(selected, p.display_name()))
                 .inner
-                .on_hover_text(format!("{}  (더블클릭: 연결)", summary(p)));
+                .on_hover_text(tr!("{}  (더블클릭: 연결)", "{}  (double-click: connect)", summary(p)));
             if response.clicked() {
                 self.selected = Some(p.id.clone());
             }
@@ -165,10 +182,10 @@ impl Sidebar {
             }
             response.context_menu(|ui| {
                 let entries = [
-                    ("연결", SidebarAction::Connect(p.id.clone())),
-                    ("편집…", SidebarAction::Manage(Some(p.id.clone()))),
-                    ("복제", SidebarAction::Duplicate(p.id.clone())),
-                    ("삭제", SidebarAction::Delete(p.id.clone())),
+                    (t("연결", "Connect"), SidebarAction::Connect(p.id.clone())),
+                    (t("편집…", "Edit…"), SidebarAction::Manage(Some(p.id.clone()))),
+                    (t("복제", "Duplicate"), SidebarAction::Duplicate(p.id.clone())),
+                    (t("삭제", "Delete"), SidebarAction::Delete(p.id.clone())),
                 ];
                 for (label, a) in entries {
                     if ui.button(label).clicked() {

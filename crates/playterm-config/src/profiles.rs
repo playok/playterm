@@ -93,7 +93,7 @@ impl Default for SessionProfile {
             host: String::new(),
             port: Protocol::Ssh.default_port(),
             username: String::new(),
-            charset: Charset::Utf8,
+            charset: Charset::Auto,
             term_type: "xterm-256color".into(),
             save_password: false,
             identity_file: String::new(),
@@ -122,7 +122,7 @@ impl SessionProfile {
 
     /// A copy with a fresh id, for "duplicate".
     pub fn duplicate(&self) -> Self {
-        Self { id: random_id(), name: format!("{} (복사본)", self.display_name()), ..self.clone() }
+        Self { id: random_id(), name: playterm_i18n::tr!("{} (복사본)", "{} (copy)", self.display_name()), ..self.clone() }
     }
 }
 

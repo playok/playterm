@@ -3,6 +3,7 @@
 
 use eframe::egui::{self, Button, Key, Modifiers, RichText};
 use playterm_config::{ProfileStore, SessionProfile};
+use playterm_i18n::{t, tr};
 use zeroize::Zeroizing;
 
 use crate::profile_form::{FormOptions, ProfileForm};
@@ -135,7 +136,7 @@ impl SiteManager {
         let mut result = SiteManagerResult::Open;
         let folders = store.folders();
         let modal = egui::Modal::new(egui::Id::unique("site-manager")).show(ctx, |ui| {
-            ui.heading("사이트 관리");
+            ui.heading(t("사이트 관리", "Site Manager"));
             ui.add_space(6.0);
             // A modal has no natural height limit: give the body a fixed size, or the vertical
             // separator and scroll areas would stretch to the whole screen.
@@ -154,9 +155,9 @@ impl SiteManager {
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.weak(format!("사이트 {}개", store.profiles().len()));
+                ui.weak(tr!("사이트 {}개", "{} sites", store.profiles().len()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("닫기").clicked() {
+                    if ui.button(t("닫기", "Close")).clicked() {
                         next = Some(Next::Close);
                     }
                 });
@@ -186,20 +187,23 @@ impl SiteManager {
         result: &mut SiteManagerResult,
     ) {
         ui.horizontal(|ui| {
-            if ui.button("새 사이트").clicked() {
+            if ui.button(t("새 사이트", "New site")).clicked() {
                 *next = Some(Next::Select(Some(Selection::New(self.current_folder()))));
             }
             let site = self.selected_site().map(str::to_owned);
             let dirty = self.is_dirty();
             if ui
-                .add_enabled(site.is_some() && !dirty, Button::new("복제"))
-                .on_disabled_hover_text("저장된 사이트를 선택하세요 (변경 사항은 먼저 저장)")
+                .add_enabled(site.is_some() && !dirty, Button::new(t("복제", "Duplicate")))
+                .on_disabled_hover_text(t(
+                    "저장된 사이트를 선택하세요 (변경 사항은 먼저 저장)",
+                    "Select a saved site (save your changes first)",
+                ))
                 .clicked()
                 && let Some(id) = &site
             {
                 *result = SiteManagerResult::Duplicate(id.clone());
             }
-            if ui.add_enabled(self.selected.is_some(), Button::new("삭제")).clicked() {
+            if ui.add_enabled(self.selected.is_some(), Button::new(t("삭제", "Delete"))).clicked() {
                 match &site {
                     Some(id) => *result = SiteManagerResult::Delete(id.clone()),
                     // An unsaved site is simply dropped.
@@ -207,15 +211,15 @@ impl SiteManager {
                 }
             }
         });
-        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("검색").desired_width(f32::INFINITY));
+        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t("검색", "Search")).desired_width(f32::INFINITY));
         ui.add_space(2.0);
 
         egui::ScrollArea::vertical().id_salt("site-tree").auto_shrink([false, false]).show(ui, |ui| {
             if matches!(self.selected, Some(Selection::New(_))) {
-                let _ = ui.selectable_label(true, RichText::new("새 사이트").italics());
+                let _ = ui.selectable_label(true, RichText::new(t("새 사이트", "New site")).italics());
             }
             if store.profiles().is_empty() {
-                ui.weak("저장된 사이트가 없습니다.\n[새 사이트] 로 추가하세요.");
+                ui.weak(t("저장된 사이트가 없습니다.\n[새 사이트] 로 추가하세요.", "No saved sites.\nAdd one with [New site]."));
             }
             for (folder, items) in sidebar::grouped(store, &self.filter) {
                 if folder.is_empty() {
@@ -242,7 +246,7 @@ impl SiteManager {
             let response = ui
                 .push_id(("site", &p.id), |ui| ui.selectable_label(selected, p.display_name()))
                 .inner
-                .on_hover_text(format!("{}  (더블클릭: 연결)", sidebar::summary(p)));
+                .on_hover_text(tr!("{}  (더블클릭: 연결)", "{}  (double-click: connect)", sidebar::summary(p)));
             if response.clicked() && !selected {
                 *next = Some(Next::Select(Some(Selection::Site(p.id.clone()))));
             }
@@ -264,22 +268,27 @@ impl SiteManager {
         let site = self.selected_site().map(str::to_owned);
         let Some(form) = &mut self.form else {
             ui.add_space(40.0);
-            ui.vertical_centered(|ui| ui.weak("왼쪽에서 사이트를 선택하거나 [새 사이트] 를 누르세요."));
+            ui.vertical_centered(|ui| {
+                ui.weak(t(
+                    "왼쪽에서 사이트를 선택하거나 [새 사이트] 를 누르세요.",
+                    "Select a site on the left or click [New site].",
+                ))
+            });
             return;
         };
 
         let dirty = form.is_dirty();
         ui.horizontal(|ui| {
             let title = if is_new && form.profile.name.trim().is_empty() {
-                "새 사이트".to_owned()
+                t("새 사이트", "New site").to_owned()
             } else {
                 form.profile.display_name()
             };
             ui.strong(title);
             if is_new {
-                ui.weak("(저장 안 됨)");
+                ui.weak(t("(저장 안 됨)", "(not saved)"));
             } else if dirty {
-                ui.weak("(수정됨)");
+                ui.weak(t("(수정됨)", "(modified)"));
             }
         });
         ui.separator();
@@ -297,9 +306,9 @@ impl SiteManager {
         let mut connect = false;
         let mut revert = false;
         ui.horizontal(|ui| {
-            connect = ui.button("연결").clicked();
-            submit |= ui.add_enabled(dirty || is_new, Button::new("저장")).clicked();
-            revert = ui.add_enabled(dirty && !is_new, Button::new("되돌리기")).clicked();
+            connect = ui.button(t("연결", "Connect")).clicked();
+            submit |= ui.add_enabled(dirty || is_new, Button::new(t("저장", "Save"))).clicked();
+            revert = ui.add_enabled(dirty && !is_new, Button::new(t("되돌리기", "Revert"))).clicked();
         });
 
         if connect {
@@ -331,7 +340,7 @@ impl SiteManager {
     ) -> Option<SiteManagerResult> {
         let next = self.unsaved.clone()?;
         let name = match (&self.selected, &self.form) {
-            (Some(Selection::New(_)), Some(f)) if f.profile.name.trim().is_empty() => "새 사이트".to_owned(),
+            (Some(Selection::New(_)), Some(f)) if f.profile.name.trim().is_empty() => t("새 사이트", "New site").to_owned(),
             (_, Some(f)) => f.profile.display_name(),
             _ => String::new(),
         };
@@ -344,17 +353,17 @@ impl SiteManager {
         let mut answer = None;
         let modal = egui::Modal::new(egui::Id::unique("site-manager-unsaved")).show(ctx, |ui| {
             ui.set_width(340.0);
-            ui.heading("저장하지 않은 변경 사항");
-            ui.label(format!("'{name}' 의 변경 사항을 저장할까요?"));
+            ui.heading(t("저장하지 않은 변경 사항", "Unsaved changes"));
+            ui.label(tr!("'{name}' 의 변경 사항을 저장할까요?", "Save the changes to '{name}'?"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("저장").clicked() {
+                if ui.button(t("저장", "Save")).clicked() {
                     answer = Some(Answer::Save);
                 }
-                if ui.button("저장 안 함").clicked() {
+                if ui.button(t("저장 안 함", "Don't save")).clicked() {
                     answer = Some(Answer::Discard);
                 }
-                if ui.button("취소").clicked() {
+                if ui.button(t("취소", "Cancel")).clicked() {
                     answer = Some(Answer::Cancel);
                 }
             });

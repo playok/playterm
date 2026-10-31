@@ -10,6 +10,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
 use crate::charset::{Charset, InputEncoder, OutputDecoder};
+use crate::detect::Detector;
 use crate::log::{LogMode, SessionLog};
 use crate::palette::Palette;
 
@@ -56,6 +57,39 @@ impl Dimensions for Size {
     }
 }
 
+/// What reached the screen while the charset was still being detected.
+enum Segment {
+    Remote(Vec<u8>),
+    Local(String),
+}
+
+/// Most bytes kept for redrawing after detection; beyond this only new output is fixed.
+const REPLAY_LIMIT: usize = 512 * 1024;
+/// History lines carried over (as plain text) when a tab that already has content starts
+/// detecting, e.g. a connection made from the local prompt.
+const REPLAY_HISTORY_LINES: usize = 1000;
+
+/// Charset detection in progress ([`Charset::Auto`]).
+struct AutoDetect {
+    detector: Detector,
+    /// The screen before detection started, as plain text.
+    prefix: String,
+    /// Output since then, to redraw with the detected charset; `None` once too large.
+    segments: Option<Vec<Segment>>,
+    recorded: usize,
+}
+
+impl AutoDetect {
+    fn record(&mut self, segment: Segment, len: usize) {
+        self.recorded += len;
+        if self.recorded > REPLAY_LIMIT {
+            self.segments = None;
+        } else if let Some(segments) = &mut self.segments {
+            segments.push(segment);
+        }
+    }
+}
+
 /// One emulated terminal screen plus its wire-charset conversion.
 pub struct Terminal {
     term: Term<Listener>,
@@ -63,11 +97,17 @@ pub struct Terminal {
     decoder: OutputDecoder,
     encoder: InputEncoder,
     events: mpsc::Receiver<Event>,
+    /// A sender for a new `Term` when the screen is rebuilt.
+    listener: Listener,
+    scrollback: usize,
     palette: Palette,
     size: Size,
     log: Option<SessionLog>,
     /// Events raised outside the VT parser (log errors).
     pending: Vec<TerminalEvent>,
+    auto: Option<AutoDetect>,
+    /// The charset [`Charset::Auto`] settled on.
+    detected: Option<Charset>,
 }
 
 impl Terminal {
@@ -75,21 +115,42 @@ impl Terminal {
         let (tx, rx) = mpsc::channel();
         let size = Size { cols: cols.max(2), rows: rows.max(1) };
         let config = Config { scrolling_history: scrollback, ..Config::default() };
-        Self {
-            term: Term::new(config, &size, Listener(tx)),
+        let listener = Listener(tx);
+        let mut terminal = Self {
+            term: Term::new(config, &size, listener.clone()),
             parser: Processor::new(),
             decoder: OutputDecoder::new(charset),
             encoder: InputEncoder::new(charset),
             events: rx,
+            listener,
+            scrollback,
             palette: Palette::default(),
             size,
             log: None,
             pending: Vec::new(),
-        }
+            auto: None,
+            detected: None,
+        };
+        terminal.set_charset(charset);
+        terminal
     }
 
     /// Feeds raw bytes received from the remote side.
     pub fn feed(&mut self, bytes: &[u8]) {
+        let detected = match &mut self.auto {
+            Some(auto) => {
+                auto.record(Segment::Remote(bytes.to_vec()), bytes.len());
+                auto.detector.push(bytes)
+            }
+            None => None,
+        };
+        self.feed_decoded(bytes);
+        if let Some(charset) = detected {
+            self.settle(charset);
+        }
+    }
+
+    fn feed_decoded(&mut self, bytes: &[u8]) {
         let mut log_error = None;
         if let Some(log) = &mut self.log
             && let Err(e) = log.record_raw(bytes)
@@ -134,13 +195,92 @@ impl Terminal {
 
     /// Feeds locally generated UTF-8 text (status messages), bypassing the wire charset.
     pub fn feed_local(&mut self, text: &str) {
+        if let Some(auto) = &mut self.auto {
+            auto.record(Segment::Local(text.to_owned()), text.len());
+        }
         self.parser.advance(&mut self.term, text.as_bytes());
     }
 
-    /// Switches the wire charset (when a tab connects to a different host).
+    /// Switches the wire charset (when a tab connects to a different host). With
+    /// [`Charset::Auto`] the output is read as UTF-8 until it shows which charset it is in.
     pub fn set_charset(&mut self, charset: Charset) {
         self.decoder = OutputDecoder::new(charset);
         self.encoder = InputEncoder::new(charset);
+        self.detected = None;
+        self.auto = (charset == Charset::Auto).then(|| AutoDetect {
+            detector: Detector::default(),
+            prefix: self.screen_text(),
+            segments: Some(Vec::new()),
+            recorded: 0,
+        });
+    }
+
+    /// The charset [`Charset::Auto`] detected, once it has.
+    pub fn detected_charset(&self) -> Option<Charset> {
+        self.detected
+    }
+
+    /// Uses `charset` from now on. Output already shown in the wrong one is redrawn.
+    fn settle(&mut self, charset: Charset) {
+        let Some(auto) = self.auto.take() else { return };
+        self.detected = Some(charset);
+        if charset == Charset::Utf8 {
+            return; // what was shown was decoded as UTF-8 already
+        }
+        self.decoder = OutputDecoder::new(charset);
+        self.encoder = InputEncoder::new(charset);
+        if let Some(segments) = auto.segments {
+            self.rebuild(&auto.prefix, segments);
+        }
+    }
+
+    /// Redraws the screen from scratch: `prefix` (the earlier screen), then the recorded output.
+    fn rebuild(&mut self, prefix: &str, segments: Vec<Segment>) {
+        let mut kept = self.channel_events();
+        let config = Config { scrolling_history: self.scrollback, ..Config::default() };
+        self.term = Term::new(config, &self.size, self.listener.clone());
+        self.parser = Processor::new();
+        // The log has this output already; replaying must not write it twice.
+        let log = self.log.take();
+        self.parser.advance(&mut self.term, prefix.as_bytes());
+        for segment in segments {
+            match segment {
+                Segment::Remote(bytes) => {
+                    let utf8 = self.decoder.decode(&bytes).to_vec();
+                    self.parser.advance(&mut self.term, &utf8);
+                }
+                Segment::Local(text) => self.parser.advance(&mut self.term, text.as_bytes()),
+            }
+        }
+        self.log = log;
+        // Replies the redraw produced were sent the first time; titles are kept.
+        kept.extend(self.channel_events().into_iter().filter(|e| matches!(e, TerminalEvent::Title(_))));
+        self.pending.extend(kept);
+    }
+
+    /// The history and screen up to the cursor as plain text lines (colors are not kept).
+    fn screen_text(&self) -> String {
+        let grid = self.term.grid();
+        let cursor = grid.cursor.point;
+        let first = (-(grid.history_size() as i32)).max(cursor.line.0 - REPLAY_HISTORY_LINES as i32);
+        let mut out = String::new();
+        for line in first..=cursor.line.0 {
+            let row = &grid[Line(line)];
+            let end = if line == cursor.line.0 { cursor.column.0 } else { self.size.cols };
+            let text: String = (0..end.min(self.size.cols))
+                .map(|c| &row[Column(c)])
+                .filter(|cell| !cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER))
+                .map(|cell| if cell.c == '\0' { ' ' } else { cell.c })
+                .collect();
+            if line == cursor.line.0 {
+                out.push_str(&text);
+            } else {
+                out.push_str(text.trim_end());
+                out.push_str("\r\n");
+            }
+        }
+        // Nothing but empty lines: a new tab.
+        if out.trim().is_empty() { String::new() } else { out }
     }
 
     /// Turns off what a remote program may have left on: alternate screen, origin mode and
@@ -278,6 +418,7 @@ impl Terminal {
 
     /// Changes how many lines of history are kept; shrinking drops the oldest lines.
     pub fn set_scrollback(&mut self, lines: usize) {
+        self.scrollback = lines;
         // This also re-announces the current title, which leaves the tab title unchanged.
         self.term.set_options(Config { scrolling_history: lines, ..Config::default() });
     }
@@ -290,6 +431,13 @@ impl Terminal {
             self.fail_log(e);
         }
         let mut out = std::mem::take(&mut self.pending);
+        out.extend(self.channel_events());
+        out
+    }
+
+    /// Events the terminal emulator raised, translated for the host.
+    fn channel_events(&mut self) -> Vec<TerminalEvent> {
+        let mut out = Vec::new();
         while let Ok(event) = self.events.try_recv() {
             match event {
                 Event::PtyWrite(text) => out.push(TerminalEvent::Reply(self.encoder.encode(&text))),
@@ -321,7 +469,9 @@ mod tests {
     fn row_text(t: &Terminal, line: i32) -> String {
         let grid = t.term().grid();
         (0..t.cols())
-            .map(|c| grid[Point::new(Line(line), Column(c))].c)
+            .map(|c| &grid[Point::new(Line(line), Column(c))])
+            .filter(|cell| !cell.flags.contains(Flags::WIDE_CHAR_SPACER))
+            .map(|cell| cell.c)
             .collect::<String>()
             .trim_end()
             .to_string()
@@ -373,6 +523,55 @@ mod tests {
         assert_eq!(t.cursor_line_text(), "");
         t.feed("암호: ".as_bytes());
         assert_eq!(t.cursor_line_text(), "암호: ", "wide characters once each");
+    }
+
+    fn cp949(text: &str) -> Vec<u8> {
+        encoding_rs::EUC_KR.encode(text).0.into_owned()
+    }
+
+    #[test]
+    fn auto_detects_cp949_and_redraws() {
+        let mut t = Terminal::new(30, 5, Charset::Auto, 100);
+        t.feed_local("연결 중...\r\n");
+        // A device-attributes query: answered once, not again when the screen is redrawn.
+        t.feed(b"\x1b[c\x1b]0;router\x07");
+        t.feed(&cp949("환영합니다\r\n"));
+        assert_eq!(t.detected_charset(), Some(Charset::Cp949));
+        assert_eq!(row_text(&t, 0), "연결 중...");
+        assert_eq!(row_text(&t, 1), "환영합니다", "the first Hangul is redrawn correctly");
+        let events = t.take_events();
+        assert_eq!(events.iter().filter(|e| matches!(e, TerminalEvent::Reply(_))).count(), 1);
+        assert!(events.contains(&TerminalEvent::Title(Some("router".into()))));
+        // Output and input use CP949 from now on.
+        t.feed(&cp949("암호: "));
+        assert_eq!(row_text(&t, 2), "암호:");
+        assert_eq!(t.encode_input("한"), cp949("한"));
+    }
+
+    #[test]
+    fn auto_detects_utf8() {
+        let mut t = Terminal::new(30, 3, Charset::Auto, 100);
+        t.feed("안녕하세요\r\n".as_bytes());
+        assert_eq!(t.detected_charset(), Some(Charset::Utf8));
+        assert_eq!(row_text(&t, 0), "안녕하세요");
+        assert_eq!(t.encode_input("한"), "한".as_bytes());
+    }
+
+    #[test]
+    fn auto_keeps_earlier_screen_text() {
+        // A tab with a local prompt connects; the prompt history stays after the redraw.
+        let mut t = Terminal::new(30, 6, Charset::Utf8, 100);
+        t.feed_local("playterm> ls\r\nfile.txt\r\nplayterm> telnet r\r\n");
+        t.set_charset(Charset::Auto);
+        assert_eq!(t.detected_charset(), None);
+        t.feed(&cp949("사용자: "));
+        assert_eq!(t.detected_charset(), Some(Charset::Cp949));
+        assert_eq!(row_text(&t, 0), "playterm> ls");
+        assert_eq!(row_text(&t, 2), "playterm> telnet r");
+        assert_eq!(row_text(&t, 3), "사용자:");
+        // A fixed charset ends detection.
+        t.set_charset(Charset::Utf8);
+        assert_eq!(t.detected_charset(), None);
     }
 
     #[test]

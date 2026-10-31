@@ -7,6 +7,43 @@ use serde::{Deserialize, Serialize};
 
 use crate::fsutil::write_atomic;
 
+/// Language of the user interface.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Language {
+    #[default]
+    #[serde(rename = "ko")]
+    Korean,
+    #[serde(rename = "en")]
+    English,
+}
+
+impl Language {
+    pub const ALL: [Language; 2] = [Language::Korean, Language::English];
+
+    /// The language's own name, the same in either UI language.
+    pub fn name(self) -> &'static str {
+        match self {
+            Language::Korean => "한국어",
+            Language::English => "English",
+        }
+    }
+}
+
+/// Light or dark windows, menus and dialogs (the terminal has its own color theme).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiTheme {
+    #[default]
+    Dark,
+    Light,
+    /// Follow the Windows light/dark app mode.
+    System,
+}
+
+impl UiTheme {
+    pub const ALL: [UiTheme; 3] = [UiTheme::Dark, UiTheme::Light, UiTheme::System];
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -20,6 +57,8 @@ pub struct AppSettings {
     pub scrollback: usize,
     /// Show the status bar under the terminal.
     pub status_bar: bool,
+    pub language: Language,
+    pub ui_theme: UiTheme,
 }
 
 impl AppSettings {
@@ -65,6 +104,8 @@ impl Default for AppSettings {
             theme: "Campbell".into(),
             scrollback: 10_000,
             status_bar: true,
+            language: Language::Korean,
+            ui_theme: UiTheme::Dark,
         }
     }
 }
@@ -85,6 +126,8 @@ mod tests {
             theme: "Dracula".into(),
             scrollback: 5000,
             status_bar: false,
+            language: Language::English,
+            ui_theme: UiTheme::System,
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);

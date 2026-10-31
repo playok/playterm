@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use playterm_config::SessionProfile;
+use playterm_i18n::{t, tr};
 use zeroize::Zeroizing;
 
 use crate::profile_form::{FormOptions, ProfileForm};
@@ -34,16 +35,16 @@ impl QuickConnect {
         let mut result = QuickConnectResult::Open;
         let close = modal("quick-connect", ctx, |ui| {
             ui.set_width(380.0);
-            ui.heading("빠른 연결");
+            ui.heading(t("빠른 연결", "Quick Connect"));
             ui.add_space(8.0);
             let mut submit =
                 self.form.ui(ui, &FormOptions { meta: false, save_password: false, folders: &[] });
             ui.add_space(4.0);
-            ui.checkbox(&mut self.save, "사이트 목록에 저장");
+            ui.checkbox(&mut self.save, t("사이트 목록에 저장", "Save to the site list"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                submit |= ui.button("연결").clicked();
-                if ui.button("취소").clicked() {
+                submit |= ui.button(t("연결", "Connect")).clicked();
+                if ui.button(t("취소", "Cancel")).clicked() {
                     result = QuickConnectResult::Cancel;
                 }
             });
@@ -118,19 +119,22 @@ impl VaultDialog {
         let close = modal("vault", ctx, |ui| {
             ui.set_width(380.0);
             ui.heading(match self.mode {
-                VaultMode::Unlock => "비밀번호 볼트 잠금 해제",
-                VaultMode::Create => "마스터 비밀번호 설정",
+                VaultMode::Unlock => t("비밀번호 볼트 잠금 해제", "Unlock password vault"),
+                VaultMode::Create => t("마스터 비밀번호 설정", "Set master password"),
             });
             if !self.reason.is_empty() {
                 ui.label(&self.reason);
             }
             if self.mode == VaultMode::Create {
-                ui.label("저장된 비밀번호는 이 마스터 비밀번호로 암호화됩니다.\n잊어버리면 복구할 수 없습니다.");
+                ui.label(t(
+                    "저장된 비밀번호는 이 마스터 비밀번호로 암호화됩니다.\n잊어버리면 복구할 수 없습니다.",
+                    "Saved passwords are encrypted with this master password.\nIf you forget it, they cannot be recovered.",
+                ));
             }
             ui.add_space(6.0);
 
             let mut enter = false;
-            ui.label("마스터 비밀번호");
+            ui.label(t("마스터 비밀번호", "Master password"));
             let first = ui.add(egui::TextEdit::singleline(&mut *self.master).password(true));
             enter |= first.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if !self.focus_requested {
@@ -138,7 +142,7 @@ impl VaultDialog {
                 self.focus_requested = true;
             }
             if self.mode == VaultMode::Create {
-                ui.label("마스터 비밀번호 확인");
+                ui.label(t("마스터 비밀번호 확인", "Confirm master password"));
                 let second = ui.add(egui::TextEdit::singleline(&mut *self.confirm).password(true));
                 enter |= second.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             }
@@ -148,17 +152,17 @@ impl VaultDialog {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                let label = if self.mode == VaultMode::Unlock { "잠금 해제" } else { "만들기" };
+                let label = if self.mode == VaultMode::Unlock { t("잠금 해제", "Unlock") } else { t("만들기", "Create") };
                 if ui.button(label).clicked() || enter {
                     if self.master.is_empty() {
-                        self.error = Some("마스터 비밀번호를 입력하세요".into());
+                        self.error = Some(t("마스터 비밀번호를 입력하세요", "Enter the master password").into());
                     } else if self.mode == VaultMode::Create && *self.master != *self.confirm {
-                        self.error = Some("두 비밀번호가 다릅니다".into());
+                        self.error = Some(t("두 비밀번호가 다릅니다", "The passwords do not match").into());
                     } else {
                         result = VaultResult::Submit(self.master.clone());
                     }
                 }
-                if ui.button("취소").clicked() {
+                if ui.button(t("취소", "Cancel")).clicked() {
                     result = VaultResult::Cancel;
                 }
             });
@@ -166,19 +170,22 @@ impl VaultDialog {
             if self.mode == VaultMode::Unlock {
                 ui.add_space(6.0);
                 if !self.confirm_reset {
-                    if ui.small_button("마스터 비밀번호를 잊었나요?").clicked() {
+                    if ui.small_button(t("마스터 비밀번호를 잊었나요?", "Forgot the master password?")).clicked() {
                         self.confirm_reset = true;
                     }
                 } else {
                     ui.colored_label(
                         ui.visuals().warn_fg_color,
-                        "볼트를 초기화하면 저장된 모든 비밀번호가 삭제됩니다.\n세션 목록은 유지됩니다.",
+                        t(
+                            "볼트를 초기화하면 저장된 모든 비밀번호가 삭제됩니다.\n세션 목록은 유지됩니다.",
+                            "Resetting the password vault deletes every saved password.\nThe site list is kept.",
+                        ),
                     );
                     ui.horizontal(|ui| {
-                        if ui.button("초기화").clicked() {
+                        if ui.button(t("초기화", "Reset")).clicked() {
                             result = VaultResult::Reset;
                         }
-                        if ui.button("돌아가기").clicked() {
+                        if ui.button(t("돌아가기", "Back")).clicked() {
                             self.confirm_reset = false;
                         }
                     });
@@ -207,7 +214,7 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
             if ui.button(ok_label).clicked() {
                 answer = Some(true);
             }
-            if ui.button("취소").clicked() {
+            if ui.button(t("취소", "Cancel")).clicked() {
                 answer = Some(false);
             }
         });
@@ -218,41 +225,53 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
 // ---------------------------------------------------------------------------------------------
 // Help
 
-const SHORTCUTS: &[(&str, &str)] = &[
-    ("Ctrl+Shift+N", "새 탭 (로컬 명령 프롬프트)"),
-    ("Ctrl+Shift+T", "빠른 연결"),
-    ("Ctrl+Shift+S", "사이트 관리"),
-    ("Ctrl+Shift+B", "사이트 목록 표시/숨김"),
-    ("Ctrl+Shift+F", "찾기 (스크롤백 포함, Enter: 위로 · Shift+Enter: 아래로)"),
-    ("Ctrl+Shift+E", "SFTP 파일 브라우저"),
-    ("Ctrl+Tab / Ctrl+Shift+Tab", "다음 / 이전 탭"),
-    ("Ctrl+Shift+D", "탭 복제"),
-    ("Ctrl+Shift+W", "탭 닫기"),
-    ("Ctrl+Shift+C / Ctrl+Shift+V", "복사 / 붙여넣기"),
-    ("Ctrl+C", "선택 영역이 있으면 복사, 없으면 ^C 전송"),
-    ("Ctrl+V, Shift+Insert", "붙여넣기"),
-    ("Shift+드래그", "마우스를 쓰는 프로그램 안에서도 로컬 선택"),
-    ("F11", "전체 화면"),
-    ("Ctrl+= / Ctrl+- / Ctrl+0", "글꼴 크게 / 작게 / 기본 크기"),
-    ("Ctrl+휠", "글꼴 크기"),
-];
+/// Keys and what they do, in the current language.
+fn shortcut_list() -> [(&'static str, &'static str); 16] {
+    [
+        ("Ctrl+Shift+N", t("새 탭 (로컬 명령 프롬프트)", "New tab (local prompt)")),
+        ("Ctrl+Shift+T", t("빠른 연결", "Quick Connect")),
+        ("Ctrl+Shift+S", t("사이트 관리", "Site Manager")),
+        ("Ctrl+Shift+B", t("사이트 목록 표시/숨김", "Show/hide the site list")),
+        (
+            "Ctrl+Shift+F",
+            t(
+                "찾기 (스크롤백 포함, Enter: 위로 · Shift+Enter: 아래로)",
+                "Find (including scrollback, Enter: up · Shift+Enter: down)",
+            ),
+        ),
+        ("Ctrl+Shift+E", t("SFTP 파일 브라우저", "SFTP file browser")),
+        ("Ctrl+Tab / Ctrl+Shift+Tab", t("다음 / 이전 탭", "Next / previous tab")),
+        ("Ctrl+Shift+D", t("탭 복제", "Duplicate tab")),
+        ("Ctrl+Shift+W", t("탭 닫기", "Close tab")),
+        ("Ctrl+Shift+C / Ctrl+Shift+V", t("복사 / 붙여넣기", "Copy / paste")),
+        ("Ctrl+C", t("선택 영역이 있으면 복사, 없으면 ^C 전송", "Copy if there is a selection, otherwise send ^C")),
+        ("Ctrl+V, Shift+Insert", t("붙여넣기", "Paste")),
+        (
+            t("Shift+드래그", "Shift+drag"),
+            t("마우스를 쓰는 프로그램 안에서도 로컬 선택", "Select locally even in programs that use the mouse"),
+        ),
+        ("F11", t("전체 화면", "Full screen")),
+        ("Ctrl+= / Ctrl+- / Ctrl+0", t("글꼴 크게 / 작게 / 기본 크기", "Larger / smaller / default font size")),
+        (t("Ctrl+휠", "Ctrl+wheel"), t("글꼴 크기", "Font size")),
+    ]
+}
 
 /// Keyboard shortcut list. Returns `true` once closed.
 pub fn shortcuts(ctx: &egui::Context) -> bool {
     let mut done = false;
     let close = modal("shortcuts", ctx, |ui| {
         ui.set_width(440.0);
-        ui.heading("단축키");
+        ui.heading(t("단축키", "Keyboard shortcuts"));
         ui.add_space(6.0);
         egui::Grid::new("shortcut-list").num_columns(2).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
-            for (keys, what) in SHORTCUTS {
-                ui.monospace(*keys);
-                ui.label(*what);
+            for (keys, what) in shortcut_list() {
+                ui.monospace(keys);
+                ui.label(what);
                 ui.end_row();
             }
         });
         ui.add_space(8.0);
-        done = ui.button("닫기").clicked();
+        done = ui.button(t("닫기", "Close")).clicked();
     });
     done || close
 }
@@ -264,12 +283,15 @@ pub fn about(ctx: &egui::Context) -> bool {
         ui.set_width(340.0);
         ui.vertical_centered(|ui| {
             ui.heading("playterm");
-            ui.label(format!("버전 {}", env!("CARGO_PKG_VERSION")));
+            ui.label(tr!("버전 {}", "Version {}", env!("CARGO_PKG_VERSION")));
             ui.add_space(6.0);
-            ui.label("Windows용 SSH · Telnet · 시리얼 터미널");
-            ui.weak("SFTP, 포트 포워딩, 세션 로그, 한글(CP949) 지원");
+            ui.label(t("Windows용 SSH · Telnet · 시리얼 터미널", "SSH · Telnet · serial terminal for Windows"));
+            ui.weak(t(
+                "SFTP, 포트 포워딩, 세션 로그, 한글(CP949) 지원",
+                "SFTP, port forwarding, session logs, Korean (CP949) support",
+            ));
             ui.add_space(8.0);
-            done = ui.button("확인").clicked();
+            done = ui.button(t("확인", "OK")).clicked();
         });
     });
     done || close
@@ -283,27 +305,29 @@ pub fn host_key(ctx: &egui::Context, session: &mut Session) {
     egui::Modal::new(egui::Id::unique(("host-key", session.id))).show(ctx, |ui| {
         let check = session.host_key.as_ref().expect("checked by caller");
         ui.set_width(460.0);
-        ui.heading("알 수 없는 호스트");
+        ui.heading(t("알 수 없는 호스트", "Unknown host"));
         ui.add_space(6.0);
-        ui.label(format!(
+        ui.label(tr!(
             "{}:{} 의 호스트 키가 known_hosts에 없습니다.\n처음 접속하는 서버라면 지문이 맞는지 확인한 뒤 진행하세요.",
-            check.host, check.port
+            "The host key of {}:{} is not in known_hosts.\nIf this is your first connection to the server, check that the fingerprint is correct before continuing.",
+            check.host,
+            check.port
         ));
         ui.add_space(6.0);
         egui::Grid::new("hk").num_columns(2).show(ui, |ui| {
-            ui.label("키 종류");
+            ui.label(t("키 종류", "Key type"));
             ui.monospace(&check.algorithm);
             ui.end_row();
-            ui.label("지문");
+            ui.label(t("지문", "Fingerprint"));
             ui.monospace(&check.fingerprint);
             ui.end_row();
         });
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            if ui.button("신뢰하고 연결").clicked() {
+            if ui.button(t("신뢰하고 연결", "Trust and connect")).clicked() {
                 decision = Some(true);
             }
-            if ui.button("취소").clicked() {
+            if ui.button(t("취소", "Cancel")).clicked() {
                 decision = Some(false);
             }
         });
@@ -338,10 +362,10 @@ pub fn auth(ctx: &egui::Context, session: &mut Session) {
         }
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            if ui.button("확인").clicked() || enter {
+            if ui.button(t("확인", "OK")).clicked() || enter {
                 submit = Some(true);
             }
-            if ui.button("취소").clicked() {
+            if ui.button(t("취소", "Cancel")).clicked() {
                 submit = Some(false);
             }
         });

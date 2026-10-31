@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use playterm_config::SessionProfile;
+use playterm_i18n::{t, tr};
 use playterm_net::{ForwardKind, ForwardRule, Protocol, SerialFlow, SerialParity, SerialSettings};
 use playterm_term::Charset;
 
@@ -73,7 +74,7 @@ fn parse_forwards(spec: &str, notes: &mut Vec<String>) -> Vec<ForwardRule> {
             Some('R') => ForwardKind::Remote,
             Some('D') => ForwardKind::Dynamic,
             _ => {
-                notes.push(format!("포트 포워딩 '{entry}' 을(를) 읽을 수 없습니다"));
+                notes.push(tr!("포트 포워딩 '{entry}' 을(를) 읽을 수 없습니다", "Cannot read port forwarding '{entry}'"));
                 continue;
             }
         };
@@ -81,11 +82,11 @@ fn parse_forwards(spec: &str, notes: &mut Vec<String>) -> Vec<ForwardRule> {
         let rule = match (kind, rest.split_once('=')) {
             (ForwardKind::Dynamic, _) => ForwardRule::parse(kind, rest),
             (_, Some((src, dst))) => ForwardRule::parse(kind, &format!("{src}:{dst}")),
-            (_, None) => Err(format!("대상이 없습니다: {entry}")),
+            (_, None) => Err(tr!("대상이 없습니다: {entry}", "Missing destination: {entry}")),
         };
         match rule {
             Ok(r) => rules.push(r),
-            Err(e) => notes.push(format!("포트 포워딩 건너뜀: {e}")),
+            Err(e) => notes.push(tr!("포트 포워딩 건너뜀: {e}", "Port forwarding skipped: {e}")),
         }
     }
     rules
@@ -95,8 +96,11 @@ fn charset(code_page: &str) -> Charset {
     let cp = code_page.to_lowercase();
     if ["949", "euc-kr", "ks c 5601", "ksc", "korean"].iter().any(|k| cp.contains(k)) {
         Charset::Cp949
-    } else {
+    } else if cp.contains("utf-8") || cp.contains("utf8") {
         Charset::Utf8
+    } else {
+        // Not set (or a code page we do not have): let the output decide.
+        Charset::Auto
     }
 }
 
@@ -116,7 +120,7 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
         "telnet" => Protocol::Telnet,
         "serial" => Protocol::Serial,
         other => {
-            let reason = format!("{other} 프로토콜은 지원하지 않습니다");
+            let reason = tr!("{other} 프로토콜은 지원하지 않습니다", "The {other} protocol is not supported");
             return PuttySession { name: name.to_owned(), profile: Err(reason), notes };
         }
     };
@@ -130,7 +134,8 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
     if protocol == Protocol::Serial {
         let line = text("SerialLine");
         if line.is_empty() {
-            return PuttySession { name: name.to_owned(), profile: Err("시리얼 포트가 비어 있습니다".into()), notes };
+            let reason = t("시리얼 포트가 비어 있습니다", "The serial port is empty").into();
+            return PuttySession { name: name.to_owned(), profile: Err(reason), notes };
         }
         let mut s = SerialSettings { port: line.to_uppercase(), ..Default::default() };
         s.baud = number("SerialSpeed").filter(|&b| b > 0).unwrap_or(s.baud);
@@ -142,7 +147,7 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
             2 => SerialParity::Even,
             0 => SerialParity::None,
             _ => {
-                notes.push("Mark/Space 패리티는 지원하지 않아 None 으로 설정했습니다".into());
+                notes.push(t("Mark/Space 패리티는 지원하지 않아 None 으로 설정했습니다", "Mark/Space parity is not supported, set to None").into());
                 SerialParity::None
             }
         };
@@ -151,7 +156,10 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
             2 => SerialFlow::Hardware,
             0 => SerialFlow::None,
             _ => {
-                notes.push("DSR/DTR 흐름 제어는 지원하지 않아 None 으로 설정했습니다".into());
+                notes.push(
+                    t("DSR/DTR 흐름 제어는 지원하지 않아 None 으로 설정했습니다", "DSR/DTR flow control is not supported, set to None")
+                        .into(),
+                );
                 SerialFlow::None
             }
         };
@@ -171,14 +179,21 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
         host = h;
     }
     if host.is_empty() {
-        return PuttySession { name: name.to_owned(), profile: Err("호스트가 비어 있습니다".into()), notes };
+        let reason = t("호스트가 비어 있습니다", "The host is empty").into();
+        return PuttySession { name: name.to_owned(), profile: Err(reason), notes };
     }
     p.host = host;
     p.port = number("PortNumber").and_then(|n| u16::try_from(n).ok()).filter(|&n| n > 0).unwrap_or(protocol.default_port());
 
     if protocol == Protocol::Ssh {
         if user.is_empty() {
-            notes.push("사용자 이름이 없습니다. 가져온 뒤 사이트 관리에서 입력하세요".into());
+            notes.push(
+                t(
+                    "사용자 이름이 없습니다. 가져온 뒤 사이트 관리에서 입력하세요",
+                    "No user name. Enter it in the Site Manager after the import",
+                )
+                .into(),
+            );
         }
         p.username = user;
         p.identity_file = text("PublicKeyFile");
@@ -231,7 +246,7 @@ mod registry {
         match unsafe { RegOpenKeyExW(parent, path.as_ptr(), 0, KEY_READ, &mut key) } {
             ERROR_SUCCESS => Ok(Some(Key(key))),
             ERROR_FILE_NOT_FOUND => Ok(None),
-            e => Err(format!("레지스트리를 열 수 없습니다 (오류 {e})")),
+            e => Err(playterm_i18n::tr!("레지스트리를 열 수 없습니다 (오류 {e})", "Cannot open the registry (error {e})")),
         }
     }
 
@@ -375,7 +390,9 @@ mod tests {
     #[test]
     fn converts_telnet_serial_and_rejects_others() {
         let p = convert("router", &values(&[("Protocol", s("telnet")), ("HostName", s("10.0.0.1"))])).profile.unwrap();
-        assert_eq!((p.protocol, p.port, p.charset), (Protocol::Telnet, 23, Charset::Utf8));
+        assert_eq!((p.protocol, p.port, p.charset), (Protocol::Telnet, 23, Charset::Auto));
+        let utf8 = values(&[("HostName", s("h")), ("UserName", s("u")), ("LineCodePage", s("UTF-8"))]);
+        assert_eq!(convert("u", &utf8).profile.unwrap().charset, Charset::Utf8);
 
         let v = values(&[
             ("Protocol", s("serial")),

@@ -6,6 +6,7 @@
 //! - an xterm-compatible color palette.
 
 mod charset;
+mod detect;
 mod log;
 mod palette;
 mod search;

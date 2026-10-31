@@ -10,14 +10,16 @@ pub enum Charset {
     Utf8,
     /// Windows code page 949 (superset of EUC-KR), common on older Korean hosts and devices.
     Cp949,
+    /// UTF-8 until the host's output shows which of the two it uses (see `detect`).
+    Auto,
 }
 
 impl Charset {
-    pub const ALL: [Charset; 2] = [Charset::Utf8, Charset::Cp949];
+    pub const ALL: [Charset; 3] = [Charset::Auto, Charset::Utf8, Charset::Cp949];
 
     fn encoding(self) -> Option<&'static Encoding> {
         match self {
-            Charset::Utf8 => None,
+            Charset::Utf8 | Charset::Auto => None,
             // encoding_rs' EUC_KR is the WHATWG "euc-kr" = windows-949 (UHC).
             Charset::Cp949 => Some(EUC_KR),
         }
@@ -29,6 +31,7 @@ impl fmt::Display for Charset {
         f.write_str(match self {
             Charset::Utf8 => "UTF-8",
             Charset::Cp949 => "CP949 (EUC-KR)",
+            Charset::Auto => playterm_i18n::t("자동 감지", "Auto-detect"),
         })
     }
 }

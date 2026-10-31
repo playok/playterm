@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
+use playterm_i18n::{t, tr};
 use russh_sftp::client::SftpSession;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -135,18 +136,20 @@ impl SftpConnection {
 
     pub fn mkdir(&self, path: &str) {
         let path = path.to_owned();
-        self.op(format!("폴더 만들기 {path}"), move |sftp| async move { Ok(sftp.create_dir(path).await?) });
+        self.op(tr!("폴더 만들기 {path}", "Create folder {path}"), move |sftp| async move { Ok(sftp.create_dir(path).await?) });
     }
 
     pub fn rename(&self, from: &str, to: &str) {
         let (from, to) = (from.to_owned(), to.to_owned());
-        self.op(format!("이름 바꾸기 {from} → {to}"), move |sftp| async move { Ok(sftp.rename(from, to).await?) });
+        self.op(tr!("이름 바꾸기 {from} → {to}", "Rename {from} → {to}"), move |sftp| async move {
+            Ok(sftp.rename(from, to).await?)
+        });
     }
 
     /// Removes a file, or a directory with everything in it.
     pub fn remove(&self, path: &str, is_dir: bool) {
         let path = path.to_owned();
-        self.op(format!("삭제 {path}"), move |sftp| async move {
+        self.op(tr!("삭제 {path}", "Delete {path}"), move |sftp| async move {
             if is_dir { remove_tree(&sftp, &path).await } else { Ok(sftp.remove_file(path).await?) }
         });
     }
@@ -258,7 +261,7 @@ impl Progress {
     /// Records progress; fails once the transfer was cancelled.
     fn advance(&self, bytes: usize) -> anyhow::Result<()> {
         if self.cancelled.load(Ordering::Relaxed) {
-            anyhow::bail!("취소됨");
+            anyhow::bail!(t("취소됨", "Cancelled"));
         }
         self.done.fetch_add(bytes as u64, Ordering::Relaxed);
         let mut last = self.last_emit.lock().expect("progress clock");
@@ -285,11 +288,11 @@ impl Progress {
 }
 
 async fn list(sftp: &SftpSession, path: &str) -> anyhow::Result<(String, Vec<RemoteEntry>)> {
-    let canonical = sftp.canonicalize(path).await.with_context(|| format!("{path} 경로를 찾을 수 없습니다"))?;
+    let canonical = sftp.canonicalize(path).await.with_context(|| tr!("{path} 경로를 찾을 수 없습니다", "Path not found: {path}"))?;
     let mut entries: Vec<RemoteEntry> = sftp
         .read_dir(canonical.clone())
         .await
-        .with_context(|| format!("{canonical} 을(를) 읽을 수 없습니다"))?
+        .with_context(|| tr!("{canonical} 을(를) 읽을 수 없습니다", "Cannot read {canonical}"))?
         .filter(|e| e.file_name() != "." && e.file_name() != "..")
         .map(|e| {
             let meta = e.metadata();
@@ -309,8 +312,10 @@ async fn list(sftp: &SftpSession, path: &str) -> anyhow::Result<(String, Vec<Rem
 
 async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress: Progress) -> anyhow::Result<()> {
     let result = async {
-        let mut src = sftp.open(remote).await.with_context(|| format!("{remote} 을(를) 열 수 없습니다"))?;
-        let mut dst = tokio::fs::File::create(local).await.with_context(|| format!("{} 을(를) 만들 수 없습니다", local.display()))?;
+        let mut src = sftp.open(remote).await.with_context(|| tr!("{remote} 을(를) 열 수 없습니다", "Cannot open {remote}"))?;
+        let mut dst = tokio::fs::File::create(local)
+            .await
+            .with_context(|| tr!("{} 을(를) 만들 수 없습니다", "Cannot create {}", local.display()))?;
         let mut buf = vec![0u8; CHUNK];
         loop {
             let n = src.read(&mut buf).await?;
@@ -333,8 +338,10 @@ async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress:
 
 async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: Progress) -> anyhow::Result<()> {
     let result = async {
-        let mut src = tokio::fs::File::open(local).await.with_context(|| format!("{} 을(를) 열 수 없습니다", local.display()))?;
-        let mut dst = sftp.create(remote).await.with_context(|| format!("{remote} 을(를) 만들 수 없습니다"))?;
+        let mut src = tokio::fs::File::open(local)
+            .await
+            .with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", local.display()))?;
+        let mut dst = sftp.create(remote).await.with_context(|| tr!("{remote} 을(를) 만들 수 없습니다", "Cannot create {remote}"))?;
         let mut buf = vec![0u8; CHUNK];
         loop {
             let n = src.read(&mut buf).await?;
@@ -416,7 +423,7 @@ async fn upload_tree(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     for rel in dirs {
         let target = if rel.is_empty() { remote.to_owned() } else { remote_join(remote, &rel) };
         if !sftp.try_exists(target.clone()).await.unwrap_or(false) {
-            sftp.create_dir(target.clone()).await.with_context(|| format!("{target} 폴더를 만들 수 없습니다"))?;
+            sftp.create_dir(target.clone()).await.with_context(|| tr!("{target} 폴더를 만들 수 없습니다", "Cannot create folder {target}"))?;
         }
     }
     for (path, rel) in files {

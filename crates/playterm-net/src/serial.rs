@@ -4,6 +4,7 @@ use std::fmt;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use playterm_i18n::{t, tr};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -37,9 +38,9 @@ impl SerialParity {
 impl fmt::Display for SerialParity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            SerialParity::None => "없음",
-            SerialParity::Odd => "홀수",
-            SerialParity::Even => "짝수",
+            SerialParity::None => t("없음", "None"),
+            SerialParity::Odd => t("홀수", "Odd"),
+            SerialParity::Even => t("짝수", "Even"),
         })
     }
 }
@@ -62,9 +63,9 @@ impl SerialFlow {
 impl fmt::Display for SerialFlow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            SerialFlow::None => "없음",
-            SerialFlow::Hardware => "하드웨어 (RTS/CTS)",
-            SerialFlow::Software => "소프트웨어 (XON/XOFF)",
+            SerialFlow::None => t("없음", "None"),
+            SerialFlow::Hardware => t("하드웨어 (RTS/CTS)", "Hardware (RTS/CTS)"),
+            SerialFlow::Software => t("소프트웨어 (XON/XOFF)", "Software (XON/XOFF)"),
         })
     }
 }
@@ -105,12 +106,12 @@ impl SerialSettings {
             6 => DataBits::Six,
             7 => DataBits::Seven,
             8 => DataBits::Eight,
-            n => anyhow::bail!("데이터 비트는 5~8 이어야 합니다 ({n})"),
+            n => anyhow::bail!(tr!("데이터 비트는 5~8 이어야 합니다 ({n})", "Data bits must be 5 to 8 ({n})")),
         };
         let stop_bits = match self.stop_bits {
             1 => StopBits::One,
             2 => StopBits::Two,
-            n => anyhow::bail!("정지 비트는 1 또는 2 여야 합니다 ({n})"),
+            n => anyhow::bail!(tr!("정지 비트는 1 또는 2 여야 합니다 ({n})", "Stop bits must be 1 or 2 ({n})")),
         };
         let parity = match self.parity {
             SerialParity::None => Parity::None,
@@ -184,14 +185,14 @@ pub(crate) async fn run(
 ) -> anyhow::Result<()> {
     let settings = &params.serial;
     if settings.port.is_empty() {
-        anyhow::bail!("시리얼 포트를 지정하세요");
+        anyhow::bail!(t("시리얼 포트를 지정하세요", "Choose a serial port"));
     }
     let stream = {
         use tokio_serial::SerialPortBuilderExt as _;
         settings
             .builder()?
             .open_native_async()
-            .with_context(|| format!("{} 을(를) 열 수 없습니다", settings.port))?
+            .with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", settings.port))?
     };
     sink.send(SessionEvent::Connected);
     serve(stream, commands, sink).await
@@ -210,7 +211,10 @@ where
     loop {
         tokio::select! {
             n = stream.read(&mut buf) => {
-                let n = n.context("수신 오류 (장치가 분리되었을 수 있습니다)")?;
+                let n = n.context(t(
+                    "수신 오류 (장치가 분리되었을 수 있습니다)",
+                    "Receive error (the device may have been disconnected)",
+                ))?;
                 if n == 0 {
                     // Some drivers report an empty read on timeout; the line is still open.
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -221,12 +225,16 @@ where
             cmd = commands.recv() => match cmd {
                 Some(SessionCommand::Input(data)) => stream.write_all(&data).await?,
                 Some(SessionCommand::SendBreak) => {
-                    stream.send_break().await.context("BREAK 신호를 보낼 수 없습니다")?;
-                    sink.notice("BREAK 신호를 보냈습니다");
+                    stream.send_break().await.context(t("BREAK 신호를 보낼 수 없습니다", "Cannot send BREAK"))?;
+                    sink.notice(t("BREAK 신호를 보냈습니다", "Sent BREAK"));
                 }
                 Some(SessionCommand::Resize { .. }) => {}
                 Some(SessionCommand::OpenSftp) => {
-                    sink.send(SessionEvent::Sftp(Err("시리얼 세션에서는 SFTP를 쓸 수 없습니다".into())));
+                    sink.send(SessionEvent::Sftp(Err(t(
+                        "시리얼 세션에서는 SFTP를 쓸 수 없습니다",
+                        "SFTP is not available in serial sessions",
+                    )
+                    .into())));
                 }
                 Some(SessionCommand::Close) | None => return Ok(()),
             },

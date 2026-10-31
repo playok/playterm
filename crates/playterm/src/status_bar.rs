@@ -2,6 +2,7 @@
 //! received/sent and the Caps Lock / Num Lock state.
 
 use eframe::egui::{self, Color32, RichText};
+use playterm_i18n::t;
 
 use crate::session::{Session, SessionState};
 use crate::sftp_view::human_size;
@@ -22,10 +23,10 @@ pub fn lock_keys() -> (bool, bool) {
 
 fn state_text(state: &SessionState) -> (&'static str, Color32) {
     match state {
-        SessionState::Local => ("로컬 프롬프트", Color32::from_rgb(140, 140, 140)),
-        SessionState::Connecting => ("연결 중", Color32::from_rgb(220, 180, 40)),
-        SessionState::Connected => ("연결됨", Color32::from_rgb(60, 190, 90)),
-        SessionState::Closed => ("연결 끊김", Color32::from_rgb(200, 70, 70)),
+        SessionState::Local => (t("로컬 프롬프트", "Local prompt"), Color32::from_rgb(140, 140, 140)),
+        SessionState::Connecting => (t("연결 중", "Connecting"), Color32::from_rgb(220, 180, 40)),
+        SessionState::Connected => (t("연결됨", "Connected"), Color32::from_rgb(60, 190, 90)),
+        SessionState::Closed => (t("연결 끊김", "Disconnected"), Color32::from_rgb(200, 70, 70)),
     }
 }
 
@@ -33,7 +34,7 @@ fn state_text(state: &SessionState) -> (&'static str, Color32) {
 fn lock(ui: &mut egui::Ui, label: &str, on: bool) {
     let text = RichText::new(label).small().monospace();
     let text = if on { text.strong().color(ui.visuals().strong_text_color()) } else { text.weak() };
-    ui.label(text).on_hover_text(format!("{label} {}", if on { "켜짐" } else { "꺼짐" }));
+    ui.label(text).on_hover_text(format!("{label} {}", if on { t("켜짐", "on") } else { t("꺼짐", "off") }));
 }
 
 pub fn show(ui: &mut egui::Ui, session: Option<&Session>) {
@@ -47,7 +48,7 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>) {
                 ui.separator();
                 ui.label(RichText::new(s.target()).small());
                 ui.separator();
-                ui.label(RichText::new(s.charset().to_string()).small());
+                ui.label(RichText::new(s.charset_label()).small());
             }
             if s.is_logging() {
                 ui.separator();
@@ -61,12 +62,12 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>) {
             let Some(s) = session else { return };
             ui.separator();
             ui.label(RichText::new(format!("↑ {}", human_size(s.tx_bytes))).small().monospace())
-                .on_hover_text("이 연결에서 보낸 데이터 (입력, 응답)");
+                .on_hover_text(t("이 연결에서 보낸 데이터 (입력, 응답)", "Data sent on this connection (input, replies)"));
             ui.label(RichText::new(format!("↓ {}", human_size(s.rx_bytes))).small().monospace())
-                .on_hover_text("이 연결에서 받은 데이터 (화면 출력)");
+                .on_hover_text(t("이 연결에서 받은 데이터 (화면 출력)", "Data received on this connection (screen output)"));
             ui.separator();
             ui.label(RichText::new(format!("{}×{}", s.terminal.cols(), s.terminal.rows())).small().monospace())
-                .on_hover_text("터미널 크기 (열×행)");
+                .on_hover_text(t("터미널 크기 (열×행)", "Terminal size (columns×rows)"));
         });
     });
 }

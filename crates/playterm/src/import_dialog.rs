@@ -2,6 +2,7 @@
 
 use eframe::egui::{self, RichText};
 use playterm_config::{ProfileStore, SessionProfile};
+use playterm_i18n::{t, tr};
 
 use crate::putty::{self, PuttySession};
 use crate::sidebar;
@@ -58,23 +59,30 @@ impl ImportDialog {
         let mut result = ImportResult::Open;
         let modal = egui::Modal::new(egui::Id::unique("putty-import")).show(ctx, |ui| {
             ui.set_width(600.0);
-            ui.heading("PuTTY 세션 가져오기");
+            ui.heading(t("PuTTY 세션 가져오기", "Import PuTTY sessions"));
             ui.add_space(4.0);
             if let Some(e) = &self.error {
                 ui.colored_label(ui.visuals().error_fg_color, e);
             } else if self.items.is_empty() {
-                ui.label("가져올 PuTTY 세션이 없습니다.");
-                ui.weak(format!("(레지스트리 HKEY_CURRENT_USER\\{})", putty::sessions_key()));
+                ui.label(t("가져올 PuTTY 세션이 없습니다.", "There are no PuTTY sessions to import."));
+                ui.weak(tr!(
+                    "(레지스트리 HKEY_CURRENT_USER\\{})",
+                    "(registry HKEY_CURRENT_USER\\{})",
+                    putty::sessions_key()
+                ));
             } else {
-                ui.weak("비밀번호는 PuTTY 가 저장하지 않으므로 가져오지 않습니다. 이미 있는 사이트는 기본으로 선택 해제됩니다.");
+                ui.weak(t(
+                    "비밀번호는 PuTTY 가 저장하지 않으므로 가져오지 않습니다. 이미 있는 사이트는 기본으로 선택 해제됩니다.",
+                    "Passwords are not imported because PuTTY does not save them. Sites that already exist are unchecked by default.",
+                ));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.small_button("모두 선택").clicked() {
+                    if ui.small_button(t("모두 선택", "Select all")).clicked() {
                         for item in self.items.iter_mut().filter(|i| i.session.profile.is_ok()) {
                             item.checked = true;
                         }
                     }
-                    if ui.small_button("모두 해제").clicked() {
+                    if ui.small_button(t("모두 해제", "Select none")).clicked() {
                         for item in &mut self.items {
                             item.checked = false;
                         }
@@ -88,13 +96,13 @@ impl ImportDialog {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label("폴더");
-                ui.add(egui::TextEdit::singleline(&mut self.folder).hint_text("없음").desired_width(160.0));
+                ui.label(t("폴더", "Folder"));
+                ui.add(egui::TextEdit::singleline(&mut self.folder).hint_text(t("없음", "None")).desired_width(160.0));
             });
             ui.add_space(8.0);
             let count = self.items.iter().filter(|i| i.checked).count();
             ui.horizontal(|ui| {
-                if ui.add_enabled(count > 0, egui::Button::new(format!("가져오기 ({count})"))).clicked() {
+                if ui.add_enabled(count > 0, egui::Button::new(tr!("가져오기 ({count})", "Import ({count})"))).clicked() {
                     let folder = self.folder.trim().to_owned();
                     let profiles = self
                         .items
@@ -105,7 +113,7 @@ impl ImportDialog {
                         .collect();
                     result = ImportResult::Import(profiles);
                 }
-                if ui.button("취소").clicked() {
+                if ui.button(t("취소", "Cancel")).clicked() {
                     result = ImportResult::Cancel;
                 }
             });
@@ -123,7 +131,7 @@ fn row(ui: &mut egui::Ui, item: &mut Item) {
             ui.checkbox(&mut item.checked, RichText::new(&item.session.name).strong());
             ui.weak(sidebar::summary(p));
             if item.duplicate {
-                ui.label(RichText::new("이미 있음").color(ui.visuals().warn_fg_color));
+                ui.label(RichText::new(t("이미 있음", "Already exists")).color(ui.visuals().warn_fg_color));
             }
         }
         Err(reason) => {

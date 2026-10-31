@@ -28,17 +28,29 @@ use std::sync::Arc;
 
 use eframe::egui;
 use playterm_config::SessionProfile;
+use playterm_i18n::{t, tr};
 use playterm_net::{ForwardKind, ForwardRule};
 
-const USAGE: &str = "사용법: playterm [--cp949] [-i 키파일] [-L|-R 포트:호스트:포트] [-D 포트] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:속도]]...";
+fn usage() -> &'static str {
+    t(
+        "사용법: playterm [--cp949] [-i 키파일] [-L|-R 포트:호스트:포트] [-D 포트] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:속도]]...",
+        "Usage: playterm [--cp949] [-i keyfile] [-L|-R port:host:port] [-D port] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:speed]]...",
+    )
+}
 
 fn main() -> eframe::Result {
     env_logger::init();
+    // The language is needed before the window exists (command-line errors).
+    if let Some(dir) = app::config_dir()
+        && let Ok(settings) = playterm_config::AppSettings::load(&dir.join("settings.toml"))
+    {
+        playterm_i18n::set_english(settings.language == playterm_config::Language::English);
+    }
 
     let initial = match parse_args(std::env::args().skip(1)) {
         Ok(reqs) => reqs,
         Err(e) => {
-            let text = if e.is_empty() { USAGE.to_owned() } else { format!("{e}\n\n{USAGE}") };
+            let text = if e.is_empty() { usage().to_owned() } else { format!("{e}\n\n{}", usage()) };
             show_message(&text, e.is_empty());
             std::process::exit(if e.is_empty() { 0 } else { 2 });
         }
@@ -83,14 +95,17 @@ fn main() -> eframe::Result {
                 last_error = Some(e);
             }
             Err(e) => {
-                show_message(&format!("playterm 을 시작할 수 없습니다:\n{e}"), false);
+                show_message(&tr!("playterm 을 시작할 수 없습니다:\n{e}", "Cannot start playterm:\n{e}"), false);
                 return Err(e);
             }
             Ok(()) => return Ok(()),
         }
     }
     let error = last_error.expect("at least one renderer was tried");
-    show_message(&format!("화면 렌더러를 초기화할 수 없습니다:\n{error}"), false);
+    show_message(
+        &tr!("화면 렌더러를 초기화할 수 없습니다:\n{error}", "Cannot initialize the display renderer:\n{error}"),
+        false,
+    );
     Err(error)
 }
 
@@ -142,21 +157,23 @@ fn native_options(renderer: eframe::Renderer, icon: Arc<egui::IconData>) -> efra
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<SessionProfile>, String> {
     let mut args = args;
-    let mut charset = playterm_term::Charset::Utf8;
+    let mut charset = playterm_term::Charset::Auto;
     let mut identity_file = String::new();
     let mut forwards = Vec::new();
     let mut requests = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cp949" | "--euc-kr" => charset = playterm_term::Charset::Cp949,
-            "-i" => identity_file = args.next().ok_or("-i 다음에 키 파일 경로가 필요합니다")?,
+            "-i" => identity_file = args.next().ok_or(t("-i 다음에 키 파일 경로가 필요합니다", "Missing key file path after -i"))?,
             "-L" | "-R" | "-D" => {
                 let kind = match arg.as_str() {
                     "-L" => ForwardKind::Local,
                     "-R" => ForwardKind::Remote,
                     _ => ForwardKind::Dynamic,
                 };
-                let spec = args.next().ok_or_else(|| format!("{arg} 다음에 포워딩 설정이 필요합니다"))?;
+                let spec = args
+                    .next()
+                    .ok_or_else(|| tr!("{arg} 다음에 포워딩 설정이 필요합니다", "Missing forwarding spec after {arg}"))?;
                 forwards.push(ForwardRule::parse(kind, &spec)?);
             }
             "-h" | "--help" => return Err(String::new()),

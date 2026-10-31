@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use eframe::egui::{self, RichText};
+use playterm_i18n::{t, tr};
 use playterm_net::{RemoteEntry, SftpConnection, SftpEvent, TransferState, remote_join, remote_parent};
 
 struct Transfer {
@@ -122,8 +123,8 @@ impl SftpBrowser {
                 }
                 SftpEvent::OpDone { what, result } => {
                     self.status = Some(match result {
-                        Ok(()) => (format!("{what} 완료"), false),
-                        Err(e) => (format!("{what} 실패: {e}"), true),
+                        Ok(()) => (tr!("{what} 완료", "{what}: done"), false),
+                        Err(e) => (tr!("{what} 실패: {e}", "{what} failed: {e}"), true),
                     });
                     self.refresh();
                 }
@@ -170,12 +171,12 @@ impl SftpBrowser {
         let targets: Vec<(RemoteEntry, PathBuf)> = if let [single] = items.as_slice()
             && !single.is_dir
         {
-            match rfd::FileDialog::new().set_title("다운로드 위치").set_file_name(&single.name).save_file() {
+            match rfd::FileDialog::new().set_title(t("다운로드 위치", "Download to")).set_file_name(&single.name).save_file() {
                 Some(path) => vec![(single.clone(), path)],
                 None => return,
             }
         } else {
-            match rfd::FileDialog::new().set_title("다운로드할 폴더 선택").pick_folder() {
+            match rfd::FileDialog::new().set_title(t("다운로드할 폴더 선택", "Choose a folder to download to")).pick_folder() {
                 Some(dir) => items.into_iter().map(|e| { let p = dir.join(&e.name); (e, p) }).collect(),
                 None => return,
             }
@@ -206,11 +207,11 @@ impl SftpBrowser {
 
     fn contents(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("상위").clicked() && !self.cwd.is_empty() {
+            if ui.button(t("상위", "Up")).clicked() && !self.cwd.is_empty() {
                 let parent = remote_parent(&self.cwd);
                 self.navigate(&parent);
             }
-            if ui.button("새로고침").clicked() {
+            if ui.button(t("새로고침", "Refresh")).clicked() {
                 self.refresh();
             }
             let path = ui.add(egui::TextEdit::singleline(&mut self.path_input).desired_width(260.0));
@@ -219,25 +220,28 @@ impl SftpBrowser {
                 self.navigate(&target);
             }
             ui.separator();
-            if ui.button("새 폴더").clicked() {
+            if ui.button(t("새 폴더", "New folder")).clicked() {
                 self.prompt = Some(Prompt::NewFolder(String::new()));
             }
-            if ui.button("업로드").on_hover_text("파일 선택 (창에 끌어다 놓아도 됩니다)").clicked()
-                && let Some(files) = rfd::FileDialog::new().set_title("업로드할 파일").pick_files()
+            if ui
+                .button(t("업로드", "Upload"))
+                .on_hover_text(t("파일 선택 (창에 끌어다 놓아도 됩니다)", "Choose files (or drop them on the window)"))
+                .clicked()
+                && let Some(files) = rfd::FileDialog::new().set_title(t("업로드할 파일", "Files to upload")).pick_files()
             {
                 self.upload_paths(files);
             }
-            if ui.button("폴더 업로드").clicked()
-                && let Some(dir) = rfd::FileDialog::new().set_title("업로드할 폴더").pick_folder()
+            if ui.button(t("폴더 업로드", "Upload folder")).clicked()
+                && let Some(dir) = rfd::FileDialog::new().set_title(t("업로드할 폴더", "Folder to upload")).pick_folder()
             {
                 self.upload_paths(vec![dir]);
             }
             let has_selection = !self.selected.is_empty();
-            if ui.add_enabled(has_selection, egui::Button::new("다운로드")).clicked() {
+            if ui.add_enabled(has_selection, egui::Button::new(t("다운로드", "Download"))).clicked() {
                 let items = self.selected_entries();
                 self.download(items);
             }
-            if ui.add_enabled(has_selection, egui::Button::new("삭제")).clicked() {
+            if ui.add_enabled(has_selection, egui::Button::new(t("삭제", "Delete"))).clicked() {
                 let items = self.selected_entries().into_iter().map(|e| (e.name, e.is_dir)).collect();
                 self.prompt = Some(Prompt::Delete(items));
             }
@@ -271,10 +275,10 @@ impl SftpBrowser {
         let mut download = None;
         let mut prompt = None;
         egui::Grid::new("sftp-grid").num_columns(4).striped(true).spacing([16.0, 4.0]).show(ui, |ui| {
-            ui.strong("이름");
-            ui.strong("크기");
-            ui.strong("수정 시각");
-            ui.strong("권한");
+            ui.strong(t("이름", "Name"));
+            ui.strong(t("크기", "Size"));
+            ui.strong(t("수정 시각", "Modified"));
+            ui.strong(t("권한", "Permissions"));
             ui.end_row();
             for entry in &self.entries {
                 let label = if entry.is_dir { format!("{}/", entry.name) } else { entry.name.clone() };
@@ -297,15 +301,15 @@ impl SftpBrowser {
                     if entry.is_dir { enter_dir = Some(entry.name.clone()) } else { download = Some(vec![entry.clone()]) }
                 }
                 response.context_menu(|ui| {
-                    if ui.button("다운로드").clicked() {
+                    if ui.button(t("다운로드", "Download")).clicked() {
                         download = Some(vec![entry.clone()]);
                         ui.close();
                     }
-                    if ui.button("이름 바꾸기").clicked() {
+                    if ui.button(t("이름 바꾸기", "Rename")).clicked() {
                         prompt = Some(Prompt::Rename { from: entry.name.clone(), to: entry.name.clone() });
                         ui.close();
                     }
-                    if ui.button("삭제").clicked() {
+                    if ui.button(t("삭제", "Delete")).clicked() {
                         prompt = Some(Prompt::Delete(vec![(entry.name.clone(), entry.is_dir)]));
                         ui.close();
                     }
@@ -330,8 +334,8 @@ impl SftpBrowser {
 
     fn transfer_list(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.strong("전송");
-            if ui.small_button("완료 항목 지우기").clicked() {
+            ui.strong(t("전송", "Transfers"));
+            if ui.small_button(t("완료 항목 지우기", "Clear finished")).clicked() {
                 self.transfers.retain(|t| t.state == TransferState::Running);
             }
         });
@@ -344,18 +348,19 @@ impl SftpBrowser {
                             let frac = if t.total > 0 { t.done as f32 / t.total as f32 } else { 0.0 };
                             let text = format!("{} / {}", human_size(t.done), human_size(t.total));
                             ui.add(egui::ProgressBar::new(frac).text(text).desired_width(220.0));
-                            if ui.small_button("취소").clicked() {
+                            // `t` is the transfer here, hence the full path.
+                            if ui.small_button(playterm_i18n::t("취소", "Cancel")).clicked() {
                                 self.conn.cancel(t.id);
                             }
                         }
                         TransferState::Finished => {
-                            ui.label(format!("완료 ({})", human_size(t.done)));
+                            ui.label(tr!("완료 ({})", "Done ({})", human_size(t.done)));
                         }
                         TransferState::Cancelled => {
-                            ui.weak("취소됨");
+                            ui.weak(playterm_i18n::t("취소됨", "Cancelled"));
                         }
                         TransferState::Failed(e) => {
-                            ui.colored_label(ui.visuals().error_fg_color, format!("실패: {e}"));
+                            ui.colored_label(ui.visuals().error_fg_color, tr!("실패: {e}", "Failed: {e}"));
                         }
                     }
                 });
@@ -371,31 +376,34 @@ impl SftpBrowser {
             let enter = |ui: &egui::Ui, r: &egui::Response| r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             match prompt {
                 Prompt::NewFolder(name) => {
-                    ui.heading("새 폴더");
+                    ui.heading(t("새 폴더", "New folder"));
                     let r = ui.text_edit_singleline(name);
                     // Check Enter before re-focusing: Enter makes the field give up focus.
                     if enter(ui, &r) { done = Some(true) } else { r.request_focus() }
                 }
                 Prompt::Rename { from, to } => {
-                    ui.heading(format!("'{from}' 이름 바꾸기"));
+                    ui.heading(tr!("'{from}' 이름 바꾸기", "Rename '{from}'"));
                     let r = ui.text_edit_singleline(to);
                     if enter(ui, &r) { done = Some(true) } else { r.request_focus() }
                 }
                 Prompt::Delete(items) => {
-                    ui.heading("삭제");
+                    ui.heading(t("삭제", "Delete"));
                     let names: Vec<&str> = items.iter().map(|(n, _)| n.as_str()).collect();
-                    ui.label(format!("{} 을(를) 삭제할까요?", names.join(", ")));
+                    ui.label(tr!("{} 을(를) 삭제할까요?", "Delete {}?", names.join(", ")));
                     if items.iter().any(|(_, dir)| *dir) {
-                        ui.colored_label(ui.visuals().warn_fg_color, "폴더는 안의 내용까지 모두 삭제됩니다.");
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            t("폴더는 안의 내용까지 모두 삭제됩니다.", "Folders are deleted with everything in them."),
+                        );
                     }
                 }
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("확인").clicked() {
+                if ui.button(t("확인", "OK")).clicked() {
                     done = Some(true);
                 }
-                if ui.button("취소").clicked() {
+                if ui.button(t("취소", "Cancel")).clicked() {
                     done = Some(false);
                 }
             });

@@ -9,10 +9,10 @@ argon2 = "0.6.0"
 base64 = "0.23.1"
 chacha20poly1305 = "0.11.0"
 getrandom = "0.4.3"
+playterm-i18n = { version = "0.1.0", path = "../playterm-i18n" }
 playterm-net = { version = "0.1.0", path = "../playterm-net" }
 playterm-term = { version = "0.1.0", path = "../playterm-term" }
 serde = { version = "1.0.229", features = ["derive"] }
-thiserror = "2.0.21"
 toml = "1.1.8"
 zeroize = "1.9.1"
 

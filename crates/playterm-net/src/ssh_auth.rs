@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::bail;
+use playterm_i18n::{t, tr};
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
@@ -36,7 +37,7 @@ fn allows(methods: &MethodSet, kind: MethodKind) -> bool {
 pub(crate) async fn authenticate(session: &mut Session, params: &ConnectParams, sink: &EventSink) -> anyhow::Result<()> {
     let user = params.username.as_str();
     if user.is_empty() {
-        bail!("SSH 사용자 이름이 필요합니다");
+        bail!(t("SSH 사용자 이름이 필요합니다", "An SSH user name is required"));
     }
 
     let mut methods = match session.authenticate_none(user).await? {
@@ -123,7 +124,11 @@ async fn key_file(
         Ok(text) => Zeroizing::new(text),
         Err(e) => {
             if explicit {
-                sink.notice(format!("키 파일을 읽을 수 없습니다 ({}): {e}", path.display()));
+                sink.notice(tr!(
+                    "키 파일을 읽을 수 없습니다 ({}): {e}",
+                    "Cannot read the key file ({}): {e}",
+                    path.display()
+                ));
             }
             return Ok(KeyAttempt::Unusable);
         }
@@ -155,7 +160,11 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> Option<Private
     match keys::decode_secret_key(text, None) {
         Ok(key) => return Some(key),
         Err(e) if !looks_encrypted(text, &e) => {
-            sink.notice(format!("키 파일을 해석할 수 없습니다 ({}): {e}", path.display()));
+            sink.notice(tr!(
+                "키 파일을 해석할 수 없습니다 ({}): {e}",
+                "Cannot parse the key file ({}): {e}",
+                path.display()
+            ));
             return None;
         }
         Err(_) => {}
@@ -166,15 +175,15 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> Option<Private
         // Cancelling skips this key; authentication continues with the next method.
         let answers = sink
             .prompt(
-                format!("키 암호: {name}"),
+                tr!("키 암호: {name}", "Key passphrase: {name}"),
                 path.display().to_string(),
-                vec![PromptField { label: "암호 (passphrase)".into(), echo: false }],
+                vec![PromptField { label: t("암호 (passphrase)", "Passphrase").into(), echo: false }],
             )
             .await?;
         let passphrase = Zeroizing::new(answers.into_iter().next().unwrap_or_default());
         match keys::decode_secret_key(text, Some(&passphrase)) {
             Ok(key) => return Some(key),
-            Err(_) => sink.notice(format!("{name}: 암호가 틀렸습니다")),
+            Err(_) => sink.notice(tr!("{name}: 암호가 틀렸습니다", "{name}: wrong passphrase")),
         }
     }
     None
@@ -292,13 +301,13 @@ async fn passwords(
         } else if allows(&methods, MethodKind::Password) {
             let Some(answers) = sink
                 .prompt(
-                    format!("{target} 비밀번호"),
+                    tr!("{target} 비밀번호", "Password for {target}"),
                     String::new(),
-                    vec![PromptField { label: "비밀번호".into(), echo: false }],
+                    vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
                 )
                 .await
             else {
-                bail!("인증이 취소되었습니다");
+                bail!(t("인증이 취소되었습니다", "Authentication cancelled"));
             };
             let password = answers.into_iter().next().unwrap_or_default();
             match session.authenticate_password(user, password).await? {
@@ -307,20 +316,24 @@ async fn passwords(
             }
         } else {
             let names: Vec<&str> = methods.iter().map(<&str>::from).collect();
-            bail!("인증 실패: 남은 인증 방식({})을 사용할 수 없습니다", names.join(", "));
+            bail!(tr!(
+                "인증 실패: 남은 인증 방식({})을 사용할 수 없습니다",
+                "Authentication failed: the remaining methods ({}) are not available",
+                names.join(", ")
+            ));
         };
 
         attempts += 1;
         match outcome {
             Outcome::Success => return Ok(()),
-            Outcome::Cancelled => bail!("인증이 취소되었습니다"),
+            Outcome::Cancelled => bail!(t("인증이 취소되었습니다", "Authentication cancelled")),
             Outcome::Unavailable(remaining) | Outcome::Failure(remaining) => {
-                sink.notice("인증 실패, 다시 시도하세요.");
+                sink.notice(t("인증 실패, 다시 시도하세요.", "Authentication failed, try again."));
                 methods = remaining;
             }
         }
     }
-    bail!("인증 실패: 시도 횟수를 초과했습니다")
+    bail!(t("인증 실패: 시도 횟수를 초과했습니다", "Authentication failed: too many attempts"))
 }
 
 enum Outcome {
@@ -360,7 +373,7 @@ async fn keyboard_interactive(
                 {
                     vec![password]
                 } else {
-                    let title = if name.is_empty() { format!("{target} 인증") } else { name };
+                    let title = if name.is_empty() { tr!("{target} 인증", "Authentication for {target}") } else { name };
                     let fields = prompts
                         .into_iter()
                         .map(|p| PromptField { label: p.prompt.trim().to_owned(), echo: p.echo })

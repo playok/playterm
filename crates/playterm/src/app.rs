@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
-use playterm_config::{AppSettings, ProfileStore, SessionProfile, Vault};
+use playterm_config::{AppSettings, Language, ProfileStore, SessionProfile, UiTheme, Vault};
+use playterm_i18n::{t, tr};
 use playterm_net::{ConnectParams, NetRuntime, Waker};
 use playterm_term::{LogMode, Palette, Theme};
 use zeroize::Zeroizing;
@@ -130,32 +131,33 @@ pub struct PlaytermApp {
 
 impl PlaytermApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Vec<SessionProfile>) -> anyhow::Result<Self> {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
         // Ctrl+= / Ctrl+- / Ctrl+0 size the terminal font instead of the whole window.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
 
-        // PLAYTERM_CONFIG_DIR allows a portable install (or an isolated test profile).
-        let config_dir = match std::env::var_os("PLAYTERM_CONFIG_DIR") {
-            Some(dir) => PathBuf::from(dir),
-            None => directories::ProjectDirs::from("", "", "playterm")
-                .context("사용자 설정 폴더를 찾을 수 없습니다")?
-                .config_dir()
-                .to_owned(),
-        };
+        let config_dir = config_dir().context(t("사용자 설정 폴더를 찾을 수 없습니다", "Cannot find the user settings folder"))?;
         let config_dir = config_dir.as_path();
-        let (store, mut status) = load_profiles(&config_dir.join("sessions.toml"));
+        // Settings first: they choose the language of the messages below.
         let settings_path = config_dir.join("settings.toml");
+        let mut settings_error = None;
         let settings = AppSettings::load(&settings_path).unwrap_or_else(|e| {
-            status = Some(format!("설정 파일을 읽을 수 없어 기본값을 씁니다: {e}"));
+            settings_error = Some(e);
             AppSettings::default()
         });
+        apply_ui(&cc.egui_ctx, &settings);
+        let (store, mut status) = load_profiles(&config_dir.join("sessions.toml"));
+        if let Some(e) = settings_error {
+            status = Some(tr!(
+                "설정 파일을 읽을 수 없어 기본값을 씁니다: {e}",
+                "Cannot read the settings file, using the defaults: {e}"
+            ));
+        }
         if let Err(e) = fonts::install(&cc.egui_ctx, &settings.font) {
             status = Some(e);
         }
 
         let ctx = cc.egui_ctx.clone();
         let mut app = Self {
-            net: NetRuntime::new().context("네트워크 런타임 시작 실패")?,
+            net: NetRuntime::new().context(t("네트워크 런타임 시작 실패", "Could not start the network runtime"))?,
             waker: Arc::new(move || ctx.request_repaint()),
             known_hosts: config_dir.join("known_hosts"),
             vault: Vault::new(config_dir.join("vault.toml")),
@@ -284,7 +286,11 @@ impl PlaytermApp {
         if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
             let dialog = VaultDialog::new(
                 VaultMode::Unlock,
-                format!("'{}' 의 저장된 비밀번호를 사용합니다.", profile.display_name()),
+                tr!(
+                    "'{}' 의 저장된 비밀번호를 사용합니다.",
+                    "Uses the saved password of '{}'.",
+                    profile.display_name()
+                ),
             );
             let target = self.connect_target.take();
             self.modal = Some(Modal::Vault(dialog, Pending::Connect(id.to_owned(), target)));
@@ -314,12 +320,12 @@ impl PlaytermApp {
         let id = profile.id.clone();
         let save_password = profile.save_password;
         let r = self.store.upsert(profile);
-        self.report("사이트 저장 실패", r);
+        self.report(t("사이트 저장 실패", "Could not save the site"), r);
 
         // If the vault is locked, a stale secret is pruned on the next unlock instead.
         if !save_password && self.vault.is_unlocked() {
             let r = self.vault.remove(&id);
-            self.report("볼트 갱신 실패", r);
+            self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
         }
         match password {
             Some(password) if save_password => self.store_secret(id, password, connect),
@@ -337,16 +343,16 @@ impl PlaytermApp {
     fn store_secret(&mut self, id: String, password: Zeroizing<String>, connect: bool) {
         if self.vault.is_unlocked() {
             let r = self.vault.set(&id, &password);
-            self.report("비밀번호 저장 실패", r);
+            self.report(t("비밀번호 저장 실패", "Could not save the password"), r);
             if connect {
                 self.connect_saved(&id);
             }
             return;
         }
         let (mode, reason) = if self.vault.exists() {
-            (VaultMode::Unlock, "비밀번호를 저장하려면 볼트를 잠금 해제하세요.")
+            (VaultMode::Unlock, t("비밀번호를 저장하려면 볼트를 잠금 해제하세요.", "Unlock the password vault to save the password."))
         } else {
-            (VaultMode::Create, "처음으로 비밀번호를 저장합니다.")
+            (VaultMode::Create, t("처음으로 비밀번호를 저장합니다.", "Saving a password for the first time."))
         };
         let target = self.connect_target.take();
         let pending = Pending::StoreSecret { id, password, connect, target };
@@ -358,13 +364,13 @@ impl PlaytermApp {
         // Drop secrets of deleted profiles and of profiles that no longer save passwords.
         let store = &self.store;
         let r = self.vault.retain(|id| store.get(id).is_some_and(|p| p.save_password));
-        self.report("볼트 정리 실패", r);
+        self.report(t("볼트 정리 실패", "Could not clean up the password vault"), r);
         match pending {
             Pending::Unlock => {}
             Pending::Connect(id, target) => self.connect_in(target, |app| app.connect_saved(&id)),
             Pending::StoreSecret { id, password, connect, target } => {
                 let r = self.vault.set(&id, &password);
-                self.report("비밀번호 저장 실패", r);
+                self.report(t("비밀번호 저장 실패", "Could not save the password"), r);
                 if connect {
                     self.connect_in(target, |app| app.connect_saved(&id));
                 }
@@ -382,7 +388,7 @@ impl PlaytermApp {
                 }
             }
             Pending::StoreSecret { id, password, connect, target } => {
-                self.status = Some("비밀번호는 저장되지 않았습니다".into());
+                self.status = Some(t("비밀번호는 저장되지 않았습니다", "The password was not saved").into());
                 if connect && let Some(p) = self.store.get(&id).cloned() {
                     let password = password.to_string();
                     self.connect_in(target, |app| app.open_session(&p, Some(password), Some(p.display_name())));
@@ -397,10 +403,10 @@ impl PlaytermApp {
         let secret = self.vault.get(id).map(|s| Zeroizing::new(s.to_owned()));
         copy.save_password &= secret.is_some();
         let r = self.store.upsert(copy.clone());
-        self.report("사이트 저장 실패", r);
+        self.report(t("사이트 저장 실패", "Could not save the site"), r);
         if let Some(secret) = secret {
             let r = self.vault.set(&copy.id, &secret);
-            self.report("비밀번호 복사 실패", r);
+            self.report(t("비밀번호 복사 실패", "Could not copy the password"), r);
         }
         Some(copy)
     }
@@ -518,7 +524,7 @@ impl PlaytermApp {
                 self.sessions[i].reconnect(&self.net, waker);
                 return;
             }
-            Request::Reconnect => output = Some("다시 연결할 대상이 없습니다".into()),
+            Request::Reconnect => output = Some(t("다시 연결할 대상이 없습니다", "Nothing to reconnect to").into()),
             Request::Exit => {
                 self.close_session(i);
                 return;
@@ -541,9 +547,19 @@ impl PlaytermApp {
         use crate::console::pad;
         let sites = self.numbered_sites();
         if sites.is_empty() {
-            return "저장된 사이트가 없습니다. open 으로 사이트 관리 창을 열어 추가하세요.".into();
+            return t(
+                "저장된 사이트가 없습니다. open 으로 사이트 관리 창을 열어 추가하세요.",
+                "No saved sites. Type open to add one in the Site Manager.",
+            )
+            .into();
         }
-        let mut out = format!("\x1b[90m{}  {}  {}  폴더\x1b[0m\n", pad("번호", 4), pad("이름", 20), pad("접속", 34));
+        let mut out = format!(
+            "\x1b[90m{}  {}  {}  {}\x1b[0m\n",
+            pad(t("번호", "No."), 4),
+            pad(t("이름", "Name"), 20),
+            pad(t("접속", "Connection"), 34),
+            t("폴더", "Folder")
+        );
         let mut shown = 0;
         // Numbers count every site, so `open N` works on a filtered list too.
         for (n, p) in sites.iter().enumerate().filter(|(_, p)| sidebar::matches(p, filter)) {
@@ -557,9 +573,9 @@ impl PlaytermApp {
             ));
         }
         if shown == 0 {
-            out.push_str(&format!("'{}' 와 일치하는 사이트가 없습니다\n", filter.trim()));
+            out.push_str(&tr!("'{}' 와 일치하는 사이트가 없습니다\n", "No sites match '{}'\n", filter.trim()));
         }
-        out.push_str("\x1b[90mopen 번호|이름 으로 접속\x1b[0m");
+        out.push_str(t("\x1b[90mopen 번호|이름 으로 접속\x1b[0m", "\x1b[90mopen <number|name> to connect\x1b[0m"));
         out
     }
 
@@ -580,6 +596,7 @@ impl PlaytermApp {
     /// Makes `new` the current settings, updating fonts and open tabs where they changed.
     fn apply_settings(&mut self, ctx: &egui::Context, new: AppSettings) {
         let new = new.clamped();
+        apply_ui(ctx, &new);
         if new.font != self.settings.font
             && let Err(e) = fonts::install(ctx, &new.font)
         {
@@ -602,7 +619,7 @@ impl PlaytermApp {
     fn save_settings(&mut self) {
         self.settings_unsaved = None;
         let r = self.settings.save(&self.settings_path);
-        self.report("설정 저장 실패", r);
+        self.report(t("설정 저장 실패", "Could not save the settings"), r);
     }
 
     /// Changes the font size (zoom), saving it once the zooming stops.
@@ -707,10 +724,10 @@ impl PlaytermApp {
                 let dir = logging::default_log_dir();
                 let _ = std::fs::create_dir_all(&dir);
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_title("로그 파일")
+                    .set_title(t("로그 파일", "Log file"))
                     .set_directory(&dir)
                     .set_file_name(logging::file_name(&session.tab_title()))
-                    .add_filter("로그", &["log", "txt"])
+                    .add_filter(t("로그", "Logs"), &["log", "txt"])
                     .save_file()
                 {
                     session.start_log(&path, mode);
@@ -792,7 +809,7 @@ impl PlaytermApp {
                 QuickConnectResult::Connect { profile, password, save } => {
                     if save {
                         let r = self.store.upsert((*profile).clone());
-                        self.report("사이트 저장 실패", r);
+                        self.report(t("사이트 저장 실패", "Could not save the site"), r);
                     }
                     let name = save.then(|| profile.display_name());
                     let target = self.dialog_target.take();
@@ -829,10 +846,14 @@ impl PlaytermApp {
                     let folder = profiles.first().map(|p| p.folder.clone()).unwrap_or_default();
                     for p in profiles {
                         let r = self.store.upsert(p);
-                        self.report("사이트 저장 실패", r);
+                        self.report(t("사이트 저장 실패", "Could not save the site"), r);
                     }
-                    let place = if folder.is_empty() { String::new() } else { format!(" ('{folder}' 폴더)") };
-                    self.info = Some(format!("PuTTY 세션 {count}개를 가져왔습니다{place}"));
+                    let place =
+                        if folder.is_empty() { String::new() } else { tr!(" ('{folder}' 폴더)", " (folder '{folder}')") };
+                    self.info = Some(tr!(
+                        "PuTTY 세션 {count}개를 가져왔습니다{place}",
+                        "Imported {count} PuTTY sessions{place}"
+                    ));
                     self.show_sidebar = true;
                 }
             },
@@ -862,15 +883,16 @@ impl PlaytermApp {
             },
             Modal::ConfirmDelete(id) => {
                 let name = self.store.get(&id).map(|p| p.display_name()).unwrap_or_default();
-                match dialogs::confirm(ctx, "사이트 삭제", &format!("'{name}' 사이트를 삭제할까요?"), "삭제") {
+                let text = tr!("'{name}' 사이트를 삭제할까요?", "Delete site '{name}'?");
+                match dialogs::confirm(ctx, t("사이트 삭제", "Delete site"), &text, t("삭제", "Delete")) {
                     None => self.modal = Some(Modal::ConfirmDelete(id)),
                     Some(false) => {}
                     Some(true) => {
                         let r = self.store.remove(&id);
-                        self.report("사이트 삭제 실패", r);
+                        self.report(t("사이트 삭제 실패", "Could not delete the site"), r);
                         if self.vault.is_unlocked() {
                             let r = self.vault.remove(&id);
-                            self.report("볼트 갱신 실패", r);
+                            self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
                         }
                     }
                 }
@@ -940,8 +962,9 @@ impl PlaytermApp {
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
         ui.horizontal_wrapped(|ui| {
-            ui.toggle_value(&mut self.show_sidebar, "사이트").on_hover_text("사이트 목록 (Ctrl+Shift+B)");
-            if ui.button("+ 빠른 연결").on_hover_text("Ctrl+Shift+T").clicked() {
+            ui.toggle_value(&mut self.show_sidebar, t("사이트", "Sites"))
+                .on_hover_text(t("사이트 목록 (Ctrl+Shift+B)", "Site list (Ctrl+Shift+B)"));
+            if ui.button(t("+ 빠른 연결", "+ Quick Connect")).on_hover_text("Ctrl+Shift+T").clicked() {
                 action = Some(Command::QuickConnect);
             }
             ui.separator();
@@ -968,10 +991,10 @@ impl PlaytermApp {
                     menu::session_items(ui, &mut action, i, s);
                     ui.separator();
                     let entries = [
-                        ("복제", Command::Duplicate(i)),
-                        ("다시 연결", Command::Reconnect(i)),
-                        ("닫기", Command::Close(i)),
-                        ("다른 탭 모두 닫기", Command::CloseOthers(i)),
+                        (t("복제", "Duplicate"), Command::Duplicate(i)),
+                        (t("다시 연결", "Reconnect"), Command::Reconnect(i)),
+                        (t("닫기", "Close"), Command::Close(i)),
+                        (t("다른 탭 모두 닫기", "Close other tabs"), Command::CloseOthers(i)),
                     ];
                     for (label, a) in entries {
                         if ui.button(label).clicked() {
@@ -980,19 +1003,19 @@ impl PlaytermApp {
                         }
                     }
                 });
-                if ui.small_button("✕").on_hover_text("탭 닫기 (Ctrl+Shift+W)").clicked() {
+                if ui.small_button("✕").on_hover_text(t("탭 닫기 (Ctrl+Shift+W)", "Close tab (Ctrl+Shift+W)")).clicked() {
                     action = Some(Command::Close(i));
                 }
                 ui.add_space(6.0);
             }
             if self.sessions.get(self.active).is_some_and(|s| s.can_sftp())
-                && ui.button("SFTP").on_hover_text("파일 브라우저 (Ctrl+Shift+E)").clicked()
+                && ui.button("SFTP").on_hover_text(t("파일 브라우저 (Ctrl+Shift+E)", "File browser (Ctrl+Shift+E)")).clicked()
             {
                 action = Some(Command::Sftp(self.active));
             }
             if self.sessions.get(self.active).is_some_and(|s| s.state == SessionState::Closed) {
                 ui.separator();
-                if ui.button("다시 연결").clicked() {
+                if ui.button(t("다시 연결", "Reconnect")).clicked() {
                     action = Some(Command::Reconnect(self.active));
                 }
             }
@@ -1000,14 +1023,16 @@ impl PlaytermApp {
                 ui.separator();
                 let label = ui
                     .add(egui::Label::new(RichText::new(status).color(ui.visuals().error_fg_color)).sense(egui::Sense::click()))
-                    .on_hover_text("클릭해서 닫기");
+                    .on_hover_text(t("클릭해서 닫기", "Click to dismiss"));
                 if label.clicked() {
                     self.status = None;
                 }
             }
             if let Some(info) = &self.info {
                 ui.separator();
-                let label = ui.add(egui::Label::new(RichText::new(info).weak()).sense(egui::Sense::click())).on_hover_text("클릭해서 닫기");
+                let label = ui
+                    .add(egui::Label::new(RichText::new(info).weak()).sense(egui::Sense::click()))
+                    .on_hover_text(t("클릭해서 닫기", "Click to dismiss"));
                 if label.clicked() {
                     self.info = None;
                 }
@@ -1040,7 +1065,15 @@ impl PlaytermApp {
         }
         match self.sessions.get_mut(self.active).and_then(|s| s.sftp.as_mut()).filter(|b| b.open) {
             Some(browser) => browser.upload_paths(paths),
-            None => self.status = Some("파일을 올리려면 먼저 SFTP 창을 여세요 (Ctrl+Shift+E)".into()),
+            None => {
+                self.status = Some(
+                    t(
+                        "파일을 올리려면 먼저 SFTP 창을 여세요 (Ctrl+Shift+E)",
+                        "Open the SFTP window first to upload files (Ctrl+Shift+E)",
+                    )
+                    .into(),
+                )
+            }
         }
     }
 
@@ -1055,6 +1088,25 @@ impl PlaytermApp {
     }
 }
 
+/// The folder of the settings, sites, vault and known hosts. `PLAYTERM_CONFIG_DIR` allows a
+/// portable install (or an isolated test profile).
+pub fn config_dir() -> Option<PathBuf> {
+    match std::env::var_os("PLAYTERM_CONFIG_DIR") {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => directories::ProjectDirs::from("", "", "playterm").map(|d| d.config_dir().to_owned()),
+    }
+}
+
+/// Language and light/dark look of the windows (the terminal colors are separate).
+fn apply_ui(ctx: &egui::Context, settings: &AppSettings) {
+    playterm_i18n::set_english(settings.language == Language::English);
+    ctx.set_theme(match settings.ui_theme {
+        UiTheme::Dark => egui::ThemePreference::Dark,
+        UiTheme::Light => egui::ThemePreference::Light,
+        UiTheme::System => egui::ThemePreference::System,
+    });
+}
+
 /// Loads `sessions.toml`. A file that cannot be parsed is moved aside, never overwritten.
 fn load_profiles(path: &Path) -> (ProfileStore, Option<String>) {
     let err = match ProfileStore::load(path) {
@@ -1065,13 +1117,18 @@ fn load_profiles(path: &Path) -> (ProfileStore, Option<String>) {
     backup.push(".broken");
     let backup = PathBuf::from(backup);
     if std::fs::rename(path, &backup).is_ok() {
-        let msg = format!("세션 파일을 읽을 수 없어 {} 로 옮겼습니다: {err}", backup.display());
+        let msg = tr!(
+            "세션 파일을 읽을 수 없어 {} 로 옮겼습니다: {err}",
+            "Cannot read the sessions file, moved it to {}: {err}",
+            backup.display()
+        );
         (ProfileStore::empty(path), Some(msg))
     } else {
         // Could not move it: keep working in memory but write elsewhere.
         let mut fallback = path.as_os_str().to_owned();
         fallback.push(".recovered");
-        (ProfileStore::empty(PathBuf::from(fallback)), Some(format!("세션 파일을 읽을 수 없습니다: {err}")))
+        let msg = tr!("세션 파일을 읽을 수 없습니다: {err}", "Cannot read the sessions file: {err}");
+        (ProfileStore::empty(PathBuf::from(fallback)), Some(msg))
     }
 }
 

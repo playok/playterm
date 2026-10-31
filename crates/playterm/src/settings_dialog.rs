@@ -2,7 +2,8 @@
 //! the open tabs right away; Cancel puts the old settings back.
 
 use eframe::egui::{self, Color32, FontId, RichText, Sense, Vec2};
-use playterm_config::AppSettings;
+use playterm_config::{AppSettings, Language, UiTheme};
+use playterm_i18n::{t, tr};
 use playterm_term::{THEMES, Theme};
 
 use crate::fonts::{self, FontChoice};
@@ -36,9 +37,9 @@ fn color(hex: u32) -> Color32 {
 fn font_label(fonts: &[FontChoice], font: &str) -> String {
     if fonts::is_file(font) {
         let name = std::path::Path::new(font).file_name().map(|n| n.to_string_lossy().into_owned());
-        format!("파일: {}", name.unwrap_or_else(|| font.to_owned()))
+        tr!("파일: {}", "File: {}", name.unwrap_or_else(|| font.to_owned()))
     } else {
-        fonts.iter().find(|f| f.matches(font)).map_or_else(|| font.to_owned(), |f| f.name.clone())
+        fonts.iter().find(|f| f.matches(font)).map_or_else(|| font.to_owned(), |f| f.display().to_owned())
     }
 }
 
@@ -69,22 +70,23 @@ impl SettingsDialog {
         let mut result = None;
         let modal = egui::Modal::new(egui::Id::unique("settings")).show(ctx, |ui| {
             ui.set_width(460.0);
-            ui.heading("설정");
+            ui.heading(t("설정", "Settings"));
             ui.add_space(8.0);
             egui::Grid::new("settings-grid").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
+                self.ui_rows(ui);
                 self.font_row(ui);
                 self.size_row(ui);
                 self.theme_row(ui);
 
-                ui.label("스크롤백");
+                ui.label(t("스크롤백", "Scrollback"));
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::DragValue::new(&mut self.draft.scrollback)
                             .range(AppSettings::MIN_SCROLLBACK..=AppSettings::MAX_SCROLLBACK)
                             .speed(100)
-                            .suffix(" 줄"),
+                            .suffix(t(" 줄", " lines")),
                     );
-                    ui.weak("탭마다 보관하는 지난 출력");
+                    ui.weak(t("탭마다 보관하는 지난 출력", "Past output kept for each tab"));
                 });
                 ui.end_row();
             });
@@ -92,14 +94,14 @@ impl SettingsDialog {
             self.preview(ui);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button("확인").clicked() {
+                if ui.button(t("확인", "OK")).clicked() {
                     result = Some(SettingsResult::Save(self.draft.clone()));
                 }
-                if ui.button("취소").clicked() {
+                if ui.button(t("취소", "Cancel")).clicked() {
                     result = Some(SettingsResult::Cancel(self.original.clone()));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("기본값으로").clicked() {
+                    if ui.button(t("기본값으로", "Reset to defaults")).clicked() {
                         self.draft = AppSettings::default();
                     }
                 });
@@ -119,7 +121,7 @@ impl SettingsDialog {
     }
 
     fn font_row(&mut self, ui: &mut egui::Ui) {
-        ui.label("글꼴");
+        ui.label(t("글꼴", "Font"));
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("font")
                 .width(200.0)
@@ -128,10 +130,13 @@ impl SettingsDialog {
                 // Stay open while typing in the search field; a pick closes it.
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show_ui(ui, |ui| self.font_list(ui));
-            if ui.button("파일에서…").on_hover_text("TTF / OTF / TTC 글꼴 파일").clicked()
+            if ui
+                .button(t("파일에서…", "From file…"))
+                .on_hover_text(t("TTF / OTF / TTC 글꼴 파일", "TTF / OTF / TTC font file"))
+                .clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .set_title("터미널 글꼴 파일")
-                    .add_filter("글꼴", &["ttf", "otf", "ttc"])
+                    .set_title(t("터미널 글꼴 파일", "Terminal font file"))
+                    .add_filter(t("글꼴", "Fonts"), &["ttf", "otf", "ttc"])
                     .pick_file()
             {
                 self.draft.font = path.display().to_string();
@@ -140,28 +145,69 @@ impl SettingsDialog {
         ui.end_row();
     }
 
+    /// Language and the light/dark look of the program.
+    fn ui_rows(&mut self, ui: &mut egui::Ui) {
+        ui.label("언어 / Language");
+        egui::ComboBox::from_id_salt("language").selected_text(self.draft.language.name()).show_ui(ui, |ui| {
+            for lang in Language::ALL {
+                ui.selectable_value(&mut self.draft.language, lang, lang.name());
+            }
+        });
+        ui.end_row();
+
+        ui.label(t("화면 테마", "UI theme"));
+        let name = |theme: UiTheme| match theme {
+            UiTheme::Dark => t("다크", "Dark"),
+            UiTheme::Light => t("라이트", "Light"),
+            UiTheme::System => t("Windows 설정 따르기", "Follow Windows"),
+        };
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("ui-theme").width(200.0).selected_text(name(self.draft.ui_theme)).show_ui(
+                ui,
+                |ui| {
+                    for t in UiTheme::ALL {
+                        ui.selectable_value(&mut self.draft.ui_theme, t, name(t));
+                    }
+                },
+            );
+            ui.weak(t(
+                "메뉴·창의 밝기 (터미널 색은 아래 색 테마)",
+                "Brightness of menus and windows (terminal colors: color theme below)",
+            ));
+        });
+        ui.end_row();
+    }
+
     /// All installed families: fixed-width ones first, then the rest.
     fn font_list(&mut self, ui: &mut egui::Ui) {
         ui.add(
             egui::TextEdit::singleline(&mut self.font_filter)
-                .hint_text(format!("글꼴 검색 ({}개)", self.fonts.len()))
+                .hint_text(tr!("글꼴 검색 ({}개)", "Search fonts ({})", self.fonts.len()))
                 .desired_width(f32::INFINITY),
         );
         ui.separator();
         let filter = self.font_filter.trim().to_lowercase();
-        let shown = |f: &&FontChoice| filter.is_empty() || f.name.to_lowercase().contains(&filter);
+        let shown = |f: &&FontChoice| {
+            filter.is_empty() || f.name.to_lowercase().contains(&filter) || f.key.to_lowercase().contains(&filter)
+        };
         let mut picked = None;
         let mut list = |ui: &mut egui::Ui, monospace: bool| {
-            for f in self.fonts.iter().filter(|f| f.monospace == monospace).filter(shown) {
-                if ui.selectable_label(f.matches(&self.draft.font), &f.name).clicked() {
+            let mut fonts: Vec<&FontChoice> = self.fonts.iter().filter(|f| f.monospace == monospace).filter(shown).collect();
+            // By the name shown in the current language.
+            fonts.sort_by_cached_key(|f| f.display().to_lowercase());
+            for f in fonts {
+                if ui.selectable_label(f.matches(&self.draft.font), f.display()).clicked() {
                     picked = Some(f.key.clone());
                 }
             }
         };
-        ui.weak("고정폭 글꼴");
+        ui.weak(t("고정폭 글꼴", "Fixed-width fonts"));
         list(ui, true);
         ui.add_space(4.0);
-        ui.weak("기타 글꼴 (고정폭이 아니어서 글자 간격이 고르지 않을 수 있음)");
+        ui.weak(t(
+            "기타 글꼴 (고정폭이 아니어서 글자 간격이 고르지 않을 수 있음)",
+            "Other fonts (not fixed-width, so letter spacing may be uneven)",
+        ));
         list(ui, false);
         if fonts::is_file(&self.draft.font) {
             ui.separator();
@@ -174,7 +220,7 @@ impl SettingsDialog {
     }
 
     fn size_row(&mut self, ui: &mut egui::Ui) {
-        ui.label("크기");
+        ui.label(t("크기", "Size"));
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut self.draft.font_size)
@@ -183,13 +229,13 @@ impl SettingsDialog {
                     .fixed_decimals(1)
                     .suffix(" pt"),
             );
-            ui.weak("Ctrl+휠 · Ctrl+= / Ctrl+- / Ctrl+0");
+            ui.weak(t("Ctrl+휠 · Ctrl+= / Ctrl+- / Ctrl+0", "Ctrl+wheel · Ctrl+= / Ctrl+- / Ctrl+0"));
         });
         ui.end_row();
     }
 
     fn theme_row(&mut self, ui: &mut egui::Ui) {
-        ui.label("색 테마");
+        ui.label(t("색 테마", "Color theme"));
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("theme").width(200.0).selected_text(&self.draft.theme).show_ui(ui, |ui| {
                 for theme in THEMES {
@@ -222,10 +268,12 @@ impl SettingsDialog {
             };
             line(ui, &[("user@host", c(10)), (":", fg), ("~/src", c(12)), ("$ ls -l", fg)]);
             line(ui, &[("drwxr-xr-x  ", fg), ("build/", c(12)), ("   ", fg), ("run.sh", c(10)), ("   README.md", fg)]);
-            line(ui, &[("error: ", c(9)), ("연결 실패 ", fg), ("warning: ", c(11)), ("한글 가나다 0Oo1lI", fg)]);
+            // The Hangul sample stays in both languages: it previews the font's Korean glyphs.
+            let failed = t("연결 실패 ", "connection failed ");
+            line(ui, &[("error: ", c(9)), (failed, fg), ("warning: ", c(11)), ("한글 가나다 0Oo1lI", fg)]);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("┌──┬──┐ ").font(font.clone()).color(fg));
-                let selected = RichText::new("선택 영역").font(font.clone()).color(fg);
+                let selected = RichText::new(t("선택 영역", "selection")).font(font.clone()).color(fg);
                 ui.label(selected.background_color(color(theme.selection)));
             });
         });

@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
+use playterm_i18n::{t, tr};
 use russh::client;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -40,9 +41,9 @@ impl ForwardKind {
 impl fmt::Display for ForwardKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            ForwardKind::Local => "로컬 (L)",
-            ForwardKind::Remote => "원격 (R)",
-            ForwardKind::Dynamic => "동적 SOCKS (D)",
+            ForwardKind::Local => t("로컬 (L)", "Local (L)"),
+            ForwardKind::Remote => t("원격 (R)", "Remote (R)"),
+            ForwardKind::Dynamic => t("동적 SOCKS (D)", "Dynamic SOCKS (D)"),
         })
     }
 }
@@ -64,18 +65,18 @@ impl ForwardRule {
     /// IPv6 addresses go in brackets.
     pub fn parse(kind: ForwardKind, spec: &str) -> Result<Self, String> {
         let parts = split_colons(spec);
-        let port = |s: &str| s.parse::<u16>().map_err(|_| format!("잘못된 포트 '{s}': {spec}"));
+        let port = |s: &str| s.parse::<u16>().map_err(|_| tr!("잘못된 포트 '{s}': {spec}", "Invalid port '{s}': {spec}"));
         let (bind, rest): (&str, &[String]) = match (kind, parts.len()) {
             (ForwardKind::Dynamic, 1) | (_, 3) => ("", &parts[..]),
             (ForwardKind::Dynamic, 2) | (_, 4) => (&parts[0], &parts[1..]),
-            _ => return Err(format!("형식이 잘못되었습니다: {spec}")),
+            _ => return Err(tr!("형식이 잘못되었습니다: {spec}", "Invalid format: {spec}")),
         };
         let mut rule = ForwardRule { kind, bind_host: bind.to_owned(), bind_port: port(&rest[0])?, ..Default::default() };
         if kind != ForwardKind::Dynamic {
             rule.dest_host = rest[1].clone();
             rule.dest_port = port(&rest[2])?;
             if rule.dest_host.is_empty() {
-                return Err(format!("대상 호스트가 없습니다: {spec}"));
+                return Err(tr!("대상 호스트가 없습니다: {spec}", "Missing destination host: {spec}"));
             }
         }
         Ok(rule)
@@ -90,8 +91,8 @@ impl ForwardRule {
 impl fmt::Display for ForwardRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let bind = match self.kind {
-            ForwardKind::Remote if self.bind_host.is_empty() => format!("(서버):{}", self.bind_port),
-            ForwardKind::Remote => format!("(서버){}:{}", self.bind_host, self.bind_port),
+            ForwardKind::Remote if self.bind_host.is_empty() => tr!("(서버):{}", "(server):{}", self.bind_port),
+            ForwardKind::Remote => tr!("(서버){}:{}", "(server){}:{}", self.bind_host, self.bind_port),
             _ => format!("{}:{}", self.local_bind(), self.bind_port),
         };
         match self.kind {
@@ -129,15 +130,18 @@ pub(crate) async fn start(session: &Session, rules: &[ForwardRule], sink: &Event
                 let addr = (rule.local_bind().to_owned(), rule.bind_port);
                 match TcpListener::bind(addr).await {
                     Ok(listener) => {
-                        sink.notice(format!("포워딩 시작: {rule}"));
+                        sink.notice(tr!("포워딩 시작: {rule}", "Port forwarding started: {rule}"));
                         tasks.spawn(accept_loop(listener, rule.clone(), session.clone(), sink.clone()));
                     }
-                    Err(e) => sink.notice(format!("포워딩 실패 ({rule}): {e}")),
+                    Err(e) => sink.notice(tr!("포워딩 실패 ({rule}): {e}", "Port forwarding failed ({rule}): {e}")),
                 }
             }
             ForwardKind::Remote => match session.tcpip_forward(rule.bind_host.clone(), rule.bind_port.into()).await {
-                Ok(_) => sink.notice(format!("포워딩 시작: {rule}")),
-                Err(e) => sink.notice(format!("포워딩 실패 ({rule}): 서버가 거부했습니다 ({e})")),
+                Ok(_) => sink.notice(tr!("포워딩 시작: {rule}", "Port forwarding started: {rule}")),
+                Err(e) => sink.notice(tr!(
+                    "포워딩 실패 ({rule}): 서버가 거부했습니다 ({e})",
+                    "Port forwarding failed ({rule}): refused by the server ({e})"
+                )),
             },
         }
     }
@@ -155,7 +159,7 @@ async fn accept_loop(listener: TcpListener, rule: ForwardRule, session: Session,
         let (rule, session, sink) = (rule.clone(), session.clone(), sink.clone());
         tokio::spawn(async move {
             if let Err(e) = handle_local(tcp, peer, &rule, &session).await {
-                sink.notice(format!("포워딩 연결 실패 ({rule}): {e:#}"));
+                sink.notice(tr!("포워딩 연결 실패 ({rule}): {e:#}", "Forwarded connection failed ({rule}): {e:#}"));
             }
         });
     }
@@ -177,7 +181,7 @@ async fn handle_local(
     if rule.kind == ForwardKind::Dynamic {
         socks5_reply(&mut tcp, opened.is_ok()).await?;
     }
-    let channel = opened.with_context(|| format!("{host}:{port} 에 연결할 수 없습니다"))?;
+    let channel = opened.with_context(|| tr!("{host}:{port} 에 연결할 수 없습니다", "Cannot connect to {host}:{port}"))?;
     let mut stream = channel.into_stream();
     tokio::io::copy_bidirectional(&mut tcp, &mut stream).await?;
     Ok(())
@@ -187,7 +191,9 @@ async fn handle_local(
 pub(crate) async fn handle_remote(channel: russh::Channel<client::Msg>, rule: ForwardRule) -> anyhow::Result<()> {
     let mut tcp = TcpStream::connect((rule.dest_host.as_str(), rule.dest_port))
         .await
-        .with_context(|| format!("{}:{} 에 연결할 수 없습니다", rule.dest_host, rule.dest_port))?;
+        .with_context(|| {
+            tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", rule.dest_host, rule.dest_port)
+        })?;
     let mut stream = channel.into_stream();
     tokio::io::copy_bidirectional(&mut tcp, &mut stream).await?;
     Ok(())
@@ -202,13 +208,16 @@ const SOCKS_VERSION: u8 = 5;
 async fn socks5_accept<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> anyhow::Result<(String, u16)> {
     let [version, n_methods] = read_array(s).await?;
     if version != SOCKS_VERSION {
-        bail!("SOCKS5 클라이언트가 아닙니다 (버전 {version})");
+        bail!(tr!("SOCKS5 클라이언트가 아닙니다 (버전 {version})", "Not a SOCKS5 client (version {version})"));
     }
     let mut methods = vec![0u8; n_methods.into()];
     s.read_exact(&mut methods).await?;
     if !methods.contains(&0) {
         s.write_all(&[SOCKS_VERSION, 0xFF]).await?;
-        bail!("SOCKS5: 인증 없는 연결을 지원하지 않는 클라이언트");
+        bail!(t(
+            "SOCKS5: 인증 없는 연결을 지원하지 않는 클라이언트",
+            "SOCKS5: the client does not support connecting without authentication"
+        ));
     }
     s.write_all(&[SOCKS_VERSION, 0]).await?;
 
@@ -219,16 +228,19 @@ async fn socks5_accept<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> anyhow::
             let [len] = read_array(s).await?;
             let mut name = vec![0u8; len.into()];
             s.read_exact(&mut name).await?;
-            String::from_utf8(name).context("SOCKS5: 잘못된 호스트 이름")?
+            String::from_utf8(name).context(t("SOCKS5: 잘못된 호스트 이름", "SOCKS5: invalid host name"))?
         }
         4 => std::net::Ipv6Addr::from(read_array::<16, _>(s).await?).to_string(),
-        other => bail!("SOCKS5: 알 수 없는 주소 형식 {other}"),
+        other => bail!(tr!("SOCKS5: 알 수 없는 주소 형식 {other}", "SOCKS5: unknown address type {other}")),
     };
     let port = u16::from_be_bytes(read_array(s).await?);
     if command != 1 {
         // 7 = command not supported
         s.write_all(&[SOCKS_VERSION, 7, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
-        bail!("SOCKS5: CONNECT 외의 명령({command})은 지원하지 않습니다");
+        bail!(tr!(
+            "SOCKS5: CONNECT 외의 명령({command})은 지원하지 않습니다",
+            "SOCKS5: only CONNECT is supported (got command {command})"
+        ));
     }
     Ok((host, port))
 }

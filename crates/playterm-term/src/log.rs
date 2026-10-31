@@ -40,7 +40,11 @@ impl SessionLog {
         };
         if let LogMode::Text { .. } = mode {
             let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-            write!(log.out, "===== playterm 로그: {title} ({now}) =====\r\n")?;
+            let header = playterm_i18n::tr!(
+                "===== playterm 로그: {title} ({now}) =====\r\n",
+                "===== playterm log: {title} ({now}) =====\r\n"
+            );
+            log.out.write_all(header.as_bytes())?;
         }
         Ok(log)
     }

@@ -1,6 +1,7 @@
 //! One open tab: a terminal screen, bound to a network session while connected and running
 //! the local command prompt ([`crate::console`]) while not.
 
+use playterm_i18n::{t, tr};
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
 use playterm_term::{Charset, LogMode, Palette, Point, Terminal, TerminalEvent};
 
@@ -119,10 +120,12 @@ impl Session {
     /// A tab with the local command prompt.
     pub fn local(id: u64, cols: u16, rows: u16, setup: &TermSetup) -> Self {
         let mut session = Self::blank(id, cols, rows, Charset::Utf8, setup);
-        session.terminal.feed_local(
+        session.terminal.feed_local(t(
             "\x1b[1mplayterm\x1b[0m \x1b[90m- 연결되지 않은 탭입니다. \
              ssh, telnet, open(사이트 관리), sites(사이트 목록), ls 등을 입력하세요. help: 명령 목록\x1b[0m\r\n\r\n",
-        );
+            "\x1b[1mplayterm\x1b[0m \x1b[90m- This tab is not connected. \
+             Type ssh, telnet, open (Site Manager), sites (site list), ls and so on. help: list of commands\x1b[0m\r\n\r\n",
+        ));
         session.prompt();
         session
     }
@@ -195,7 +198,7 @@ impl Session {
         self.remote = Some(Remote { params, handle });
         self.state = SessionState::Connecting;
         let target = self.target();
-        self.terminal.feed_local(&format!("\x1b[90m{target} 에 연결 중...\x1b[0m\r\n"));
+        self.terminal.feed_local(&tr!("\x1b[90m{target} 에 연결 중...\x1b[0m\r\n", "\x1b[90mConnecting to {target}...\x1b[0m\r\n"));
         if let Some(plan) = log {
             let path = logging::new_log_path(&plan.dir, &self.tab_title());
             self.start_log(&path, plan.mode);
@@ -204,7 +207,7 @@ impl Session {
 
     /// `SSH host:22`, `Serial COM3 (9600 8N1)`.
     pub fn target(&self) -> String {
-        let Some(Remote { params: p, .. }) = &self.remote else { return "로컬".into() };
+        let Some(Remote { params: p, .. }) = &self.remote else { return t("로컬", "Local").into() };
         match p.protocol {
             Protocol::Serial => format!("Serial {} ({})", p.serial.port, p.serial.line_summary()),
             proto => format!("{proto} {}:{}", p.host, p.port),
@@ -214,14 +217,17 @@ impl Session {
     pub fn start_log(&mut self, path: &std::path::Path, mode: LogMode) {
         let title = self.tab_title();
         match self.terminal.start_log(path, mode, &title) {
-            Ok(()) => self.notice(&format!("로그 기록 시작: {}", path.display()), "90"),
-            Err(e) => self.notice(&format!("로그 파일을 만들 수 없습니다 ({}): {e}", path.display()), "31"),
+            Ok(()) => self.notice(&tr!("로그 기록 시작: {}", "Logging started: {}", path.display()), "90"),
+            Err(e) => self.notice(
+                &tr!("로그 파일을 만들 수 없습니다 ({}): {e}", "Cannot create the log file ({}): {e}", path.display()),
+                "31",
+            ),
         }
     }
 
     pub fn stop_log(&mut self) {
         if let Some(path) = self.terminal.stop_log() {
-            self.notice(&format!("로그 기록 중지: {}", path.display()), "90");
+            self.notice(&tr!("로그 기록 중지: {}", "Logging stopped: {}", path.display()), "90");
         }
     }
 
@@ -259,7 +265,10 @@ impl Session {
         remote.handle = net.connect(remote.params.clone(), waker);
         self.leave_prompt();
         let target = self.target();
-        self.terminal.feed_local(&format!("\x1b[90m{target} 에 다시 연결 중...\x1b[0m\r\n"));
+        self.terminal.feed_local(&tr!(
+            "\x1b[90m{target} 에 다시 연결 중...\x1b[0m\r\n",
+            "\x1b[90mReconnecting to {target}...\x1b[0m\r\n"
+        ));
         self.state = SessionState::Connecting;
         self.host_key = None;
         self.auth = None;
@@ -284,7 +293,7 @@ impl Session {
         if let Some(name) = &self.name {
             return name.clone();
         }
-        let Some(Remote { params, .. }) = &self.remote else { return "로컬".into() };
+        let Some(Remote { params, .. }) = &self.remote else { return t("로컬", "Local").into() };
         match &self.remote_title {
             Some(t) if !t.is_empty() => t.clone(),
             _ if params.username.is_empty() => params.host.clone(),
@@ -314,7 +323,7 @@ impl Session {
                     self.sftp_pending = false;
                     match result {
                         Ok(conn) => self.sftp = Some(SftpBrowser::new(conn)),
-                        Err(e) => self.notice(&format!("SFTP 열기 실패: {e}"), "31"),
+                        Err(e) => self.notice(&tr!("SFTP 열기 실패: {e}", "Could not open SFTP: {e}"), "31"),
                     }
                 }
                 SessionEvent::Closed(reason) => {
@@ -325,10 +334,13 @@ impl Session {
                     self.sftp_pending = false;
                     self.terminal.reset_modes();
                     match reason {
-                        Some(reason) => self.notice(&format!("연결 종료: {reason}"), "31"),
-                        None => self.notice("연결이 종료되었습니다", "90"),
+                        Some(reason) => self.notice(&tr!("연결 종료: {reason}", "Disconnected: {reason}"), "31"),
+                        None => self.notice(t("연결이 종료되었습니다", "Disconnected"), "90"),
                     }
-                    self.terminal.feed_local("\x1b[90mr: 다시 연결 · help: 명령 목록\x1b[0m\r\n");
+                    self.terminal.feed_local(t(
+                        "\x1b[90mr: 다시 연결 · help: 명령 목록\x1b[0m\r\n",
+                        "\x1b[90mr: reconnect · help: list of commands\x1b[0m\r\n",
+                    ));
                     self.prompt();
                 }
             }
@@ -345,7 +357,9 @@ impl Session {
                 }
                 TerminalEvent::Title(title) => self.remote_title = title,
                 TerminalEvent::ClipboardStore(text) => self.clipboard_store = Some(text),
-                TerminalEvent::LogFailed(e) => self.notice(&format!("로그 기록 실패, 중지합니다: {e}"), "31"),
+                TerminalEvent::LogFailed(e) => {
+                    self.notice(&tr!("로그 기록 실패, 중지합니다: {e}", "Logging failed and was stopped: {e}"), "31")
+                }
                 TerminalEvent::Bell => {}
             }
         }
@@ -402,8 +416,13 @@ impl Session {
         }
     }
 
-    pub fn charset(&self) -> Charset {
-        self.charset
+    /// The encoding for the status bar: the setting, or what automatic detection found.
+    pub fn charset_label(&self) -> String {
+        match (self.charset, self.terminal.detected_charset()) {
+            (Charset::Auto, None) => t("자동 감지 중 (UTF-8 로 표시)", "Detecting (shown as UTF-8)").into(),
+            (Charset::Auto, Some(found)) => tr!("{found} (자동 감지)", "{found} (auto-detected)"),
+            (set, _) => set.to_string(),
+        }
     }
 
     /// Typed or pasted text.
@@ -510,7 +529,7 @@ impl Session {
         match console::parse(line) {
             Parsed::Empty => self.prompt(),
             Parsed::Help => {
-                self.print(console::HELP);
+                self.print(console::help());
                 self.prompt();
             }
             Parsed::Clear => self.clear_screen(),

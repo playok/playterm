@@ -3689,6 +3689,7 @@ dependencies = [
  "log",
  "memmap2",
  "playterm-config",
+ "playterm-i18n",
  "playterm-net",
  "playterm-term",
  "rfd",
@@ -3708,14 +3709,18 @@ dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
  "getrandom 0.4.3",
+ "playterm-i18n",
  "playterm-net",
  "playterm-term",
  "serde",
  "tempfile",
- "thiserror 2.0.21",
  "toml",
  "zeroize",
 ]
+
+[[package]]
+name = "playterm-i18n"
+version = "0.1.0"
 
 [[package]]
 name = "playterm-net"
@@ -3724,6 +3729,7 @@ dependencies = [
  "anyhow",
  "futures",
  "log",
+ "playterm-i18n",
  "rand",
  "russh",
  "russh-sftp",
@@ -3741,6 +3747,7 @@ dependencies = [
  "alacritty_terminal",
  "chrono",
  "encoding_rs",
+ "playterm-i18n",
  "serde",
  "tempfile",
 ]

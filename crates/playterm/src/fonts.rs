@@ -33,6 +33,11 @@ pub struct FontChoice {
 }
 
 impl FontChoice {
+    /// The name to show: Korean when the UI is Korean and the font has a Korean name.
+    pub fn display(&self) -> &str {
+        if playterm_i18n::english() { &self.key } else { &self.name }
+    }
+
     pub fn matches(&self, name: &str) -> bool {
         let name = name.trim().to_lowercase();
         self.names.contains(&name)
@@ -294,7 +299,10 @@ fn load(face: &Face) -> std::io::Result<FontData> {
 pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
     let mut error = None;
     let choice = find(font).or_else(|| {
-        error = Some(format!("'{font}' 글꼴을 찾을 수 없어 Consolas 를 씁니다"));
+        error = Some(playterm_i18n::tr!(
+            "'{font}' 글꼴을 찾을 수 없어 Consolas 를 씁니다",
+            "Font '{font}' not found, using Consolas"
+        ));
         find("Consolas")
     });
 
@@ -316,7 +324,7 @@ pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
         if add(&mut defs, "term", &c.regular) {
             regular.push("term".to_owned());
         } else {
-            error = Some(format!("글꼴을 불러올 수 없습니다: {font}"));
+            error = Some(playterm_i18n::tr!("글꼴을 불러올 수 없습니다: {font}", "Cannot load the font: {font}"));
         }
         if let Some(b) = &c.bold
             && add(&mut defs, "term-bold", b)

@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use anyhow::Context as _;
+use playterm_i18n::{t, tr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -255,8 +256,8 @@ pub(crate) async fn run(
         TcpStream::connect((params.host.as_str(), params.port)),
     )
     .await
-    .context("연결 시간 초과")?
-    .with_context(|| format!("{}:{} 에 연결할 수 없습니다", params.host, params.port))?;
+    .context(t("연결 시간 초과", "Connection timed out"))?
+    .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
     stream.set_nodelay(true)?;
     sink.send(SessionEvent::Connected);
 
@@ -267,7 +268,7 @@ pub(crate) async fn run(
     loop {
         tokio::select! {
             n = reader.read(&mut buf) => {
-                let n = n.context("수신 오류")?;
+                let n = n.context(t("수신 오류", "Receive error"))?;
                 if n == 0 {
                     return Ok(());
                 }
@@ -288,10 +289,14 @@ pub(crate) async fn run(
                 }
                 Some(SessionCommand::SendBreak) => {
                     writer.write_all(&[IAC, BRK]).await?;
-                    sink.notice("BREAK 신호를 보냈습니다");
+                    sink.notice(t("BREAK 신호를 보냈습니다", "Sent BREAK"));
                 }
                 Some(SessionCommand::OpenSftp) => {
-                    sink.send(SessionEvent::Sftp(Err("Telnet 세션에서는 SFTP를 쓸 수 없습니다".into())));
+                    sink.send(SessionEvent::Sftp(Err(t(
+                        "Telnet 세션에서는 SFTP를 쓸 수 없습니다",
+                        "SFTP is not available in Telnet sessions",
+                    )
+                    .into())));
                 }
                 Some(SessionCommand::Close) | None => {
                     let _ = writer.shutdown().await;

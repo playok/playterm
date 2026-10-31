@@ -9,12 +9,13 @@ anyhow = "1.0.104"
 arboard = "3.7.0"
 chrono = "0.4.45"
 directories = "6.0.0"
-encoding_rs = "0.8.44"
 eframe = { version = "0.37.0", features = ["glow"] }
+encoding_rs = "0.8.44"
 env_logger = "0.11.11"
 log = "0.4.35"
 memmap2 = "0.9.12"
 playterm-config = { version = "0.1.0", path = "../playterm-config" }
+playterm-i18n = { version = "0.1.0", path = "../playterm-i18n" }
 playterm-net = { version = "0.1.0", path = "../playterm-net" }
 playterm-term = { version = "0.1.0", path = "../playterm-term" }
 rfd = "0.17.2"
