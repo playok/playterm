@@ -21,7 +21,7 @@ use crate::session::{Session, SessionSpec, SessionState, TermSetup};
 use crate::settings_dialog::{SettingsDialog, SettingsResult};
 use crate::sidebar::{self, Sidebar, SidebarAction, VaultState};
 use crate::site_manager::{SiteManager, SiteManagerResult};
-use crate::{clipboard, fonts, view};
+use crate::{clipboard, fonts, status_bar, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
 /// App shortcuts, consumed before the terminal sees the key events. Ctrl+Shift+Tab must come
@@ -678,6 +678,10 @@ impl PlaytermApp {
             }
 
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            Command::ToggleStatusBar => {
+                self.settings.status_bar = !self.settings.status_bar;
+                self.save_settings();
+            }
             Command::ToggleFullscreen => {
                 let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
@@ -923,6 +927,7 @@ impl PlaytermApp {
             sessions: &self.sessions,
             active: self.active,
             show_sidebar: self.show_sidebar,
+            show_status_bar: self.settings.status_bar,
             vault: self.vault_state(),
             always_on_top: self.always_on_top,
         };
@@ -1099,6 +1104,11 @@ impl eframe::App for PlaytermApp {
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
+        // Added before the side panel so it spans the whole window width.
+        if self.settings.status_bar {
+            let session = self.sessions.get(self.active);
+            egui::Panel::bottom("status").show(ui, |ui| status_bar::show(ui, session));
+        }
         if self.show_sidebar {
             let vault = self.vault_state();
             let action = egui::Panel::left("sessions")

@@ -18,6 +18,8 @@ pub struct AppSettings {
     pub theme: String,
     /// Lines of history kept per tab.
     pub scrollback: usize,
+    /// Show the status bar under the terminal.
+    pub status_bar: bool,
 }
 
 impl AppSettings {
@@ -62,6 +64,7 @@ impl Default for AppSettings {
             font_size: Self::DEFAULT_FONT_SIZE,
             theme: "Campbell".into(),
             scrollback: 10_000,
+            status_bar: true,
         }
     }
 }
@@ -76,7 +79,13 @@ mod tests {
         let path = dir.path().join("settings.toml");
         assert_eq!(AppSettings::load(&path).unwrap(), AppSettings::default());
 
-        let s = AppSettings { font: "D2Coding".into(), font_size: 18.5, theme: "Dracula".into(), scrollback: 5000 };
+        let s = AppSettings {
+            font: "D2Coding".into(),
+            font_size: 18.5,
+            theme: "Dracula".into(),
+            scrollback: 5000,
+            status_bar: false,
+        };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);
 

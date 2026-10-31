@@ -24,6 +24,7 @@ pub enum Command {
     ClearScrollback,
 
     ToggleSidebar,
+    ToggleStatusBar,
     ToggleFullscreen,
     ZoomIn,
     ZoomOut,
@@ -61,6 +62,7 @@ pub struct MenuState<'a> {
     pub sessions: &'a [Session],
     pub active: usize,
     pub show_sidebar: bool,
+    pub show_status_bar: bool,
     pub vault: VaultState,
     pub always_on_top: bool,
 }
@@ -131,6 +133,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
 
         ui.menu_button("보기", |ui| {
             check(ui, out, "사이트 목록", "Ctrl+Shift+B", st.show_sidebar, Command::ToggleSidebar);
+            check(ui, out, "상태 표시줄", "", st.show_status_bar, Command::ToggleStatusBar);
             check(ui, out, "전체 화면", "F11", fullscreen, Command::ToggleFullscreen);
             ui.separator();
             item(ui, out, "글꼴 크게", "Ctrl+=", true, Command::ZoomIn);

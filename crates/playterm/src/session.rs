@@ -110,6 +110,9 @@ pub struct Session {
     cwd: std::path::PathBuf,
     /// Commands typed at the prompt that the app has to carry out.
     pub requests: Vec<Request>,
+    /// Bytes received from and sent to the remote side on the current connection.
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
 }
 
 impl Session {
@@ -158,6 +161,8 @@ impl Session {
             console: LineEditor::default(),
             cwd: local_fs::home(),
             requests: Vec::new(),
+            rx_bytes: 0,
+            tx_bytes: 0,
         }
     }
 
@@ -184,6 +189,8 @@ impl Session {
         self.log_plan = log.clone();
         self.login = login.clone().map(LoginRunner::new);
         self.login_script = login;
+        self.rx_bytes = 0;
+        self.tx_bytes = 0;
         let handle = net.connect(params.clone(), waker);
         self.remote = Some(Remote { params, handle });
         self.state = SessionState::Connecting;
@@ -196,7 +203,7 @@ impl Session {
     }
 
     /// `SSH host:22`, `Serial COM3 (9600 8N1)`.
-    fn target(&self) -> String {
+    pub fn target(&self) -> String {
         let Some(Remote { params: p, .. }) = &self.remote else { return "로컬".into() };
         match p.protocol {
             Protocol::Serial => format!("Serial {} ({})", p.serial.port, p.serial.line_summary()),
@@ -258,6 +265,8 @@ impl Session {
         self.auth = None;
         self.requests.clear();
         self.login = self.login_script.clone().map(LoginRunner::new);
+        self.rx_bytes = 0;
+        self.tx_bytes = 0;
     }
 
     /// What this tab is connected with; `None` for a tab that never connected.
@@ -291,6 +300,7 @@ impl Session {
             match event {
                 SessionEvent::Connected => self.state = SessionState::Connected,
                 SessionEvent::Data(bytes) => {
+                    self.rx_bytes += bytes.len() as u64;
                     self.terminal.feed(&bytes);
                     self.auto_login(bytes.contains(&b'\n'));
                 }
@@ -329,6 +339,7 @@ impl Session {
             match event {
                 TerminalEvent::Reply(bytes) => {
                     if let Some(remote) = &self.remote {
+                        self.tx_bytes += bytes.len() as u64;
                         remote.handle.send(bytes);
                     }
                 }
@@ -351,7 +362,9 @@ impl Session {
         match action {
             Some(LoginAction::Send(text)) => {
                 if let Some(remote) = &self.remote {
-                    remote.handle.send(self.terminal.encode_input(&text));
+                    let bytes = self.terminal.encode_input(&text);
+                    self.tx_bytes += bytes.len() as u64;
+                    remote.handle.send(bytes);
                 }
             }
             Some(LoginAction::Stop(message)) => self.notice(&message, "33"),
@@ -384,8 +397,13 @@ impl Session {
         {
             self.terminal.scroll_to_bottom();
             self.terminal.clear_selection();
+            self.tx_bytes += bytes.len() as u64;
             remote.handle.send(bytes);
         }
+    }
+
+    pub fn charset(&self) -> Charset {
+        self.charset
     }
 
     /// Typed or pasted text.
