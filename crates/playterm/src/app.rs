@@ -16,7 +16,7 @@ use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultM
 use crate::import_dialog::{ImportDialog, ImportResult};
 use crate::logging::{self, LogPlan};
 use crate::menu::{self, Command, MenuState};
-use crate::power::SleepGuard;
+use crate::power::{ScreenSaverGuard, SleepGuard};
 use crate::profile_form::expand_home;
 use crate::search_bar::SearchBar;
 use crate::session::{Session, SessionSpec, SessionState, TermSetup};
@@ -138,6 +138,8 @@ pub struct PlaytermApp {
     broadcast: bool,
     /// Holds off Windows sleep while sessions are connected.
     sleep_guard: SleepGuard,
+    /// Keeps the screen saver away while the Tools menu item is checked.
+    screensaver_guard: ScreenSaverGuard,
 }
 
 impl PlaytermApp {
@@ -192,6 +194,7 @@ impl PlaytermApp {
             zoom_accum: 0.0,
             broadcast: false,
             sleep_guard: SleepGuard::default(),
+            screensaver_guard: ScreenSaverGuard::default(),
         };
         for profile in initial {
             app.open_session(&profile, None, None);
@@ -822,6 +825,11 @@ impl PlaytermApp {
                 self.active = 0;
             }
 
+            Command::TogglePreventScreensaver => {
+                self.settings.prevent_screensaver = !self.settings.prevent_screensaver;
+                self.save_settings();
+            }
+
             Command::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
             Command::ToggleMaximize => {
                 let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
@@ -1000,6 +1008,7 @@ impl PlaytermApp {
             vault: self.vault_state(),
             always_on_top: self.always_on_top,
             broadcast: self.broadcast,
+            prevent_screensaver: self.settings.prevent_screensaver,
         };
         if let Some(command) = menu::menu_bar(ui, &state) {
             let ctx = ui.ctx().clone();
@@ -1244,6 +1253,7 @@ impl eframe::App for PlaytermApp {
         self.dropped_files(&ctx);
         let connected = self.sessions.iter().any(|s| s.state == SessionState::Connected);
         self.sleep_guard.set(if connected { self.settings.prevent_sleep } else { PreventSleep::Off });
+        self.screensaver_guard.set(self.settings.prevent_screensaver);
 
         let prompt_open = self.show_session_prompts(&ctx);
         if !prompt_open {
@@ -1261,7 +1271,10 @@ impl eframe::App for PlaytermApp {
         // Added before the side panel so it spans the whole window width.
         if self.settings.status_bar {
             let session = self.sessions.get(self.active);
-            let awake = self.sleep_guard.active();
+            let awake = status_bar::Awake {
+                sleep: self.sleep_guard.active(),
+                screensaver: self.screensaver_guard.active(),
+            };
             egui::Panel::bottom("status").show(ui, |ui| status_bar::show(ui, session, awake));
         }
         if self.show_sidebar {

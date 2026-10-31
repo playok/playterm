@@ -54,6 +54,8 @@ pub enum Command {
     /// Whether this tab receives simultaneous input.
     ToggleInBroadcast(usize),
 
+    TogglePreventScreensaver,
+
     Minimize,
     ToggleMaximize,
     ToggleAlwaysOnTop,
@@ -71,6 +73,7 @@ pub struct MenuState<'a> {
     pub vault: VaultState,
     pub always_on_top: bool,
     pub broadcast: bool,
+    pub prevent_screensaver: bool,
 }
 
 /// Adds a menu item; a click records `command` and closes the menu.
@@ -169,6 +172,15 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                     item(ui, out, t("비밀번호 볼트 잠그기", "Lock password vault"), "", true, Command::LockVault)
                 }
             }
+            ui.separator();
+            check(
+                ui,
+                out,
+                t("화면보호기 진입 방지", "Prevent screen saver"),
+                "",
+                st.prevent_screensaver,
+                Command::TogglePreventScreensaver,
+            );
             ui.separator();
             item(ui, out, t("설정…", "Settings…"), "", true, Command::Settings);
         });

@@ -37,8 +37,14 @@ fn lock(ui: &mut egui::Ui, label: &str, on: bool) {
     ui.label(text).on_hover_text(format!("{label} {}", if on { t("켜짐", "on") } else { t("꺼짐", "off") }));
 }
 
-/// `awake`: Windows sleep is being held off for the connected sessions.
-pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: bool) {
+/// What playterm is keeping Windows from doing.
+pub struct Awake {
+    /// Sleep, held off for the connected sessions.
+    pub sleep: bool,
+    pub screensaver: bool,
+}
+
+pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
     let (caps, num) = lock_keys();
     ui.horizontal(|ui| {
         if let Some(s) = session {
@@ -60,7 +66,14 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: bool) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             lock(ui, "NUM", num);
             lock(ui, "CAPS", caps);
-            if awake {
+            if awake.screensaver {
+                ui.separator();
+                ui.label(RichText::new(t("화면보호기 방지", "No screen saver")).small()).on_hover_text(t(
+                    "화면보호기가 켜지지 않습니다 (도구 → 화면보호기 진입 방지)",
+                    "The screen saver will not start (Tools → Prevent screen saver)",
+                ));
+            }
+            if awake.sleep {
                 ui.separator();
                 ui.label(RichText::new(t("절전 방지", "No sleep")).small()).on_hover_text(t(
                     "연결된 세션이 있어 Windows 가 절전 모드로 들어가지 않습니다 (설정에서 변경)",

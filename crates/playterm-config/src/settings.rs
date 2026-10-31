@@ -76,6 +76,8 @@ pub struct AppSettings {
     pub language: Language,
     pub ui_theme: UiTheme,
     pub prevent_sleep: PreventSleep,
+    /// Keep the screen saver from starting while playterm runs (Tools menu).
+    pub prevent_screensaver: bool,
 }
 
 impl AppSettings {
@@ -124,6 +126,7 @@ impl Default for AppSettings {
             language: Language::Korean,
             ui_theme: UiTheme::Dark,
             prevent_sleep: PreventSleep::System,
+            prevent_screensaver: false,
         }
     }
 }
@@ -147,6 +150,7 @@ mod tests {
             language: Language::English,
             ui_theme: UiTheme::System,
             prevent_sleep: PreventSleep::Display,
+            prevent_screensaver: true,
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);
