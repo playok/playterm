@@ -8,25 +8,46 @@ use playterm_net::{ConnectParams, NetRuntime, Protocol, Waker};
 use playterm_term::LogMode;
 use zeroize::Zeroizing;
 
-use crate::dialogs::{
-    self, EditorResult, QuickConnect, QuickConnectResult, SessionEditor, VaultDialog, VaultMode, VaultResult,
-};
+use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultMode, VaultResult};
 use crate::logging::{self, LogPlan};
+use crate::menu::{self, Command, MenuState};
 use crate::profile_form::expand_home;
 use crate::session::{Session, SessionSpec, SessionState};
 use crate::sidebar::{Sidebar, SidebarAction, VaultState};
+use crate::site_manager::{SiteManager, SiteManagerResult};
 use crate::{clipboard, fonts, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
-const SC_QUICK_CONNECT: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::T);
-const SC_CLOSE_TAB: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::W);
-const SC_DUPLICATE_TAB: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::D);
-const SC_PREV_TAB: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::Tab);
-const SC_NEXT_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::Tab);
-const SC_COPY: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::C);
-const SC_PASTE: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::V);
-const SC_SIDEBAR: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::B);
-const SC_SFTP: KeyboardShortcut = KeyboardShortcut::new(CTRL_SHIFT, Key::F);
+/// App shortcuts, consumed before the terminal sees the key events. Ctrl+Shift+Tab must come
+/// before Ctrl+Tab, whose pattern also matches it.
+const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::T), Shortcut::QuickConnect),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::S), Shortcut::SiteManager),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::B), Shortcut::Sidebar),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::F), Shortcut::Sftp),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::Tab), Shortcut::PrevTab),
+    (KeyboardShortcut::new(Modifiers::CTRL, Key::Tab), Shortcut::NextTab),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::W), Shortcut::CloseTab),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::D), Shortcut::DuplicateTab),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::C), Shortcut::Copy),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::V), Shortcut::Paste),
+    (KeyboardShortcut::new(Modifiers::NONE, Key::F11), Shortcut::Fullscreen),
+];
+
+#[derive(Clone, Copy)]
+enum Shortcut {
+    QuickConnect,
+    SiteManager,
+    Sidebar,
+    Sftp,
+    PrevTab,
+    NextTab,
+    CloseTab,
+    DuplicateTab,
+    Copy,
+    Paste,
+    Fullscreen,
+}
 
 /// What to do once the vault dialog succeeds (or is cancelled).
 enum Pending {
@@ -39,10 +60,16 @@ enum Pending {
 }
 
 enum Modal {
-    QuickConnect(QuickConnect),
-    Editor(SessionEditor),
+    QuickConnect(Box<QuickConnect>),
     Vault(VaultDialog, Pending),
     ConfirmDelete(String),
+    Shortcuts,
+    About,
+}
+
+/// Whether the vault holds a password for `p` (while locked, the profile flag is the best guess).
+fn has_secret(vault: &Vault, p: &SessionProfile) -> bool {
+    if vault.is_unlocked() { vault.get(&p.id).is_some() } else { p.save_password && vault.exists() }
 }
 
 pub struct PlaytermApp {
@@ -56,10 +83,13 @@ pub struct PlaytermApp {
     next_id: u64,
     sidebar: Sidebar,
     show_sidebar: bool,
+    /// The site manager window; app modals (vault, delete confirmation) stack above it.
+    site_manager: Option<SiteManager>,
     modal: Option<Modal>,
     /// Last error, shown in the tab bar until clicked.
     status: Option<String>,
     window_title: String,
+    always_on_top: bool,
 }
 
 impl PlaytermApp {
@@ -85,15 +115,17 @@ impl PlaytermApp {
             known_hosts: config_dir.join("known_hosts"),
             vault: Vault::new(config_dir.join("vault.toml")),
             modal: (initial.is_empty() && store.profiles().is_empty())
-                .then(|| Modal::QuickConnect(QuickConnect::new())),
+                .then(|| Modal::QuickConnect(Box::new(QuickConnect::new()))),
             store,
             sessions: Vec::new(),
             active: 0,
             next_id: 1,
             sidebar: Sidebar::default(),
             show_sidebar: true,
+            site_manager: None,
             status,
             window_title: String::new(),
+            always_on_top: false,
         };
         for profile in initial {
             app.open_session(&profile, None, None);
@@ -183,7 +215,7 @@ impl PlaytermApp {
         let id = profile.id.clone();
         let save_password = profile.save_password;
         let r = self.store.upsert(profile);
-        self.report("세션 저장 실패", r);
+        self.report("사이트 저장 실패", r);
 
         // If the vault is locked, a stale secret is pruned on the next unlock instead.
         if !save_password && self.vault.is_unlocked() {
@@ -258,40 +290,205 @@ impl PlaytermApp {
         }
     }
 
+    /// Saves a copy of a site (with its stored password, if the vault is open). Returns the copy.
+    fn duplicate_profile(&mut self, id: &str) -> Option<SessionProfile> {
+        let mut copy = self.store.get(id)?.duplicate();
+        let secret = self.vault.get(id).map(|s| Zeroizing::new(s.to_owned()));
+        copy.save_password &= secret.is_some();
+        let r = self.store.upsert(copy.clone());
+        self.report("사이트 저장 실패", r);
+        if let Some(secret) = secret {
+            let r = self.vault.set(&copy.id, &secret);
+            self.report("비밀번호 복사 실패", r);
+        }
+        Some(copy)
+    }
+
+    /// Opens the site manager, with `select` selected or a new site started.
+    fn open_site_manager(&mut self, select: Option<&str>, new_site: bool) {
+        let mut manager = SiteManager::default();
+        if new_site {
+            manager.new_site();
+        } else if let Some(p) = select.and_then(|id| self.store.get(id)) {
+            manager.select(p, has_secret(&self.vault, p));
+        }
+        self.site_manager = Some(manager);
+    }
+
     fn sidebar_action(&mut self, action: SidebarAction) {
         match action {
             SidebarAction::Connect(id) => self.connect_saved(&id),
-            SidebarAction::New => self.modal = Some(Modal::Editor(SessionEditor::new_profile())),
-            SidebarAction::Edit(id) => {
-                if let Some(p) = self.store.get(&id).cloned() {
-                    // While locked we can only trust the profile flag, and only if a vault exists.
-                    let has_secret = if self.vault.is_unlocked() {
-                        self.vault.get(&id).is_some()
-                    } else {
-                        p.save_password && self.vault.exists()
-                    };
-                    self.modal = Some(Modal::Editor(SessionEditor::edit(p, has_secret)));
-                }
-            }
+            SidebarAction::Manage(id) => self.open_site_manager(id.as_deref(), false),
+            SidebarAction::New => self.open_site_manager(None, true),
             SidebarAction::Duplicate(id) => {
-                if let Some(p) = self.store.get(&id).cloned() {
-                    let mut copy = p.duplicate();
-                    let secret = self.vault.get(&id).map(|s| Zeroizing::new(s.to_owned()));
-                    copy.save_password &= secret.is_some();
-                    let new_id = copy.id.clone();
-                    let r = self.store.upsert(copy);
-                    self.report("세션 저장 실패", r);
-                    if let Some(secret) = secret {
-                        let r = self.vault.set(&new_id, &secret);
-                        self.report("비밀번호 복사 실패", r);
-                    }
-                }
+                self.duplicate_profile(&id);
             }
             SidebarAction::Delete(id) => self.modal = Some(Modal::ConfirmDelete(id)),
             SidebarAction::LockVault => self.vault.lock(),
-            SidebarAction::UnlockVault => {
-                self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, ""), Pending::Unlock));
+            SidebarAction::UnlockVault => self.unlock_vault(),
+        }
+    }
+
+    fn unlock_vault(&mut self) {
+        self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, ""), Pending::Unlock));
+    }
+
+    /// Shows the site manager, if open, and applies its outcome.
+    fn show_site_manager(&mut self, ctx: &egui::Context) {
+        let Some(mut manager) = self.site_manager.take() else { return };
+        let vault = &self.vault;
+        let result = manager.show(ctx, &self.store, &|p| has_secret(vault, p));
+        match result {
+            SiteManagerResult::Open => self.site_manager = Some(manager),
+            SiteManagerResult::Close => {}
+            SiteManagerResult::Save { profile, password, connect, close } => {
+                if !connect && !close {
+                    self.site_manager = Some(manager);
+                }
+                self.save_profile(*profile, password, connect);
             }
+            SiteManagerResult::Connect(id) => self.connect_saved(&id),
+            SiteManagerResult::Duplicate(id) => {
+                if let Some(copy) = self.duplicate_profile(&id) {
+                    manager.select(&copy, has_secret(&self.vault, &copy));
+                }
+                self.site_manager = Some(manager);
+            }
+            SiteManagerResult::Delete(id) => {
+                self.site_manager = Some(manager);
+                self.modal = Some(Modal::ConfirmDelete(id));
+            }
+        }
+    }
+
+    // -- commands -------------------------------------------------------------------------------
+
+    fn run(&mut self, ctx: &egui::Context, command: Command) {
+        let n = self.sessions.len();
+        match command {
+            Command::QuickConnect => self.modal = Some(Modal::QuickConnect(Box::new(QuickConnect::new()))),
+            Command::SiteManager => {
+                let selected = self.sidebar.selected().map(str::to_owned);
+                self.open_site_manager(selected.as_deref(), false);
+            }
+            Command::NewSite => self.open_site_manager(None, true),
+            Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+
+            Command::Copy => {
+                if let Some(s) = self.sessions.get_mut(self.active) {
+                    view::copy_selection(ctx, s);
+                }
+            }
+            Command::Paste => {
+                if let Some(s) = self.sessions.get_mut(self.active)
+                    && let Some(text) = clipboard::read_text()
+                {
+                    view::paste(s, &text);
+                }
+            }
+            Command::SelectAll => {
+                if let Some(s) = self.sessions.get_mut(self.active) {
+                    s.terminal.select_all();
+                }
+            }
+            Command::ClearScrollback => {
+                if let Some(s) = self.sessions.get_mut(self.active) {
+                    s.terminal.clear_scrollback();
+                }
+            }
+
+            Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            Command::ToggleFullscreen => {
+                let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+            }
+
+            Command::Sftp(i) => {
+                if let Some(s) = self.sessions.get_mut(i) {
+                    s.open_sftp();
+                }
+            }
+            Command::Break(i) => {
+                if let Some(s) = self.sessions.get_mut(i) {
+                    s.send_break();
+                }
+            }
+            Command::StopLog(i) => {
+                if let Some(s) = self.sessions.get_mut(i) {
+                    s.stop_log();
+                }
+            }
+            Command::StartLog(i, mode) => {
+                let Some(session) = self.sessions.get_mut(i) else { return };
+                let dir = logging::default_log_dir();
+                let _ = std::fs::create_dir_all(&dir);
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("로그 파일")
+                    .set_directory(&dir)
+                    .set_file_name(logging::file_name(&session.tab_title()))
+                    .add_filter("로그", &["log", "txt"])
+                    .save_file()
+                {
+                    session.start_log(&path, mode);
+                }
+            }
+            Command::RevealLog(i) => {
+                if let Some(log) = self.sessions.get(i).and_then(|s| s.terminal.log()) {
+                    logging::reveal(log.path());
+                }
+            }
+            Command::OpenLogFolder => logging::reveal(&logging::default_log_dir()),
+            Command::LockVault => self.vault.lock(),
+            Command::UnlockVault => self.unlock_vault(),
+
+            Command::Activate(i) if i < n => self.active = i,
+            Command::Activate(_) => {}
+            Command::NextTab if n > 0 => self.active = (self.active + 1) % n,
+            Command::PrevTab if n > 0 => self.active = (self.active + n - 1) % n,
+            Command::NextTab | Command::PrevTab => {}
+            Command::Duplicate(i) => {
+                if let Some(s) = self.sessions.get(i) {
+                    let spec = s.spec();
+                    self.open_spec(spec);
+                }
+            }
+            Command::Reconnect(i) if i < n => {
+                let waker = self.waker.clone();
+                self.sessions[i].reconnect(&self.net, waker);
+                self.active = i;
+            }
+            Command::Close(i) if i < n => self.close_session(i),
+            Command::Reconnect(_) | Command::Close(_) => {}
+            Command::CloseOthers(i) if i < n => {
+                let keep = self.sessions.remove(i);
+                for mut s in self.sessions.drain(..) {
+                    s.close();
+                }
+                self.sessions.push(keep);
+                self.active = 0;
+            }
+            Command::CloseOthers(_) => {}
+            Command::CloseAll => {
+                for mut s in self.sessions.drain(..) {
+                    s.close();
+                }
+                self.active = 0;
+            }
+
+            Command::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            Command::ToggleMaximize => {
+                let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            Command::ToggleAlwaysOnTop => {
+                self.always_on_top = !self.always_on_top;
+                let level =
+                    if self.always_on_top { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal };
+                ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+            }
+
+            Command::Shortcuts => self.modal = Some(Modal::Shortcuts),
+            Command::About => self.modal = Some(Modal::About),
         }
     }
 
@@ -307,17 +504,22 @@ impl PlaytermApp {
                 QuickConnectResult::Connect { profile, password, save } => {
                     if save {
                         let r = self.store.upsert((*profile).clone());
-                        self.report("세션 저장 실패", r);
+                        self.report("사이트 저장 실패", r);
                     }
                     let name = save.then(|| profile.display_name());
                     self.open_session(&profile, password.map(|p| p.to_string()), name);
                 }
             },
-            Modal::Editor(mut editor) => match editor.show(ctx, &self.store.folders()) {
-                EditorResult::Open => self.modal = Some(Modal::Editor(editor)),
-                EditorResult::Cancel => {}
-                EditorResult::Save { profile, password, connect } => self.save_profile(*profile, password, connect),
-            },
+            Modal::Shortcuts => {
+                if !dialogs::shortcuts(ctx) {
+                    self.modal = Some(Modal::Shortcuts);
+                }
+            }
+            Modal::About => {
+                if !dialogs::about(ctx) {
+                    self.modal = Some(Modal::About);
+                }
+            }
             Modal::Vault(mut dialog, pending) => match dialog.show(ctx) {
                 VaultResult::Open => self.modal = Some(Modal::Vault(dialog, pending)),
                 VaultResult::Cancel => self.vault_cancelled(pending),
@@ -344,12 +546,12 @@ impl PlaytermApp {
             },
             Modal::ConfirmDelete(id) => {
                 let name = self.store.get(&id).map(|p| p.display_name()).unwrap_or_default();
-                match dialogs::confirm(ctx, "세션 삭제", &format!("'{name}' 세션을 삭제할까요?"), "삭제") {
+                match dialogs::confirm(ctx, "사이트 삭제", &format!("'{name}' 사이트를 삭제할까요?"), "삭제") {
                     None => self.modal = Some(Modal::ConfirmDelete(id)),
                     Some(false) => {}
                     Some(true) => {
                         let r = self.store.remove(&id);
-                        self.report("세션 삭제 실패", r);
+                        self.report("사이트 삭제 실패", r);
                         if self.vault.is_unlocked() {
                             let r = self.vault.remove(&id);
                             self.report("볼트 갱신 실패", r);
@@ -377,64 +579,48 @@ impl PlaytermApp {
 
     /// App shortcuts, consumed before the terminal sees the key events.
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        let pressed = |sc: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(sc));
-        if pressed(&SC_QUICK_CONNECT) {
-            self.modal = Some(Modal::QuickConnect(QuickConnect::new()));
+        for (shortcut, what) in SHORTCUTS {
+            if !ctx.input_mut(|i| i.consume_shortcut(shortcut)) {
+                continue;
+            }
+            let i = self.active;
+            let command = match what {
+                Shortcut::QuickConnect => Command::QuickConnect,
+                Shortcut::SiteManager => Command::SiteManager,
+                Shortcut::Sidebar => Command::ToggleSidebar,
+                Shortcut::Sftp => Command::Sftp(i),
+                Shortcut::PrevTab => Command::PrevTab,
+                Shortcut::NextTab => Command::NextTab,
+                Shortcut::CloseTab => Command::Close(i),
+                Shortcut::DuplicateTab => Command::Duplicate(i),
+                Shortcut::Copy => Command::Copy,
+                Shortcut::Paste => Command::Paste,
+                Shortcut::Fullscreen => Command::ToggleFullscreen,
+            };
+            self.run(ctx, command);
         }
-        if pressed(&SC_SIDEBAR) {
-            self.show_sidebar = !self.show_sidebar;
-        }
-        if pressed(&SC_SFTP)
-            && let Some(s) = self.sessions.get_mut(self.active)
-        {
-            s.open_sftp();
-        }
-        // Ctrl+Shift+Tab must be consumed before Ctrl+Tab, whose pattern also matches it.
-        let n = self.sessions.len();
-        if pressed(&SC_PREV_TAB) && n > 0 {
-            self.active = (self.active + n - 1) % n;
-        }
-        if pressed(&SC_NEXT_TAB) && n > 0 {
-            self.active = (self.active + 1) % n;
-        }
-        if pressed(&SC_CLOSE_TAB) && self.active < n {
-            self.close_session(self.active);
-        }
-        if pressed(&SC_DUPLICATE_TAB)
-            && let Some(s) = self.sessions.get(self.active)
-        {
-            let spec = s.spec();
-            self.open_spec(spec);
-        }
-        if pressed(&SC_COPY)
-            && let Some(s) = self.sessions.get_mut(self.active)
-        {
-            view::copy_selection(ctx, s);
-        }
-        if pressed(&SC_PASTE)
-            && let Some(s) = self.sessions.get_mut(self.active)
-            && let Some(text) = clipboard::read_text()
-        {
-            view::paste(s, &text);
+    }
+
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        let state = MenuState {
+            sessions: &self.sessions,
+            active: self.active,
+            show_sidebar: self.show_sidebar,
+            vault: self.vault_state(),
+            always_on_top: self.always_on_top,
+        };
+        if let Some(command) = menu::menu_bar(ui, &state) {
+            let ctx = ui.ctx().clone();
+            self.run(&ctx, command);
         }
     }
 
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
-        enum TabAction {
-            Close(usize),
-            CloseOthers(usize),
-            Duplicate(usize),
-            Reconnect(usize),
-            Sftp(usize),
-            StartLog(usize, LogMode),
-            StopLog(usize),
-            Break(usize),
-        }
         let mut action = None;
         ui.horizontal_wrapped(|ui| {
-            ui.toggle_value(&mut self.show_sidebar, "세션").on_hover_text("세션 목록 (Ctrl+Shift+B)");
+            ui.toggle_value(&mut self.show_sidebar, "사이트").on_hover_text("사이트 목록 (Ctrl+Shift+B)");
             if ui.button("+ 빠른 연결").on_hover_text("Ctrl+Shift+T").clicked() {
-                self.modal = Some(Modal::QuickConnect(QuickConnect::new()));
+                action = Some(Command::QuickConnect);
             }
             ui.separator();
             for (i, s) in self.sessions.iter().enumerate() {
@@ -453,48 +639,16 @@ impl PlaytermApp {
                     self.active = i;
                 }
                 if tab.middle_clicked() {
-                    action = Some(TabAction::Close(i));
+                    action = Some(Command::Close(i));
                 }
                 tab.context_menu(|ui| {
-                    if ui.add_enabled(s.can_sftp(), egui::Button::new("SFTP 파일 브라우저")).clicked() {
-                        action = Some(TabAction::Sftp(i));
-                        ui.close();
-                    }
-                    if ui.add_enabled(s.can_break(), egui::Button::new("BREAK 신호 보내기")).clicked() {
-                        action = Some(TabAction::Break(i));
-                        ui.close();
-                    }
-                    ui.menu_button("로그", |ui| {
-                        if let Some(log) = s.terminal.log() {
-                            if ui.button("로그 기록 중지").clicked() {
-                                action = Some(TabAction::StopLog(i));
-                                ui.close();
-                            }
-                            if ui.button("로그 파일 위치 열기").clicked() {
-                                logging::reveal(log.path());
-                                ui.close();
-                            }
-                        } else {
-                            if ui.button("텍스트 로그 시작…").clicked() {
-                                action = Some(TabAction::StartLog(i, LogMode::Text { timestamps: true }));
-                                ui.close();
-                            }
-                            if ui.button("원본(raw) 로그 시작…").clicked() {
-                                action = Some(TabAction::StartLog(i, LogMode::Raw));
-                                ui.close();
-                            }
-                        }
-                        if ui.button("로그 폴더 열기").clicked() {
-                            logging::reveal(&logging::default_log_dir());
-                            ui.close();
-                        }
-                    });
+                    menu::session_items(ui, &mut action, i, s);
                     ui.separator();
                     let entries = [
-                        ("복제", TabAction::Duplicate(i)),
-                        ("다시 연결", TabAction::Reconnect(i)),
-                        ("닫기", TabAction::Close(i)),
-                        ("다른 탭 모두 닫기", TabAction::CloseOthers(i)),
+                        ("복제", Command::Duplicate(i)),
+                        ("다시 연결", Command::Reconnect(i)),
+                        ("닫기", Command::Close(i)),
+                        ("다른 탭 모두 닫기", Command::CloseOthers(i)),
                     ];
                     for (label, a) in entries {
                         if ui.button(label).clicked() {
@@ -504,19 +658,19 @@ impl PlaytermApp {
                     }
                 });
                 if ui.small_button("✕").on_hover_text("탭 닫기 (Ctrl+Shift+W)").clicked() {
-                    action = Some(TabAction::Close(i));
+                    action = Some(Command::Close(i));
                 }
                 ui.add_space(6.0);
             }
             if self.sessions.get(self.active).is_some_and(|s| s.can_sftp())
                 && ui.button("SFTP").on_hover_text("파일 브라우저 (Ctrl+Shift+F)").clicked()
             {
-                action = Some(TabAction::Sftp(self.active));
+                action = Some(Command::Sftp(self.active));
             }
             if self.sessions.get(self.active).is_some_and(|s| s.state == SessionState::Closed) {
                 ui.separator();
                 if ui.button("다시 연결").clicked() {
-                    action = Some(TabAction::Reconnect(self.active));
+                    action = Some(Command::Reconnect(self.active));
                 }
             }
             if let Some(status) = &self.status {
@@ -530,43 +684,9 @@ impl PlaytermApp {
             }
         });
 
-        match action {
-            Some(TabAction::Close(i)) => self.close_session(i),
-            Some(TabAction::CloseOthers(i)) => {
-                let keep = self.sessions.remove(i);
-                for mut s in self.sessions.drain(..) {
-                    s.close();
-                }
-                self.sessions.push(keep);
-                self.active = 0;
-            }
-            Some(TabAction::Duplicate(i)) => {
-                let spec = self.sessions[i].spec();
-                self.open_spec(spec);
-            }
-            Some(TabAction::Sftp(i)) => self.sessions[i].open_sftp(),
-            Some(TabAction::Break(i)) => self.sessions[i].send_break(),
-            Some(TabAction::StopLog(i)) => self.sessions[i].stop_log(),
-            Some(TabAction::StartLog(i, mode)) => {
-                let session = &mut self.sessions[i];
-                let dir = logging::default_log_dir();
-                let _ = std::fs::create_dir_all(&dir);
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_title("로그 파일")
-                    .set_directory(&dir)
-                    .set_file_name(logging::file_name(&session.tab_title()))
-                    .add_filter("로그", &["log", "txt"])
-                    .save_file()
-                {
-                    session.start_log(&path, mode);
-                }
-            }
-            Some(TabAction::Reconnect(i)) => {
-                let waker = self.waker.clone();
-                self.sessions[i].reconnect(&self.net, waker);
-                self.active = i;
-            }
-            None => {}
+        if let Some(command) = action {
+            let ctx = ui.ctx().clone();
+            self.run(&ctx, command);
         }
     }
 
@@ -638,13 +758,16 @@ impl eframe::App for PlaytermApp {
 
         let prompt_open = self.show_session_prompts(&ctx);
         if !prompt_open {
-            if self.modal.is_none() {
+            if self.modal.is_none() && self.site_manager.is_none() {
                 self.shortcuts(&ctx);
             }
+            // App modals are shown after the site manager so they stack above it.
+            self.show_site_manager(&ctx);
             self.show_modal(&ctx);
         }
-        let modal_open = prompt_open || self.modal.is_some();
+        let modal_open = prompt_open || self.modal.is_some() || self.site_manager.is_some();
 
+        egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
         if self.show_sidebar {
             let vault = self.vault_state();
@@ -677,7 +800,10 @@ impl eframe::App for PlaytermApp {
             Some(session) => view::show(ui, session, !modal_open),
             None => {
                 ui.centered_and_justified(|ui| {
-                    ui.label("왼쪽 세션 목록에서 더블클릭하거나 [+ 빠른 연결] (Ctrl+Shift+T) 로 접속하세요")
+                    ui.label(
+                        "왼쪽 사이트 목록에서 더블클릭하거나 [파일 > 사이트 관리] (Ctrl+Shift+S),\n\
+                         [+ 빠른 연결] (Ctrl+Shift+T) 로 접속하세요",
+                    )
                 });
             }
         });

@@ -7,11 +7,13 @@ mod dialogs;
 mod fonts;
 mod input;
 mod logging;
+mod menu;
 mod mouse;
 mod profile_form;
 mod session;
 mod sftp_view;
 mod sidebar;
+mod site_manager;
 mod view;
 
 use std::sync::Arc;

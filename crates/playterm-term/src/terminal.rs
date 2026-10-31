@@ -194,6 +194,13 @@ impl Terminal {
         self.term.selection = Some(selection);
     }
 
+    /// Drops the scrollback history (the visible screen stays).
+    pub fn clear_scrollback(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
+        self.term.grid_mut().clear_history();
+        self.term.selection = None;
+    }
+
     pub fn clear_selection(&mut self) {
         self.term.selection = None;
     }

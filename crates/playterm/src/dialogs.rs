@@ -39,7 +39,7 @@ impl QuickConnect {
             let mut submit =
                 self.form.ui(ui, &FormOptions { meta: false, save_password: false, folders: &[] });
             ui.add_space(4.0);
-            ui.checkbox(&mut self.save, "세션 목록에 저장");
+            ui.checkbox(&mut self.save, "사이트 목록에 저장");
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 submit |= ui.button("연결").clicked();
@@ -53,59 +53,6 @@ impl QuickConnect {
         });
         if close && matches!(result, QuickConnectResult::Open) {
             result = QuickConnectResult::Cancel;
-        }
-        result
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Session editor
-
-pub enum EditorResult {
-    Open,
-    Cancel,
-    Save { profile: Box<SessionProfile>, password: Option<Zeroizing<String>>, connect: bool },
-}
-
-pub struct SessionEditor {
-    form: ProfileForm,
-    is_new: bool,
-}
-
-impl SessionEditor {
-    pub fn new_profile() -> Self {
-        Self { form: ProfileForm::new(SessionProfile::default(), false), is_new: true }
-    }
-
-    pub fn edit(profile: SessionProfile, has_saved_password: bool) -> Self {
-        Self { form: ProfileForm::new(profile, has_saved_password), is_new: false }
-    }
-
-    pub fn show(&mut self, ctx: &egui::Context, folders: &[String]) -> EditorResult {
-        let mut result = EditorResult::Open;
-        let close = modal("session-editor", ctx, |ui| {
-            ui.set_width(420.0);
-            ui.heading(if self.is_new { "새 세션" } else { "세션 편집" });
-            ui.add_space(8.0);
-            let mut submit = self.form.ui(ui, &FormOptions { meta: true, save_password: true, folders });
-            ui.add_space(10.0);
-            let mut connect = false;
-            ui.horizontal(|ui| {
-                submit |= ui.button("저장").clicked();
-                if ui.button("저장 후 연결").clicked() {
-                    submit = true;
-                    connect = true;
-                }
-                if ui.button("취소").clicked() {
-                    result = EditorResult::Cancel;
-                }
-            });
-            if submit && let Some((profile, password)) = self.form.validate() {
-                result = EditorResult::Save { profile: Box::new(profile), password, connect };
-            }
-        });
-        if close && matches!(result, EditorResult::Open) {
-            result = EditorResult::Cancel;
         }
         result
     }
@@ -266,6 +213,62 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
         });
     });
     if close && answer.is_none() { Some(false) } else { answer }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Help
+
+const SHORTCUTS: &[(&str, &str)] = &[
+    ("Ctrl+Shift+T", "빠른 연결"),
+    ("Ctrl+Shift+S", "사이트 관리"),
+    ("Ctrl+Shift+B", "사이트 목록 표시/숨김"),
+    ("Ctrl+Shift+F", "SFTP 파일 브라우저"),
+    ("Ctrl+Tab / Ctrl+Shift+Tab", "다음 / 이전 탭"),
+    ("Ctrl+Shift+D", "탭 복제"),
+    ("Ctrl+Shift+W", "탭 닫기"),
+    ("Ctrl+Shift+C / Ctrl+Shift+V", "복사 / 붙여넣기"),
+    ("Ctrl+C", "선택 영역이 있으면 복사, 없으면 ^C 전송"),
+    ("Ctrl+V, Shift+Insert", "붙여넣기"),
+    ("Shift+드래그", "마우스를 쓰는 프로그램 안에서도 로컬 선택"),
+    ("F11", "전체 화면"),
+];
+
+/// Keyboard shortcut list. Returns `true` once closed.
+pub fn shortcuts(ctx: &egui::Context) -> bool {
+    let mut done = false;
+    let close = modal("shortcuts", ctx, |ui| {
+        ui.set_width(440.0);
+        ui.heading("단축키");
+        ui.add_space(6.0);
+        egui::Grid::new("shortcut-list").num_columns(2).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
+            for (keys, what) in SHORTCUTS {
+                ui.monospace(*keys);
+                ui.label(*what);
+                ui.end_row();
+            }
+        });
+        ui.add_space(8.0);
+        done = ui.button("닫기").clicked();
+    });
+    done || close
+}
+
+/// "About" box. Returns `true` once closed.
+pub fn about(ctx: &egui::Context) -> bool {
+    let mut done = false;
+    let close = modal("about", ctx, |ui| {
+        ui.set_width(340.0);
+        ui.vertical_centered(|ui| {
+            ui.heading("playterm");
+            ui.label(format!("버전 {}", env!("CARGO_PKG_VERSION")));
+            ui.add_space(6.0);
+            ui.label("Windows용 SSH · Telnet · 시리얼 터미널");
+            ui.weak("SFTP, 포트 포워딩, 세션 로그, 한글(CP949) 지원");
+            ui.add_space(8.0);
+            done = ui.button("확인").clicked();
+        });
+    });
+    done || close
 }
 
 // ---------------------------------------------------------------------------------------------

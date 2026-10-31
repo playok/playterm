@@ -211,6 +211,7 @@ pub struct FormOptions<'a> {
 }
 
 /// Editable text form of a [`ForwardRule`] (ports stay strings while typing).
+#[derive(Clone, PartialEq)]
 struct ForwardRow {
     kind: ForwardKind,
     bind_host: String,
@@ -263,22 +264,39 @@ pub struct ProfileForm {
     serial_ports: Option<Vec<SerialPortEntry>>,
     error: Option<String>,
     focus_requested: bool,
+    /// Editable state when the form was opened, to detect unsaved changes.
+    initial: (SessionProfile, String, String, Vec<ForwardRow>),
 }
 
 impl ProfileForm {
     pub fn new(profile: SessionProfile, has_saved_password: bool) -> Self {
-        let profile_baud = profile.serial.baud.to_string();
+        let port = profile.port.to_string();
+        let baud = profile.serial.baud.to_string();
+        let forwards: Vec<ForwardRow> = profile.forwards.iter().map(ForwardRow::from_rule).collect();
         Self {
-            port: profile.port.to_string(),
-            forwards: profile.forwards.iter().map(ForwardRow::from_rule).collect(),
+            initial: (profile.clone(), port.clone(), baud.clone(), forwards.clone()),
+            port,
+            forwards,
             profile,
             password: Zeroizing::default(),
             has_saved_password,
-            baud: profile_baud,
+            baud,
             serial_ports: None,
             error: None,
             focus_requested: false,
         }
+    }
+
+    /// The profile as it was when the form was opened.
+    pub fn initial_profile(&self) -> &SessionProfile {
+        &self.initial.0
+    }
+
+    /// Whether anything was changed since the form was opened.
+    pub fn is_dirty(&self) -> bool {
+        let (profile, port, baud, forwards) = &self.initial;
+        !self.password.is_empty()
+            || (&self.profile, &self.port, &self.baud, &self.forwards) != (profile, port, baud, forwards)
     }
 
     /// Draws the form. Returns `true` if Enter was pressed in one of its text fields.
@@ -605,6 +623,22 @@ mod tests {
 
         form.port = "70000".into();
         assert!(form.validate().is_none());
+    }
+
+    #[test]
+    fn dirty_tracking() {
+        let profile = SessionProfile { host: "h".into(), username: "u".into(), ..Default::default() };
+        let mut form = ProfileForm::new(profile, false);
+        assert!(!form.is_dirty());
+        form.port = "2222".into();
+        assert!(form.is_dirty());
+        form.port = "22".into();
+        assert!(!form.is_dirty(), "changing a field back is not a change");
+        *form.password = "pw".into();
+        assert!(form.is_dirty(), "a typed password is a change");
+        form.password.clear();
+        form.profile.protocol = Protocol::Telnet;
+        assert!(form.is_dirty());
     }
 
     #[test]
