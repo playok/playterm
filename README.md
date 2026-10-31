@@ -80,7 +80,7 @@ playterm serial://COM3:115200             # 시리얼 콘솔 (8N1)
 ## 화면 설정 · 찾기
 
 - **도구 → 설정**: 글꼴, 크기, 색 테마, 스크롤백 줄 수. 바꾸는 즉시 열린 탭에 미리 보이고, [취소] 하면 되돌아갑니다.
-  - 글꼴: 설치된 코딩 글꼴(Consolas, Cascadia Mono/Code, D2Coding, 나눔고딕코딩, JetBrains Mono, Lucida Console, Courier New) 또는 [파일에서…] 로 TTF/OTF/TTC 파일. 한글은 글꼴에 없으면 맑은 고딕으로 표시합니다.
+  - 글꼴: 이 PC 에 설치된 모든 글꼴(시스템 + 사용자 설치, 고정폭 글꼴이 위에, 목록 안에서 검색 가능) 또는 [파일에서…] 로 TTF/OTF/TTC 파일. 한글은 글꼴에 없으면 맑은 고딕으로 표시합니다.
   - 색 테마: Campbell, One Half Dark/Light, Solarized Dark/Light, Tango Dark, Dracula, Gruvbox Dark
 - 글꼴 크기: **Ctrl+휠**, **Ctrl+= / Ctrl+- / Ctrl+0** (보기 메뉴에도 있음). 바꾼 크기는 저장됩니다.
 - **찾기 (Ctrl+Shift+F)**: 화면과 스크롤백에서 글자를 찾습니다. Enter 로 위(이전 출력), Shift+Enter 로 아래.

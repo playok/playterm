@@ -22,7 +22,9 @@ pub struct SettingsDialog {
     draft: AppSettings,
     /// What the app was last told to show.
     shown: AppSettings,
-    fonts: Vec<FontChoice>,
+    fonts: &'static [FontChoice],
+    /// Narrows the font list.
+    font_filter: String,
 }
 
 fn color(hex: u32) -> Color32 {
@@ -30,13 +32,13 @@ fn color(hex: u32) -> Color32 {
     Color32::from_rgb(c.r, c.g, c.b)
 }
 
-/// Display name of a font setting: the name, or a font file's name.
-fn font_label(font: &str) -> String {
+/// Display name of a font setting: the family's (Korean) name, or a font file's name.
+fn font_label(fonts: &[FontChoice], font: &str) -> String {
     if fonts::is_file(font) {
         let name = std::path::Path::new(font).file_name().map(|n| n.to_string_lossy().into_owned());
         format!("파일: {}", name.unwrap_or_else(|| font.to_owned()))
     } else {
-        font.to_owned()
+        fonts.iter().find(|f| f.matches(font)).map_or_else(|| font.to_owned(), |f| f.name.clone())
     }
 }
 
@@ -54,7 +56,13 @@ fn swatch(ui: &mut egui::Ui, theme: &Theme) {
 
 impl SettingsDialog {
     pub fn new(current: &AppSettings) -> Self {
-        Self { original: current.clone(), draft: current.clone(), shown: current.clone(), fonts: fonts::available() }
+        Self {
+            original: current.clone(),
+            draft: current.clone(),
+            shown: current.clone(),
+            fonts: fonts::available(),
+            font_filter: String::new(),
+        }
     }
 
     pub fn show(&mut self, ctx: &egui::Context) -> SettingsResult {
@@ -115,16 +123,11 @@ impl SettingsDialog {
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("font")
                 .width(200.0)
-                .selected_text(font_label(&self.draft.font))
-                .show_ui(ui, |ui| {
-                    for f in &self.fonts {
-                        ui.selectable_value(&mut self.draft.font, f.name.clone(), &f.name);
-                    }
-                    if fonts::is_file(&self.draft.font) {
-                        let label = font_label(&self.draft.font);
-                        let _ = ui.selectable_label(true, label);
-                    }
-                });
+                .height(420.0)
+                .selected_text(font_label(self.fonts, &self.draft.font))
+                // Stay open while typing in the search field; a pick closes it.
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show_ui(ui, |ui| self.font_list(ui));
             if ui.button("파일에서…").on_hover_text("TTF / OTF / TTC 글꼴 파일").clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .set_title("터미널 글꼴 파일")
@@ -135,6 +138,39 @@ impl SettingsDialog {
             }
         });
         ui.end_row();
+    }
+
+    /// All installed families: fixed-width ones first, then the rest.
+    fn font_list(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::TextEdit::singleline(&mut self.font_filter)
+                .hint_text(format!("글꼴 검색 ({}개)", self.fonts.len()))
+                .desired_width(f32::INFINITY),
+        );
+        ui.separator();
+        let filter = self.font_filter.trim().to_lowercase();
+        let shown = |f: &&FontChoice| filter.is_empty() || f.name.to_lowercase().contains(&filter);
+        let mut picked = None;
+        let mut list = |ui: &mut egui::Ui, monospace: bool| {
+            for f in self.fonts.iter().filter(|f| f.monospace == monospace).filter(shown) {
+                if ui.selectable_label(f.matches(&self.draft.font), &f.name).clicked() {
+                    picked = Some(f.key.clone());
+                }
+            }
+        };
+        ui.weak("고정폭 글꼴");
+        list(ui, true);
+        ui.add_space(4.0);
+        ui.weak("기타 글꼴 (고정폭이 아니어서 글자 간격이 고르지 않을 수 있음)");
+        list(ui, false);
+        if fonts::is_file(&self.draft.font) {
+            ui.separator();
+            let _ = ui.selectable_label(true, font_label(self.fonts, &self.draft.font));
+        }
+        if let Some(name) = picked {
+            self.draft.font = name;
+            ui.close();
+        }
     }
 
     fn size_row(&mut self, ui: &mut egui::Ui) {
