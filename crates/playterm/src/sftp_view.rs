@@ -15,6 +15,8 @@ struct Transfer {
     state: TransferState,
     /// Refresh the listing when an upload into the current directory ends.
     upload: bool,
+    /// Where a download is saved, for "open folder".
+    local: Option<PathBuf>,
 }
 
 /// Modal sub-dialogs of the browser.
@@ -146,8 +148,9 @@ impl SftpBrowser {
         self.transfers.iter().any(|t| t.state == TransferState::Running)
     }
 
-    fn track(&mut self, id: u64, label: String, upload: bool) {
-        self.transfers.push(Transfer { id, label, done: 0, total: 0, state: TransferState::Running, upload });
+    fn track(&mut self, id: u64, label: String, upload: bool, local: Option<PathBuf>) {
+        let state = TransferState::Running;
+        self.transfers.push(Transfer { id, label, done: 0, total: 0, state, upload, local });
     }
 
     /// Uploads local files or folders into the current directory.
@@ -159,7 +162,7 @@ impl SftpBrowser {
             let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
             let remote = remote_join(&self.cwd, &name);
             let id = self.conn.upload(&path, &remote);
-            self.track(id, format!("↑ {name}"), true);
+            self.track(id, format!("↑ {name}"), true, None);
         }
     }
 
@@ -183,7 +186,7 @@ impl SftpBrowser {
         };
         for (entry, local) in targets {
             let id = self.conn.download(&remote_join(&self.cwd, &entry.name), &local, entry.is_dir);
-            self.track(id, format!("↓ {}", entry.name), false);
+            self.track(id, format!("↓ {}", entry.name), false, Some(local));
         }
     }
 
@@ -418,6 +421,19 @@ impl SftpBrowser {
                         }
                         TransferState::Finished => {
                             ui.label(tr!("완료 ({})", "Done ({})", human_size(t.done)));
+                            // `t` is the transfer here, hence the full path.
+                            if let Some(path) = &t.local
+                                && ui
+                                    .small_button(playterm_i18n::t("폴더 열기", "Open folder"))
+                                    .on_hover_text(tr!(
+                                        "탐색기에서 보기: {}",
+                                        "Show in Explorer: {}",
+                                        path.display()
+                                    ))
+                                    .clicked()
+                            {
+                                crate::logging::reveal(path);
+                            }
                         }
                         TransferState::Cancelled => {
                             ui.weak(playterm_i18n::t("취소됨", "Cancelled"));

@@ -179,6 +179,13 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<SessionProfile>,
                 forwards.push(ForwardRule::parse(kind, &spec)?);
             }
             "-h" | "--help" => return Err(String::new()),
+            // Used by "open in new window": a profile file written by the other window.
+            "--open" => {
+                let path = args.next().ok_or(t("--open 다음에 파일 경로가 필요합니다", "Missing file path after --open"))?;
+                let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"));
+                let _ = std::fs::remove_file(&path);
+                requests.push(SessionProfile::from_toml(&text?).map_err(|e| format!("{path}: {e}"))?);
+            }
             url => {
                 let mut profile = profile_form::parse_url(url)?;
                 profile.charset = charset;

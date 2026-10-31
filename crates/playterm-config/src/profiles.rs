@@ -185,6 +185,16 @@ impl SessionProfile {
         }
     }
 
+    /// The profile as a TOML document (no password: profiles never hold one), to hand it to
+    /// another playterm window.
+    pub fn to_toml(&self) -> Result<String, String> {
+        toml::to_string(self).map_err(|e| e.to_string())
+    }
+
+    pub fn from_toml(text: &str) -> Result<Self, String> {
+        toml::from_str(text).map_err(|e| e.to_string())
+    }
+
     /// A copy with a fresh id, for "duplicate".
     pub fn duplicate(&self) -> Self {
         Self { id: random_id(), name: playterm_i18n::tr!("{} (복사본)", "{} (copy)", self.display_name()), ..self.clone() }
@@ -341,6 +351,20 @@ mod tests {
         assert_eq!((p.id.as_str(), p.port, p.protocol), ("x", 22, Protocol::Ssh));
         assert!(p.use_agent && p.identity_file.is_empty(), "files from older versions keep agent auth on");
         assert_eq!(p.keepalive, KeepAlive::default(), "and get protocol keep-alives");
+    }
+
+    #[test]
+    fn toml_round_trip() {
+        let p = SessionProfile {
+            name: "core".into(),
+            host: "10.0.0.1".into(),
+            username: "admin".into(),
+            tab_color: Some(TabColor::Blue),
+            auto_login: AutoLogin { enabled: true, steps: AutoLogin::standard_steps() },
+            ..Default::default()
+        };
+        assert_eq!(SessionProfile::from_toml(&p.to_toml().unwrap()).unwrap(), p);
+        assert!(SessionProfile::from_toml("host = 5").is_err());
     }
 
     #[test]

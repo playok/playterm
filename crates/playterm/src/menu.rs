@@ -49,6 +49,10 @@ pub enum Command {
     NextTab,
     PrevTab,
     Duplicate(usize),
+    /// Another playterm window (a new process) with tab `i`'s connection.
+    OpenInNewWindow(usize),
+    /// Another playterm window with a local prompt.
+    NewWindow,
     Reconnect(usize),
     Close(usize),
     CloseOthers(usize),
@@ -157,6 +161,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button(t("파일", "File"), |ui| {
             item(ui, out, t("새 탭", "New tab"), "Ctrl+Shift+N", true, Command::NewTab);
+            item(ui, out, t("새 창", "New window"), "", true, Command::NewWindow);
             item(ui, out, t("빠른 연결…", "Quick Connect…"), "Ctrl+Shift+T", true, Command::QuickConnect);
             item(ui, out, t("사이트 관리…", "Site Manager…"), "Ctrl+Shift+S", true, Command::SiteManager);
             item(ui, out, t("새 사이트…", "New site…"), "", true, Command::NewSite);
@@ -242,6 +247,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("이전 탭", "Previous tab"), "Ctrl+Shift+Tab", n > 1, Command::PrevTab);
             ui.separator();
             item(ui, out, t("탭 복제", "Duplicate tab"), "Ctrl+Shift+D", active.is_some(), Command::Duplicate(i));
+            item(ui, out, t("새 창으로 열기", "Open in new window"), "", active.is_some(), Command::OpenInNewWindow(i));
             if let Some(s) = active {
                 tab_color_menu(ui, out, i, s.tab_color);
             }

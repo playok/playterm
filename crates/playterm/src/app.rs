@@ -99,6 +99,23 @@ enum Modal {
 /// Font size changes from zooming are saved once they have settled for this long.
 const SETTINGS_SAVE_DELAY: Duration = Duration::from_secs(1);
 
+/// Starts another playterm process (its own window). With a profile, the new window connects
+/// it: the profile goes through a temporary file that the new process reads and deletes. It
+/// holds no password; a saved site's comes from the vault there, others are asked again.
+fn open_new_window(profile: Option<&SessionProfile>) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(exe);
+    if let Some(profile) = profile {
+        let name = format!("playterm-open-{}-{}.toml", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, profile.to_toml()?).map_err(|e| e.to_string())?;
+        cmd.arg("--open").arg(&path);
+    }
+    cmd.spawn().map(drop).map_err(|e| e.to_string())
+}
+
 /// Simultaneous input: the banner and the receiving tabs.
 const BROADCAST_COLOR: Color32 = Color32::from_rgb(230, 140, 30);
 
@@ -208,7 +225,12 @@ impl PlaytermApp {
             compose: ComposeBar::default(),
         };
         for profile in initial {
-            app.open_session(&profile, None, None);
+            // A saved site (opened in a new window) connects as one: with its vault password.
+            if app.store.get(&profile.id).is_some() {
+                app.connect_saved(&profile.id);
+            } else {
+                app.open_session(&profile, None, None);
+            }
         }
         Ok(app)
     }
@@ -305,7 +327,9 @@ impl PlaytermApp {
         });
         let site = self.store.get(&profile.id).map(|p| p.id.clone());
         let tab_color = profile.tab_color;
-        self.open_spec(SessionSpec { params, charset: profile.charset, name, log, login, site, tab_color });
+        let profile_charset = profile.charset;
+        let profile = Some(Box::new(profile.clone()));
+        self.open_spec(SessionSpec { params, charset: profile_charset, name, log, login, site, tab_color, profile });
     }
 
     /// Connects a saved profile, unlocking the vault first if its password is stored there.
@@ -833,6 +857,15 @@ impl PlaytermApp {
             Command::NextTab if n > 0 => self.active = (self.active + 1) % n,
             Command::PrevTab if n > 0 => self.active = (self.active + n - 1) % n,
             Command::NextTab | Command::PrevTab => {}
+            Command::OpenInNewWindow(i) => {
+                let profile = self.sessions.get(i).and_then(Session::profile).cloned();
+                let r = open_new_window(profile.as_ref());
+                self.report(t("새 창을 열 수 없습니다", "Cannot open a new window"), r);
+            }
+            Command::NewWindow => {
+                let r = open_new_window(None);
+                self.report(t("새 창을 열 수 없습니다", "Cannot open a new window"), r);
+            }
             Command::Duplicate(i) => match self.sessions.get(i).map(Session::spec) {
                 // Always a new tab, even when the current one is an unused prompt.
                 Some(Some(spec)) => self.connect_in_new_tab(spec),
@@ -1149,6 +1182,7 @@ impl PlaytermApp {
                     ui.separator();
                     let entries = [
                         (t("복제", "Duplicate"), Command::Duplicate(i)),
+                        (t("새 창으로 열기", "Open in new window"), Command::OpenInNewWindow(i)),
                         (t("다시 연결", "Reconnect"), Command::Reconnect(i)),
                         (t("닫기", "Close"), Command::Close(i)),
                         (t("다른 탭 모두 닫기", "Close other tabs"), Command::CloseOthers(i)),

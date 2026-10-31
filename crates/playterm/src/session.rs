@@ -1,7 +1,7 @@
 //! One open tab: a terminal screen, bound to a network session while connected and running
 //! the local command prompt ([`crate::console`]) while not.
 
-use playterm_config::TabColor;
+use playterm_config::{SessionProfile, TabColor};
 use playterm_i18n::{t, tr};
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
 use playterm_term::{Charset, LogMode, Palette, Point, Terminal, TerminalEvent};
@@ -55,6 +55,8 @@ pub struct SessionSpec {
     pub site: Option<String>,
     /// The site's tab color.
     pub tab_color: Option<TabColor>,
+    /// The profile the connection was opened from, to open it again in a new window.
+    pub profile: Option<Box<SessionProfile>>,
 }
 
 /// Mouse reporting state (application mouse modes).
@@ -122,6 +124,8 @@ pub struct Session {
     login_script: Option<LoginScript>,
     /// Saved site the connection was opened from.
     site: Option<String>,
+    /// Profile the connection was opened from.
+    profile: Option<Box<SessionProfile>>,
     /// Automatic login in progress on the current connection.
     login: Option<LoginRunner>,
     remote: Option<Remote>,
@@ -183,6 +187,7 @@ impl Session {
             log_plan: None,
             login_script: None,
             site: None,
+            profile: None,
             login: None,
             remote: None,
             console: LineEditor::default(),
@@ -195,7 +200,7 @@ impl Session {
 
     /// Connects this tab (from the prompt, or as a new tab), keeping the screen contents.
     pub fn start(&mut self, spec: SessionSpec, net: &NetRuntime, waker: Waker) {
-        let SessionSpec { mut params, charset, name, log, login, site, tab_color } = spec;
+        let SessionSpec { mut params, charset, name, log, login, site, tab_color, profile } = spec;
         if let Some(remote) = &self.remote {
             remote.handle.close();
         }
@@ -219,6 +224,7 @@ impl Session {
         self.login_script = login;
         self.site = site;
         self.tab_color = tab_color;
+        self.profile = profile;
         self.rx_bytes = 0;
         self.tx_bytes = 0;
         let handle = net.connect(params.clone(), waker);
@@ -315,7 +321,13 @@ impl Session {
             login: self.login_script.clone(),
             site: self.site.clone(),
             tab_color: self.tab_color,
+            profile: self.profile.clone(),
         })
+    }
+
+    /// The profile this tab's connection was opened from; `None` for a local prompt.
+    pub fn profile(&self) -> Option<&SessionProfile> {
+        self.profile.as_deref()
     }
 
     /// Saved site this tab's connection was opened from.

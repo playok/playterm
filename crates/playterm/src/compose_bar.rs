@@ -52,16 +52,24 @@ impl ComposeBar {
 
         ui.horizontal(|ui| {
             let controls = 230.0;
+            let width = (ui.available_width() - controls).max(120.0);
+            // The full hint would wrap (and make the bar taller) when the side panels leave
+            // little room; the short one says just enough.
+            let hint = if width >= 560.0 {
+                t(
+                    "보낼 명령 입력 — Enter 보내기 · Shift+Enter 줄바꿈 · ↑↓ 이전 입력",
+                    "Command to send — Enter sends · Shift+Enter new line · ↑↓ earlier input",
+                )
+            } else {
+                t("보낼 명령 (Enter 보내기)", "Command (Enter sends)")
+            };
             let edit = ui.add(
                 egui::TextEdit::multiline(&mut self.text)
                     .id(id)
                     .font(egui::TextStyle::Monospace)
                     .desired_rows(1)
-                    .desired_width((ui.available_width() - controls).max(120.0))
-                    .hint_text(t(
-                        "보낼 명령 입력 — Enter 보내기 · Shift+Enter 줄바꿈 · ↑↓ 이전 입력",
-                        "Command to send — Enter sends · Shift+Enter new line · ↑↓ earlier input",
-                    )),
+                    .desired_width(width)
+                    .hint_text(hint),
             );
             if edit.changed() {
                 self.history_pos = None;
