@@ -21,6 +21,16 @@ cargo build --release
 - **Windows ARM64에서는 clang도 필요합니다** (암호 라이브러리 `ring` 빌드용):
   `winget install LLVM.LLVM` 후 `C:\Program Files\LLVM\bin` 을 PATH에 추가.
 
+### 릴리스 패키지
+
+```powershell
+rustup target add x86_64-pc-windows-msvc     # 최초 1회
+pwsh scripts\package.ps1                     # dist\playterm-<버전>-windows-{arm64,x64}.zip + SHA256SUMS.txt
+```
+
+- C 런타임을 정적으로 링크하므로(`.cargo/config.toml`) VC++ 재배포 패키지 없이 실행됩니다.
+- 아이콘은 `assets/make_icon.py` 로 생성합니다 (`playterm.png`, `playterm.ico`).
+
 ## 실행
 
 ```powershell

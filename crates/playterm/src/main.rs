@@ -13,8 +13,9 @@ mod sftp_view;
 mod sidebar;
 mod view;
 
-use eframe::egui;
+use std::sync::Arc;
 
+use eframe::egui;
 use playterm_config::SessionProfile;
 use playterm_net::{ForwardKind, ForwardRule};
 
@@ -26,16 +27,25 @@ fn main() -> eframe::Result {
     let initial = match parse_args(std::env::args().skip(1)) {
         Ok(reqs) => reqs,
         Err(e) => {
-            eprintln!("{e}\n{USAGE}");
-            std::process::exit(2);
+            // Release builds have no console, so show the message in a dialog.
+            let text = if e.is_empty() { USAGE.to_owned() } else { format!("{e}\n\n{USAGE}") };
+            rfd::MessageDialog::new()
+                .set_title("playterm")
+                .set_description(text)
+                .set_level(if e.is_empty() { rfd::MessageLevel::Info } else { rfd::MessageLevel::Error })
+                .show();
+            std::process::exit(if e.is_empty() { 0 } else { 2 });
         }
     };
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/playterm.png"))
+        .expect("embedded icon is a valid PNG");
 
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("playterm")
             .with_inner_size([1000.0, 640.0])
-            .with_min_inner_size([420.0, 260.0]),
+            .with_min_inner_size([420.0, 260.0])
+            .with_icon(Arc::new(icon)),
         ..Default::default()
     };
     // DX12 is always present on Windows 10+; probing Vulkan first is slow and noisy on some
