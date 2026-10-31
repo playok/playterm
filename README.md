@@ -8,7 +8,7 @@ Windows용 Telnet/SSH 터미널. Rust(egui + alacritty_terminal + russh)로 작�
 |---|---|
 | `crates/playterm-term` | 터미널 에뮬레이션(alacritty_terminal), UTF-8/CP949 변환, 색상 팔레트 |
 | `crates/playterm-net` | SSH(russh) / Telnet 전송, 세션 이벤트·명령 채널 |
-| `crates/playterm-config` | 세션 목록(`sessions.toml`), 비밀번호 볼트(`vault.toml`) |
+| `crates/playterm-config` | 세션 목록(`sessions.toml`), 비밀번호 볼트(`vault.toml`), 설정(`settings.toml`) |
 | `crates/playterm` | GUI 앱(eframe/egui): 렌더링, 키보드/IME 입력, 대화상자 |
 
 ## 빌드
@@ -73,6 +73,18 @@ playterm serial://COM3:115200             # 시리얼 콘솔 (8N1)
   - 저장하지 않고 다른 사이트로 옮기거나 창을 닫으면 저장할지 묻습니다.
   - 목록에서 더블클릭하면 접속하고 창이 닫힙니다.
 - 왼쪽 사이트 목록(Ctrl+Shift+B)은 빠른 접속용입니다. [관리] 또는 우클릭 → 편집 으로 사이트 관리 창이 열립니다.
+- **파일 → PuTTY 세션 가져오기**: PuTTY 에 저장된 세션(레지스트리)을 골라서 사이트로 가져옵니다.
+  호스트·포트·사용자·키 파일·인코딩·터미널 타입·포트 포워딩·시리얼 설정을 옮기고, 이미 있는 사이트는 기본으로 선택 해제합니다.
+  비밀번호는 PuTTY 가 저장하지 않으므로 옮겨지지 않습니다. rlogin/raw 세션은 건너뜁니다.
+
+## 화면 설정 · 찾기
+
+- **도구 → 설정**: 글꼴, 크기, 색 테마, 스크롤백 줄 수. 바꾸는 즉시 열린 탭에 미리 보이고, [취소] 하면 되돌아갑니다.
+  - 글꼴: 설치된 코딩 글꼴(Consolas, Cascadia Mono/Code, D2Coding, 나눔고딕코딩, JetBrains Mono, Lucida Console, Courier New) 또는 [파일에서…] 로 TTF/OTF/TTC 파일. 한글은 글꼴에 없으면 맑은 고딕으로 표시합니다.
+  - 색 테마: Campbell, One Half Dark/Light, Solarized Dark/Light, Tango Dark, Dracula, Gruvbox Dark
+- 글꼴 크기: **Ctrl+휠**, **Ctrl+= / Ctrl+- / Ctrl+0** (보기 메뉴에도 있음). 바꾼 크기는 저장됩니다.
+- **찾기 (Ctrl+Shift+F)**: 화면과 스크롤백에서 글자를 찾습니다. Enter 로 위(이전 출력), Shift+Enter 로 아래.
+  보이는 일치 항목은 노란색, 현재 항목은 선택 영역으로 표시되어 바로 복사할 수 있습니다. 소문자로만 쓰면 대소문자를 구분하지 않습니다.
 
 ## 시리얼 · 로그
 
@@ -85,7 +97,7 @@ playterm serial://COM3:115200             # 시리얼 콘솔 (8N1)
 
 ## SFTP · 포트 포워딩
 
-- SSH 탭에서 **Ctrl+Shift+F** (또는 탭 바의 [SFTP] / 탭 우클릭 메뉴) → 파일 브라우저.
+- SSH 탭에서 **Ctrl+Shift+E** (또는 탭 바의 [SFTP] / 탭 우클릭 메뉴) → 파일 브라우저.
   폴더 이동, 업로드(파일/폴더, 창에 끌어다 놓기), 다운로드(폴더는 통째로), 새 폴더, 이름 바꾸기, 삭제, 전송 진행률/취소.
 - 포트 포워딩은 사이트 관리 창의 "포트 포워딩" 에서 설정하며, 접속하면 자동으로 시작됩니다.
   - 로컬 (L): 이 PC 의 포트 → 서버에서 대상으로 연결
@@ -109,6 +121,7 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 | 파일 | 내용 |
 |---|---|
 | `sessions.toml` | 저장된 세션 (비밀번호 없음) |
+| `settings.toml` | 글꼴, 크기, 색 테마, 스크롤백 |
 | `vault.toml` | 저장된 비밀번호. 마스터 비밀번호 → Argon2id → XChaCha20-Poly1305 로 암호화 |
 | `known_hosts` | SSH 호스트 키. 알려진 호스트의 키가 바뀌면 접속을 거부합니다(중간자 공격 방지) |
 
@@ -123,13 +136,15 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 | Ctrl+Shift+D | 탭 복제 |
 | Ctrl+Tab / Ctrl+Shift+Tab | 다음 / 이전 탭 |
 | Ctrl+Shift+B | 사이트 목록 표시/숨김 |
-| Ctrl+Shift+F | SFTP 파일 브라우저 |
+| Ctrl+Shift+F | 찾기 (스크롤백 포함) |
+| Ctrl+Shift+E | SFTP 파일 브라우저 |
 | 드래그 / 더블클릭 / 트리플클릭 | 문자 / 단어 / 줄 선택 (Shift+클릭으로 확장) |
 | Shift+드래그 | 마우스를 쓰는 프로그램(vim `mouse=a`, htop, mc, tmux) 안에서도 로컬 선택 |
 | Ctrl+C | 선택 영역이 있으면 복사, 없으면 ^C 전송 |
 | Ctrl+Shift+C / Ctrl+Shift+V | 복사 / 붙여넣기 |
 | Ctrl+V, Shift+Insert | 붙여넣기 |
 | F11 | 전체 화면 |
+| Ctrl+휠, Ctrl+= / Ctrl+- / Ctrl+0 | 글꼴 크게 / 작게 / 기본 크기 |
 
 ## 개발
 

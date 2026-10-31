@@ -14,15 +14,21 @@ pub enum Command {
     NewTab,
     SiteManager,
     NewSite,
+    ImportPutty,
     Quit,
 
     Copy,
     Paste,
     SelectAll,
+    Find,
     ClearScrollback,
 
     ToggleSidebar,
     ToggleFullscreen,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    Settings,
 
     Sftp(usize),
     Break(usize),
@@ -79,7 +85,7 @@ fn check(ui: &mut egui::Ui, out: &mut Option<Command>, label: &str, shortcut: &s
 
 /// SFTP, BREAK and logging for tab `i`. Used by the tools menu and the tab context menu.
 pub fn session_items(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, s: &Session) {
-    item(ui, out, "SFTP 파일 브라우저", "Ctrl+Shift+F", s.can_sftp(), Command::Sftp(i));
+    item(ui, out, "SFTP 파일 브라우저", "Ctrl+Shift+E", s.can_sftp(), Command::Sftp(i));
     item(ui, out, "BREAK 신호 보내기", "", s.can_break(), Command::Break(i));
     ui.menu_button("로그", |ui| {
         if s.terminal.log().is_some() {
@@ -108,6 +114,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, "빠른 연결…", "Ctrl+Shift+T", true, Command::QuickConnect);
             item(ui, out, "사이트 관리…", "Ctrl+Shift+S", true, Command::SiteManager);
             item(ui, out, "새 사이트…", "", true, Command::NewSite);
+            item(ui, out, "PuTTY 세션 가져오기…", "", true, Command::ImportPutty);
             ui.separator();
             item(ui, out, "끝내기", "Alt+F4", true, Command::Quit);
         });
@@ -117,6 +124,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, "복사", "Ctrl+Shift+C", has_selection, Command::Copy);
             item(ui, out, "붙여넣기", "Ctrl+Shift+V", active.is_some(), Command::Paste);
             item(ui, out, "모두 선택", "", active.is_some(), Command::SelectAll);
+            item(ui, out, "찾기…", "Ctrl+Shift+F", active.is_some(), Command::Find);
             ui.separator();
             item(ui, out, "스크롤백 지우기", "", active.is_some(), Command::ClearScrollback);
         });
@@ -124,13 +132,17 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
         ui.menu_button("보기", |ui| {
             check(ui, out, "사이트 목록", "Ctrl+Shift+B", st.show_sidebar, Command::ToggleSidebar);
             check(ui, out, "전체 화면", "F11", fullscreen, Command::ToggleFullscreen);
+            ui.separator();
+            item(ui, out, "글꼴 크게", "Ctrl+=", true, Command::ZoomIn);
+            item(ui, out, "글꼴 작게", "Ctrl+-", true, Command::ZoomOut);
+            item(ui, out, "기본 크기", "Ctrl+0", true, Command::ZoomReset);
         });
 
         ui.menu_button("도구", |ui| {
             match active {
                 Some(s) => session_items(ui, out, i, s),
                 None => {
-                    item(ui, out, "SFTP 파일 브라우저", "Ctrl+Shift+F", false, Command::Sftp(i));
+                    item(ui, out, "SFTP 파일 브라우저", "Ctrl+Shift+E", false, Command::Sftp(i));
                     item(ui, out, "BREAK 신호 보내기", "", false, Command::Break(i));
                     item(ui, out, "로그 폴더 열기", "", true, Command::OpenLogFolder);
                 }
@@ -141,6 +153,8 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 VaultState::Locked => item(ui, out, "비밀번호 볼트 잠금 해제…", "", true, Command::UnlockVault),
                 VaultState::Unlocked => item(ui, out, "비밀번호 볼트 잠그기", "", true, Command::LockVault),
             }
+            ui.separator();
+            item(ui, out, "설정…", "", true, Command::Settings);
         });
 
         ui.menu_button("탭", |ui| {

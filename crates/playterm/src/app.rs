@@ -1,19 +1,23 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
-use playterm_config::{ProfileStore, SessionProfile, Vault};
+use playterm_config::{AppSettings, ProfileStore, SessionProfile, Vault};
 use playterm_net::{ConnectParams, NetRuntime, Protocol, Waker};
-use playterm_term::LogMode;
+use playterm_term::{LogMode, Palette, Theme};
 use zeroize::Zeroizing;
 
 use crate::console::Request;
 use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultMode, VaultResult};
+use crate::import_dialog::{ImportDialog, ImportResult};
 use crate::logging::{self, LogPlan};
 use crate::menu::{self, Command, MenuState};
 use crate::profile_form::expand_home;
-use crate::session::{Session, SessionSpec, SessionState};
+use crate::search_bar::SearchBar;
+use crate::session::{Session, SessionSpec, SessionState, TermSetup};
+use crate::settings_dialog::{SettingsDialog, SettingsResult};
 use crate::sidebar::{self, Sidebar, SidebarAction, VaultState};
 use crate::site_manager::{SiteManager, SiteManagerResult};
 use crate::{clipboard, fonts, view};
@@ -26,7 +30,8 @@ const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
     (KeyboardShortcut::new(CTRL_SHIFT, Key::N), Shortcut::NewTab),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::S), Shortcut::SiteManager),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::B), Shortcut::Sidebar),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::F), Shortcut::Sftp),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::F), Shortcut::Find),
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::E), Shortcut::Sftp),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::Tab), Shortcut::PrevTab),
     (KeyboardShortcut::new(Modifiers::CTRL, Key::Tab), Shortcut::NextTab),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::W), Shortcut::CloseTab),
@@ -34,6 +39,10 @@ const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
     (KeyboardShortcut::new(CTRL_SHIFT, Key::C), Shortcut::Copy),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::V), Shortcut::Paste),
     (KeyboardShortcut::new(Modifiers::NONE, Key::F11), Shortcut::Fullscreen),
+    (KeyboardShortcut::new(Modifiers::CTRL, Key::Equals), Shortcut::ZoomIn),
+    (KeyboardShortcut::new(Modifiers::CTRL, Key::Plus), Shortcut::ZoomIn),
+    (KeyboardShortcut::new(Modifiers::CTRL, Key::Minus), Shortcut::ZoomOut),
+    (KeyboardShortcut::new(Modifiers::CTRL, Key::Num0), Shortcut::ZoomReset),
 ];
 
 #[derive(Clone, Copy)]
@@ -42,6 +51,7 @@ enum Shortcut {
     NewTab,
     SiteManager,
     Sidebar,
+    Find,
     Sftp,
     PrevTab,
     NextTab,
@@ -50,6 +60,9 @@ enum Shortcut {
     Copy,
     Paste,
     Fullscreen,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
 }
 
 /// What to do once the vault dialog succeeds (or is cancelled).
@@ -68,7 +81,12 @@ enum Modal {
     ConfirmDelete(String),
     Shortcuts,
     About,
+    Settings(Box<SettingsDialog>),
+    Import(Box<ImportDialog>),
 }
+
+/// Font size changes from zooming are saved once they have settled for this long.
+const SETTINGS_SAVE_DELAY: Duration = Duration::from_secs(1);
 
 /// Whether the vault holds a password for `p` (while locked, the profile flag is the best guess).
 fn has_secret(vault: &Vault, p: &SessionProfile) -> bool {
@@ -91,6 +109,8 @@ pub struct PlaytermApp {
     modal: Option<Modal>,
     /// Last error, shown in the tab bar until clicked.
     status: Option<String>,
+    /// Last informational message (not an error), shown the same way.
+    info: Option<String>,
     window_title: String,
     always_on_top: bool,
     /// Tab (at its prompt) that the connection being opened should use instead of a new tab.
@@ -99,12 +119,19 @@ pub struct PlaytermApp {
     /// Prompt tab that opened the quick-connect dialog or the site manager, so a connection
     /// made from there replaces that prompt.
     dialog_target: Option<u64>,
+    settings: AppSettings,
+    settings_path: PathBuf,
+    /// Zoom changes not saved yet, and when the last one happened.
+    settings_unsaved: Option<Instant>,
+    /// Ctrl+wheel / pinch steps not yet turned into a whole font size step.
+    zoom_accum: f32,
 }
 
 impl PlaytermApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Vec<SessionProfile>) -> anyhow::Result<Self> {
-        fonts::install(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        // Ctrl+= / Ctrl+- / Ctrl+0 size the terminal font instead of the whole window.
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
 
         // PLAYTERM_CONFIG_DIR allows a portable install (or an isolated test profile).
         let config_dir = match std::env::var_os("PLAYTERM_CONFIG_DIR") {
@@ -115,7 +142,15 @@ impl PlaytermApp {
                 .to_owned(),
         };
         let config_dir = config_dir.as_path();
-        let (store, status) = load_profiles(&config_dir.join("sessions.toml"));
+        let (store, mut status) = load_profiles(&config_dir.join("sessions.toml"));
+        let settings_path = config_dir.join("settings.toml");
+        let settings = AppSettings::load(&settings_path).unwrap_or_else(|e| {
+            status = Some(format!("설정 파일을 읽을 수 없어 기본값을 씁니다: {e}"));
+            AppSettings::default()
+        });
+        if let Err(e) = fonts::install(&cc.egui_ctx, &settings.font) {
+            status = Some(e);
+        }
 
         let ctx = cc.egui_ctx.clone();
         let mut app = Self {
@@ -132,10 +167,15 @@ impl PlaytermApp {
             show_sidebar: true,
             site_manager: None,
             status,
+            info: None,
             window_title: String::new(),
             always_on_top: false,
             connect_target: None,
             dialog_target: None,
+            settings,
+            settings_path,
+            settings_unsaved: None,
+            zoom_accum: 0.0,
         };
         for profile in initial {
             app.open_session(&profile, None, None);
@@ -160,7 +200,8 @@ impl PlaytermApp {
     /// Opens a tab with the local command prompt.
     fn open_local(&mut self) {
         let (cols, rows) = self.tab_size();
-        self.sessions.push(Session::local(self.next_id, cols, rows));
+        let setup = self.term_setup();
+        self.sessions.push(Session::local(self.next_id, cols, rows, &setup));
         self.next_id += 1;
         self.active = self.sessions.len() - 1;
     }
@@ -181,7 +222,8 @@ impl PlaytermApp {
 
     fn connect_in_new_tab(&mut self, mut spec: SessionSpec) {
         (spec.params.cols, spec.params.rows) = self.tab_size();
-        let session = Session::connect(self.next_id, spec, &self.net, self.waker.clone());
+        let setup = self.term_setup();
+        let session = Session::connect(self.next_id, spec, &self.net, self.waker.clone(), &setup);
         self.next_id += 1;
         self.sessions.push(session);
         self.active = self.sessions.len() - 1;
@@ -514,6 +556,70 @@ impl PlaytermApp {
         out
     }
 
+    // -- settings -------------------------------------------------------------------------------
+
+    fn term_setup(&self) -> TermSetup {
+        TermSetup { palette: Palette::from_theme(Theme::named(&self.settings.theme)), scrollback: self.settings.scrollback }
+    }
+
+    fn view_style(&self) -> view::ViewStyle {
+        let selection = Theme::rgb(Theme::named(&self.settings.theme).selection);
+        view::ViewStyle {
+            font_size: self.settings.font_size,
+            selection: Color32::from_rgb(selection.r, selection.g, selection.b),
+        }
+    }
+
+    /// Makes `new` the current settings, updating fonts and open tabs where they changed.
+    fn apply_settings(&mut self, ctx: &egui::Context, new: AppSettings) {
+        let new = new.clamped();
+        if new.font != self.settings.font
+            && let Err(e) = fonts::install(ctx, &new.font)
+        {
+            self.status = Some(e);
+        }
+        if new.theme != self.settings.theme {
+            let palette = Palette::from_theme(Theme::named(&new.theme));
+            for s in &mut self.sessions {
+                s.terminal.set_palette(palette.clone());
+            }
+        }
+        if new.scrollback != self.settings.scrollback {
+            for s in &mut self.sessions {
+                s.terminal.set_scrollback(new.scrollback);
+            }
+        }
+        self.settings = new;
+    }
+
+    fn save_settings(&mut self) {
+        self.settings_unsaved = None;
+        let r = self.settings.save(&self.settings_path);
+        self.report("설정 저장 실패", r);
+    }
+
+    /// Changes the font size (zoom), saving it once the zooming stops.
+    fn set_font_size(&mut self, size: f32) {
+        let size = size.clamp(AppSettings::MIN_FONT_SIZE, AppSettings::MAX_FONT_SIZE);
+        if size != self.settings.font_size {
+            self.settings.font_size = size;
+            self.settings_unsaved = Some(Instant::now());
+        }
+    }
+
+    /// Ctrl+wheel / pinch: one point per whole step, so the size stays tidy.
+    fn zoom(&mut self, steps: f32) {
+        self.zoom_accum += steps;
+        while self.zoom_accum >= 1.0 {
+            self.zoom_accum -= 1.0;
+            self.set_font_size(self.settings.font_size.floor() + 1.0);
+        }
+        while self.zoom_accum <= -1.0 {
+            self.zoom_accum += 1.0;
+            self.set_font_size(self.settings.font_size.ceil() - 1.0);
+        }
+    }
+
     // -- commands -------------------------------------------------------------------------------
 
     fn run(&mut self, ctx: &egui::Context, command: Command) {
@@ -526,6 +632,7 @@ impl PlaytermApp {
                 self.open_site_manager(selected.as_deref(), false, None);
             }
             Command::NewSite => self.open_site_manager(None, true, None),
+            Command::ImportPutty => self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store)))),
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
 
             Command::Copy => {
@@ -543,6 +650,18 @@ impl PlaytermApp {
             Command::SelectAll => {
                 if let Some(s) = self.sessions.get_mut(self.active) {
                     s.terminal.select_all();
+                }
+            }
+            Command::Find => {
+                if let Some(s) = self.sessions.get_mut(self.active) {
+                    match &mut s.search {
+                        Some(bar) => bar.focus(),
+                        None => {
+                            // Start with the selected text when it is a short single line.
+                            let text = s.terminal.selection_text().filter(|t| !t.contains('\n') && t.len() <= 100);
+                            s.search = Some(SearchBar::new(text.unwrap_or_default()));
+                        }
+                    }
                 }
             }
             Command::ClearScrollback => {
@@ -641,6 +760,10 @@ impl PlaytermApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
             }
 
+            Command::ZoomIn => self.set_font_size(self.settings.font_size.floor() + 1.0),
+            Command::ZoomOut => self.set_font_size(self.settings.font_size.ceil() - 1.0),
+            Command::ZoomReset => self.set_font_size(AppSettings::DEFAULT_FONT_SIZE),
+            Command::Settings => self.modal = Some(Modal::Settings(Box::new(SettingsDialog::new(&self.settings)))),
             Command::Shortcuts => self.modal = Some(Modal::Shortcuts),
             Command::About => self.modal = Some(Modal::About),
         }
@@ -675,6 +798,33 @@ impl PlaytermApp {
                     self.modal = Some(Modal::About);
                 }
             }
+            Modal::Settings(mut dialog) => match dialog.show(ctx) {
+                SettingsResult::Open => self.modal = Some(Modal::Settings(dialog)),
+                SettingsResult::Changed(s) => {
+                    self.apply_settings(ctx, s);
+                    self.modal = Some(Modal::Settings(dialog));
+                }
+                SettingsResult::Save(s) => {
+                    self.apply_settings(ctx, s);
+                    self.save_settings();
+                }
+                SettingsResult::Cancel(original) => self.apply_settings(ctx, original),
+            },
+            Modal::Import(mut dialog) => match dialog.show(ctx) {
+                ImportResult::Open => self.modal = Some(Modal::Import(dialog)),
+                ImportResult::Cancel => {}
+                ImportResult::Import(profiles) => {
+                    let count = profiles.len();
+                    let folder = profiles.first().map(|p| p.folder.clone()).unwrap_or_default();
+                    for p in profiles {
+                        let r = self.store.upsert(p);
+                        self.report("사이트 저장 실패", r);
+                    }
+                    let place = if folder.is_empty() { String::new() } else { format!(" ('{folder}' 폴더)") };
+                    self.info = Some(format!("PuTTY 세션 {count}개를 가져왔습니다{place}"));
+                    self.show_sidebar = true;
+                }
+            },
             Modal::Vault(mut dialog, pending) => match dialog.show(ctx) {
                 VaultResult::Open => self.modal = Some(Modal::Vault(dialog, pending)),
                 VaultResult::Cancel => self.vault_cancelled(pending),
@@ -744,6 +894,7 @@ impl PlaytermApp {
                 Shortcut::NewTab => Command::NewTab,
                 Shortcut::SiteManager => Command::SiteManager,
                 Shortcut::Sidebar => Command::ToggleSidebar,
+                Shortcut::Find => Command::Find,
                 Shortcut::Sftp => Command::Sftp(i),
                 Shortcut::PrevTab => Command::PrevTab,
                 Shortcut::NextTab => Command::NextTab,
@@ -752,6 +903,9 @@ impl PlaytermApp {
                 Shortcut::Copy => Command::Copy,
                 Shortcut::Paste => Command::Paste,
                 Shortcut::Fullscreen => Command::ToggleFullscreen,
+                Shortcut::ZoomIn => Command::ZoomIn,
+                Shortcut::ZoomOut => Command::ZoomOut,
+                Shortcut::ZoomReset => Command::ZoomReset,
             };
             self.run(ctx, command);
         }
@@ -820,7 +974,7 @@ impl PlaytermApp {
                 ui.add_space(6.0);
             }
             if self.sessions.get(self.active).is_some_and(|s| s.can_sftp())
-                && ui.button("SFTP").on_hover_text("파일 브라우저 (Ctrl+Shift+F)").clicked()
+                && ui.button("SFTP").on_hover_text("파일 브라우저 (Ctrl+Shift+E)").clicked()
             {
                 action = Some(Command::Sftp(self.active));
             }
@@ -837,6 +991,13 @@ impl PlaytermApp {
                     .on_hover_text("클릭해서 닫기");
                 if label.clicked() {
                     self.status = None;
+                }
+            }
+            if let Some(info) = &self.info {
+                ui.separator();
+                let label = ui.add(egui::Label::new(RichText::new(info).weak()).sense(egui::Sense::click())).on_hover_text("클릭해서 닫기");
+                if label.clicked() {
+                    self.info = None;
                 }
             }
         });
@@ -867,7 +1028,7 @@ impl PlaytermApp {
         }
         match self.sessions.get_mut(self.active).and_then(|s| s.sftp.as_mut()).filter(|b| b.open) {
             Some(browser) => browser.upload_paths(paths),
-            None => self.status = Some("파일을 올리려면 먼저 SFTP 창을 여세요 (Ctrl+Shift+F)".into()),
+            None => self.status = Some("파일을 올리려면 먼저 SFTP 창을 여세요 (Ctrl+Shift+E)".into()),
         }
     }
 
@@ -958,17 +1119,20 @@ impl eframe::App for PlaytermApp {
             }
         }
 
-        egui::CentralPanel::no_frame().show(ui, |ui| match self.sessions.get_mut(self.active) {
-            Some(session) => view::show(ui, session, !modal_open),
-            None => {
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        "왼쪽 사이트 목록에서 더블클릭하거나 [파일 > 사이트 관리] (Ctrl+Shift+S),\n\
-                         [+ 빠른 연결] (Ctrl+Shift+T) 로 접속하세요",
-                    )
-                });
+        let style = self.view_style();
+        let output = egui::CentralPanel::no_frame()
+            .show(ui, |ui| self.sessions.get_mut(self.active).map(|s| view::show(ui, s, !modal_open, &style)))
+            .inner;
+        if let Some(steps) = output.map(|o| o.zoom_steps).filter(|s| *s != 0.0) {
+            self.zoom(steps);
+        }
+        if let Some(changed) = self.settings_unsaved {
+            if changed.elapsed() >= SETTINGS_SAVE_DELAY {
+                self.save_settings();
+            } else {
+                ctx.request_repaint_after(SETTINGS_SAVE_DELAY);
             }
-        });
+        }
 
         self.update_window_title(&ctx);
     }

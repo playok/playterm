@@ -2,14 +2,20 @@
 //! the local command prompt ([`crate::console`]) while not.
 
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
-use playterm_term::{Charset, LogMode, Point, Terminal, TerminalEvent};
+use playterm_term::{Charset, LogMode, Palette, Point, Terminal, TerminalEvent};
 
 use crate::console::{self, KeyResult, LineEditor, Parsed, Request};
 use crate::local_fs;
 use crate::logging::{self, LogPlan};
+use crate::search_bar::SearchBar;
 use crate::sftp_view::SftpBrowser;
 
-const SCROLLBACK_LINES: usize = 10_000;
+/// How a new tab's terminal starts out (from the app settings).
+#[derive(Clone)]
+pub struct TermSetup {
+    pub palette: Palette,
+    pub scrollback: usize,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionState {
@@ -85,6 +91,8 @@ pub struct Session {
     pub click: ClickState,
     pub mouse: MouseReport,
     pub sftp: Option<SftpBrowser>,
+    /// The find bar, while open.
+    pub search: Option<SearchBar>,
     /// An SFTP channel was requested and has not answered yet.
     sftp_pending: bool,
     /// Auto-log settings of the profile, kept so duplicates log to their own file.
@@ -99,8 +107,8 @@ pub struct Session {
 
 impl Session {
     /// A tab with the local command prompt.
-    pub fn local(id: u64, cols: u16, rows: u16) -> Self {
-        let mut session = Self::blank(id, cols, rows, Charset::Utf8);
+    pub fn local(id: u64, cols: u16, rows: u16, setup: &TermSetup) -> Self {
+        let mut session = Self::blank(id, cols, rows, Charset::Utf8, setup);
         session.terminal.feed_local(
             "\x1b[1mplayterm\x1b[0m \x1b[90m- 연결되지 않은 탭입니다. \
              ssh, telnet, open(사이트 관리), sites(사이트 목록), ls 등을 입력하세요. help: 명령 목록\x1b[0m\r\n\r\n",
@@ -110,18 +118,20 @@ impl Session {
     }
 
     /// A new tab connecting right away.
-    pub fn connect(id: u64, spec: SessionSpec, net: &NetRuntime, waker: Waker) -> Self {
-        let mut session = Self::blank(id, spec.params.cols, spec.params.rows, spec.charset);
+    pub fn connect(id: u64, spec: SessionSpec, net: &NetRuntime, waker: Waker, setup: &TermSetup) -> Self {
+        let mut session = Self::blank(id, spec.params.cols, spec.params.rows, spec.charset, setup);
         session.start(spec, net, waker);
         session
     }
 
-    fn blank(id: u64, cols: u16, rows: u16, charset: Charset) -> Self {
+    fn blank(id: u64, cols: u16, rows: u16, charset: Charset, setup: &TermSetup) -> Self {
+        let mut terminal = Terminal::new(cols.into(), rows.into(), charset, setup.scrollback);
+        terminal.set_palette(setup.palette.clone());
         Self {
             id,
             charset,
             name: None,
-            terminal: Terminal::new(cols.into(), rows.into(), charset, SCROLLBACK_LINES),
+            terminal,
             state: SessionState::Local,
             remote_title: None,
             host_key: None,
@@ -132,6 +142,7 @@ impl Session {
             click: ClickState::default(),
             mouse: MouseReport::default(),
             sftp: None,
+            search: None,
             sftp_pending: false,
             log_plan: None,
             remote: None,

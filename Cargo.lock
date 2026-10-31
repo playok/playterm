@@ -3684,6 +3684,7 @@ dependencies = [
  "chrono",
  "directories",
  "eframe",
+ "encoding_rs",
  "env_logger",
  "log",
  "memmap2",
@@ -3692,7 +3693,9 @@ dependencies = [
  "playterm-term",
  "rfd",
  "tempfile",
+ "ttf-parser",
  "unicode-width",
+ "windows-sys 0.61.2",
  "winresource",
  "zeroize",
 ]

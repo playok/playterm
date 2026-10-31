@@ -255,6 +255,17 @@ impl Terminal {
         &self.palette
     }
 
+    /// Switches the color scheme (colors the remote set with OSC 4/10/11 still win).
+    pub fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
+    }
+
+    /// Changes how many lines of history are kept; shrinking drops the oldest lines.
+    pub fn set_scrollback(&mut self, lines: usize) {
+        // This also re-announces the current title, which leaves the tab title unchanged.
+        self.term.set_options(Config { scrolling_history: lines, ..Config::default() });
+    }
+
     /// Drains pending terminal events, translating them for the host application.
     pub fn take_events(&mut self) -> Vec<TerminalEvent> {
         if let Some(log) = &mut self.log
@@ -335,6 +346,23 @@ mod tests {
         // Without a scroll region, new lines reach the bottom row.
         t.feed(b"\r\n3\r\n4\r\n5");
         assert_eq!(row_text(&t, 4), "5");
+    }
+
+    #[test]
+    fn scrollback_can_shrink_and_grow() {
+        let mut t = Terminal::new(20, 5, Charset::Utf8, 100);
+        for i in 0..50 {
+            t.feed(format!("line {i}\r\n").as_bytes());
+        }
+        assert_eq!(t.term().grid().history_size(), 46);
+        t.set_scrollback(10);
+        assert_eq!(t.term().grid().history_size(), 10);
+        t.set_scrollback(1000);
+        for i in 0..50 {
+            t.feed(format!("more {i}\r\n").as_bytes());
+        }
+        assert_eq!(t.term().grid().history_size(), 60);
+        assert!(t.take_events().iter().all(|e| matches!(e, TerminalEvent::Title(None))));
     }
 
     #[test]

@@ -223,7 +223,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+T", "빠른 연결"),
     ("Ctrl+Shift+S", "사이트 관리"),
     ("Ctrl+Shift+B", "사이트 목록 표시/숨김"),
-    ("Ctrl+Shift+F", "SFTP 파일 브라우저"),
+    ("Ctrl+Shift+F", "찾기 (스크롤백 포함, Enter: 위로 · Shift+Enter: 아래로)"),
+    ("Ctrl+Shift+E", "SFTP 파일 브라우저"),
     ("Ctrl+Tab / Ctrl+Shift+Tab", "다음 / 이전 탭"),
     ("Ctrl+Shift+D", "탭 복제"),
     ("Ctrl+Shift+W", "탭 닫기"),
@@ -232,6 +233,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+V, Shift+Insert", "붙여넣기"),
     ("Shift+드래그", "마우스를 쓰는 프로그램 안에서도 로컬 선택"),
     ("F11", "전체 화면"),
+    ("Ctrl+= / Ctrl+- / Ctrl+0", "글꼴 크게 / 작게 / 기본 크기"),
+    ("Ctrl+휠", "글꼴 크기"),
 ];
 
 /// Keyboard shortcut list. Returns `true` once closed.

@@ -4,15 +4,27 @@ use eframe::egui::{
     self, Color32, Event, EventFilter, FontFamily, FontId, ImeEvent, Pos2, Rect, Sense,
     Shape, Stroke, Vec2,
 };
-use playterm_term::{Cell, CursorShape, Flags, Point, Rgb, SelectionType, Side, TermMode};
+use playterm_term::{Cell, CursorShape, Flags, Point, Rgb, SearchMatch, SelectionType, Side, TermMode};
 
 use crate::input::{key_bytes, paste_bytes};
 use crate::mouse::{self, MouseAction, MouseButton, MouseMods};
+use crate::search_bar::{self, BarAction};
 use crate::session::Session;
 use crate::{boxdraw, clipboard};
 
-pub const FONT_SIZE: f32 = 15.0;
-const SELECTION_BG: Color32 = Color32::from_rgb(0x26, 0x4f, 0x78);
+/// How the terminal is drawn (from the app settings).
+#[derive(Clone, Copy, Debug)]
+pub struct ViewStyle {
+    pub font_size: f32,
+    pub selection: Color32,
+}
+
+/// What the terminal widget asks of the app this frame.
+#[derive(Default)]
+pub struct ViewOutput {
+    /// Ctrl+wheel notches or a touchpad pinch, in font size steps (positive = larger).
+    pub zoom_steps: f32,
+}
 /// Max time between presses that still counts as a double/triple click, in seconds.
 const MULTI_CLICK_SECS: f64 = 0.4;
 
@@ -26,8 +38,8 @@ struct CellSize {
     h: f32,
 }
 
-fn cell_size(ctx: &egui::Context) -> CellSize {
-    let font = FontId::monospace(FONT_SIZE);
+fn cell_size(ctx: &egui::Context, font_size: f32) -> CellSize {
+    let font = FontId::monospace(font_size);
     ctx.fonts_mut(|f| CellSize { w: f.glyph_width(&font, 'M'), h: f.row_height(&font) })
 }
 
@@ -38,8 +50,9 @@ fn c32(rgb: Rgb) -> Color32 {
 /// Shows the terminal of `session` in all remaining space of `ui`.
 ///
 /// `autofocus` grabs keyboard focus when nothing else has it (false while a dialog is open).
-pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) {
-    let cell = cell_size(ui.ctx());
+pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &ViewStyle) -> ViewOutput {
+    let mut output = ViewOutput::default();
+    let cell = cell_size(ui.ctx(), style.font_size);
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
 
@@ -87,15 +100,33 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) {
     } else {
         handle_mouse(ui, session, &response, rect, cell);
     }
-    if response.hovered() {
+    if response.hovered() && !behind_modal {
         ui.ctx().set_cursor_icon(if report { egui::CursorIcon::Default } else { egui::CursorIcon::Text });
-        handle_wheel(ui, session, rect, cell, report);
+        // Ctrl+wheel (and a touchpad pinch) sizes the font instead of scrolling.
+        let (zoom, ctrl) = ui.input(|i| (i.zoom_delta(), i.modifiers.ctrl));
+        if ctrl {
+            output.zoom_steps = zoom_wheel_steps(ui);
+        } else if zoom != 1.0 {
+            // A pinch: about one step per 10 %.
+            output.zoom_steps = zoom.ln() / 1.1f32.ln();
+        } else {
+            handle_wheel(ui, session, rect, cell, report);
+        }
     }
     if !report {
         response.context_menu(|ui| context_menu(ui, session));
     }
 
-    paint(ui, session, rect, cell, focused);
+    let matches = match session.search.as_mut() {
+        Some(bar) => bar.visible_matches(&session.terminal),
+        None => Vec::new(),
+    };
+    paint(ui, session, rect, cell, focused, style, &matches);
+    if let Some(bar) = session.search.as_mut()
+        && let BarAction::Close = bar.show(ui, &mut session.terminal, rect)
+    {
+        session.search = None;
+    }
 
     if focused {
         let cursor = cursor_rect(session, rect.min, cell);
@@ -108,6 +139,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) {
             })
         });
     }
+    output
 }
 
 fn handle_keyboard(ui: &egui::Ui, session: &mut Session) {
@@ -340,6 +372,21 @@ fn report_wheel(ui: &egui::Ui, session: &mut Session, rect: Rect, cell: CellSize
     }
 }
 
+/// Ctrl+wheel: one step per wheel notch (touchpads scroll in points; 50 points = one notch).
+fn zoom_wheel_steps(ui: &egui::Ui) -> f32 {
+    ui.input(|i| {
+        i.events
+            .iter()
+            .map(|e| match e {
+                Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, .. } => delta.y,
+                Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, .. } => delta.y / 50.0,
+                Event::MouseWheel { unit: egui::MouseWheelUnit::Page, delta, .. } => delta.y * 3.0,
+                _ => 0.0,
+            })
+            .sum()
+    })
+}
+
 fn handle_wheel(ui: &egui::Ui, session: &mut Session, rect: Rect, cell: CellSize, report: bool) {
     if report {
         report_wheel(ui, session, rect, cell);
@@ -458,12 +505,22 @@ impl Frame<'_> {
     }
 
     fn flush_text(&mut self) {
-        if let Some(run) = self.run.take() {
-            let text = run.text.trim_end().to_owned();
-            if !text.is_empty() {
-                let galley = self.painter.layout_no_wrap(text, self.font(run.bold), run.color);
-                self.foregrounds.push(Shape::galley(self.pos(run.row, run.start_col), galley, run.color));
-            }
+        let Some(run) = self.run.take() else { return };
+        let text = run.text.trim_end().to_owned();
+        if text.is_empty() {
+            return;
+        }
+        let cells = text.chars().count();
+        let galley = self.painter.layout_no_wrap(text.clone(), self.font(run.bold), run.color);
+        // One galley per run is cheap, but only stays on the grid when every glyph is exactly
+        // one cell wide (not true of some fonts' bold faces); otherwise place each glyph.
+        if (galley.size().x - cells as f32 * self.cell.w).abs() < 0.5 {
+            self.foregrounds.push(Shape::galley(self.pos(run.row, run.start_col), galley, run.color));
+            return;
+        }
+        for (i, ch) in text.chars().enumerate().filter(|(_, c)| *c != ' ') {
+            let galley = self.painter.layout_no_wrap(ch.into(), self.font(run.bold), run.color);
+            self.foregrounds.push(Shape::galley(self.pos(run.row, run.start_col + i), galley, run.color));
         }
     }
 
@@ -503,7 +560,15 @@ fn cell_text(cell: &Cell) -> String {
     s
 }
 
-fn paint(ui: &egui::Ui, session: &Session, rect: Rect, cell: CellSize, focused: bool) {
+fn paint(
+    ui: &egui::Ui,
+    session: &Session,
+    rect: Rect,
+    cell: CellSize,
+    focused: bool,
+    style: &ViewStyle,
+    matches: &[SearchMatch],
+) {
     let painter = ui.painter_at(rect);
     let pixels_per_point = ui.ctx().pixels_per_point();
     let term = session.terminal.term();
@@ -527,8 +592,8 @@ fn paint(ui: &egui::Ui, session: &Session, rect: Rect, cell: CellSize, focused: 
         painter: &painter,
         origin: rect.min,
         cell,
-        regular: FontId::monospace(FONT_SIZE),
-        bold: FontId::new(FONT_SIZE, bold_family()),
+        regular: FontId::monospace(style.font_size),
+        bold: FontId::new(style.font_size, bold_family()),
         backgrounds: Vec::new(),
         foregrounds: Vec::new(),
         run: None,
@@ -550,7 +615,9 @@ fn paint(ui: &egui::Ui, session: &Session, rect: Rect, cell: CellSize, focused: 
         let (fg, bg) = if block_cursor && row == cursor_row && col == cursor_col {
             (c32(bg), Some(cursor_color))
         } else if selected {
-            (c32(fg), Some(SELECTION_BG))
+            (c32(fg), Some(style.selection))
+        } else if matches.iter().any(|m| m.contains(&indexed.point)) {
+            (search_bar::MATCH_FG, Some(search_bar::MATCH_BG))
         } else {
             (c32(fg), (bg != default_bg).then(|| c32(bg)))
         };
@@ -585,7 +652,7 @@ fn paint(ui: &egui::Ui, session: &Session, rect: Rect, cell: CellSize, focused: 
         // Show the IME composition (e.g. a Hangul syllable being assembled) at the cursor.
         let galley = painter.layout_no_wrap(
             session.preedit.clone(),
-            FontId::monospace(FONT_SIZE),
+            FontId::monospace(style.font_size),
             c32(default_bg),
         );
         let preedit_rect = Rect::from_min_size(cursor_cell.min, Vec2::new(galley.size().x.max(cell.w), cell.h));
