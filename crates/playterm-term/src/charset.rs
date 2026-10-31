@@ -3,7 +3,8 @@ use std::fmt;
 use encoding_rs::{EUC_KR, Encoding};
 
 /// Character set used on the wire for a session.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Charset {
     #[default]
     Utf8,

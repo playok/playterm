@@ -9,7 +9,8 @@ mod charset;
 mod palette;
 mod terminal;
 
-pub use alacritty_terminal::index::{Column, Line, Point};
+pub use alacritty_terminal::index::{Column, Line, Point, Side};
+pub use alacritty_terminal::selection::{SelectionRange, SelectionType};
 pub use alacritty_terminal::term::TermMode;
 pub use alacritty_terminal::term::cell::{Cell, Flags};
 pub use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};

@@ -1,7 +1,7 @@
 //! One open tab: a terminal screen bound to a network session.
 
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, SessionEvent, SessionHandle, Waker};
-use playterm_term::{Charset, Terminal, TerminalEvent};
+use playterm_term::{Charset, Point, Terminal, TerminalEvent};
 
 const SCROLLBACK_LINES: usize = 10_000;
 
@@ -19,9 +19,29 @@ pub struct PendingAuth {
     pub focus_requested: bool,
 }
 
+/// What a tab was opened with; enough to duplicate it.
+#[derive(Clone)]
+pub struct SessionSpec {
+    pub params: ConnectParams,
+    pub charset: Charset,
+    /// Saved-profile name, used as the tab title.
+    pub name: Option<String>,
+}
+
+/// Mouse selection gesture state.
+#[derive(Default)]
+pub struct ClickState {
+    /// Time and cell of the last primary press, for double/triple-click detection.
+    pub last: Option<(f64, Point)>,
+    pub count: u8,
+    pub dragging: bool,
+}
+
 pub struct Session {
     pub id: u64,
     pub params: ConnectParams,
+    pub charset: Charset,
+    pub name: Option<String>,
     pub terminal: Terminal,
     pub state: SessionState,
     /// Title set by the remote side via OSC 0/2.
@@ -34,11 +54,13 @@ pub struct Session {
     pub scroll_accum: f32,
     /// Clipboard text the remote side asked us to store (OSC 52).
     pub clipboard_store: Option<String>,
+    pub click: ClickState,
     handle: SessionHandle,
 }
 
 impl Session {
-    pub fn connect(id: u64, params: ConnectParams, charset: Charset, net: &NetRuntime, waker: Waker) -> Self {
+    pub fn connect(id: u64, spec: SessionSpec, net: &NetRuntime, waker: Waker) -> Self {
+        let SessionSpec { params, charset, name } = spec;
         let mut terminal = Terminal::new(params.cols.into(), params.rows.into(), charset, SCROLLBACK_LINES);
         terminal.feed_local(&format!(
             "\x1b[90m{} {}:{} 에 연결 중...\x1b[0m\r\n",
@@ -48,6 +70,8 @@ impl Session {
         Self {
             id,
             params,
+            charset,
+            name,
             terminal,
             state: SessionState::Connecting,
             remote_title: None,
@@ -56,6 +80,7 @@ impl Session {
             preedit: String::new(),
             scroll_accum: 0.0,
             clipboard_store: None,
+            click: ClickState::default(),
             handle,
         }
     }
@@ -75,7 +100,14 @@ impl Session {
         self.auth = None;
     }
 
+    pub fn spec(&self) -> SessionSpec {
+        SessionSpec { params: self.params.clone(), charset: self.charset, name: self.name.clone() }
+    }
+
     pub fn tab_title(&self) -> String {
+        if let Some(name) = &self.name {
+            return name.clone();
+        }
         match &self.remote_title {
             Some(t) if !t.is_empty() => t.clone(),
             _ if self.params.username.is_empty() => self.params.host.clone(),
@@ -130,6 +162,7 @@ impl Session {
     pub fn send_bytes(&mut self, bytes: Vec<u8>) {
         if self.state == SessionState::Connected && !bytes.is_empty() {
             self.terminal.scroll_to_bottom();
+            self.terminal.clear_selection();
             self.handle.send(bytes);
         }
     }

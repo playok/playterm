@@ -4,13 +4,16 @@ use eframe::egui::{
     self, Color32, Event, EventFilter, FontFamily, FontId, ImeEvent, Pos2, Rect, Sense,
     Shape, Stroke, Vec2,
 };
-use playterm_term::{Cell, CursorShape, Flags, Rgb, TermMode};
+use playterm_term::{Cell, CursorShape, Flags, Point, Rgb, SelectionType, Side, TermMode};
 
-use crate::boxdraw;
 use crate::input::{key_bytes, paste_bytes};
 use crate::session::Session;
+use crate::{boxdraw, clipboard};
 
 pub const FONT_SIZE: f32 = 15.0;
+const SELECTION_BG: Color32 = Color32::from_rgb(0x26, 0x4f, 0x78);
+/// Max time between presses that still counts as a double/triple click, in seconds.
+const MULTI_CLICK_SECS: f64 = 0.4;
 
 pub fn bold_family() -> FontFamily {
     FontFamily::Name("mono-bold".into())
@@ -37,7 +40,7 @@ fn c32(rgb: Rgb) -> Color32 {
 pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) {
     let cell = cell_size(ui.ctx());
     let rect = ui.available_rect_before_wrap();
-    let response = ui.allocate_rect(rect, Sense::click());
+    let response = ui.allocate_rect(rect, Sense::click_and_drag());
 
     if response.clicked() || (autofocus && ui.memory(|m| m.focused().is_none())) {
         response.request_focus();
@@ -60,9 +63,11 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) {
     if focused {
         handle_keyboard(ui, session);
     }
+    handle_mouse(ui, session, &response, rect, cell);
     if response.hovered() {
         handle_wheel(ui, session, cell.h);
     }
+    response.context_menu(|ui| context_menu(ui, session));
 
     paint(ui, session, rect, cell, focused);
 
@@ -99,13 +104,15 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session) {
                     session.send_bytes(bytes);
                 }
             }
-            // egui turns Ctrl+C / Ctrl+X into clipboard events; in a terminal they are signals.
-            Event::Copy => session.send_bytes(vec![0x03]),
-            Event::Cut => session.send_bytes(vec![0x18]),
-            Event::Paste(text) => {
-                let text = paste_bytes(&text, mode.contains(TermMode::BRACKETED_PASTE));
-                session.send_text(&text);
+            // egui turns Ctrl+C / Ctrl+X into clipboard events. Like Windows Terminal, Ctrl+C
+            // copies when there is a selection and is the interrupt signal otherwise.
+            Event::Copy => {
+                if !copy_selection(ui.ctx(), session) {
+                    session.send_bytes(vec![0x03]);
+                }
             }
+            Event::Cut => session.send_bytes(vec![0x18]),
+            Event::Paste(text) => paste(session, &text),
             Event::Ime(ImeEvent::Preedit { text, .. }) => session.preedit = text,
             Event::Ime(ImeEvent::Commit(text)) => {
                 session.preedit.clear();
@@ -113,6 +120,98 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session) {
             }
             _ => {}
         }
+    }
+}
+
+/// Copies the selection to the clipboard and clears it. Returns `false` if nothing was selected.
+pub fn copy_selection(ctx: &egui::Context, session: &mut Session) -> bool {
+    match session.terminal.selection_text() {
+        Some(text) => {
+            ctx.copy_text(text);
+            session.terminal.clear_selection();
+            true
+        }
+        None => false,
+    }
+}
+
+pub fn paste(session: &mut Session, text: &str) {
+    let bracketed = session.terminal.term().mode().contains(TermMode::BRACKETED_PASTE);
+    session.send_text(&paste_bytes(text, bracketed));
+}
+
+fn context_menu(ui: &mut egui::Ui, session: &mut Session) {
+    if ui
+        .add_enabled(session.terminal.has_selection(), egui::Button::new("복사").shortcut_text("Ctrl+Shift+C"))
+        .clicked()
+    {
+        copy_selection(ui.ctx(), session);
+        ui.close();
+    }
+    if ui.add(egui::Button::new("붙여넣기").shortcut_text("Ctrl+Shift+V")).clicked() {
+        if let Some(text) = clipboard::read_text() {
+            paste(session, &text);
+        }
+        ui.close();
+    }
+    ui.separator();
+    if ui.button("모두 선택").clicked() {
+        session.terminal.select_all();
+        ui.close();
+    }
+}
+
+/// Grid point and cell half under a screen position (clamped to the terminal area).
+fn cell_at(session: &Session, rect: Rect, cell: CellSize, pos: Pos2) -> (Point, Side) {
+    let x = ((pos.x - rect.left()) / cell.w).max(0.0);
+    let y = ((pos.y - rect.top()) / cell.h).max(0.0);
+    let col = x.floor() as usize;
+    let side = if col >= session.terminal.cols() || x.fract() >= 0.5 { Side::Right } else { Side::Left };
+    (session.terminal.viewport_point(y.floor() as usize, col), side)
+}
+
+fn handle_mouse(ui: &egui::Ui, session: &mut Session, response: &egui::Response, rect: Rect, cell: CellSize) {
+    let (pressed, down, pos, shift, time) = ui.input(|i| {
+        (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.interact_pos(), i.modifiers.shift, i.time)
+    });
+    let Some(pos) = pos else { return };
+
+    if pressed && response.hovered() {
+        let (point, side) = cell_at(session, rect, cell, pos);
+        let click = &mut session.click;
+        click.count = match click.last {
+            Some((t, p)) if time - t < MULTI_CLICK_SECS && p == point => click.count % 3 + 1,
+            _ => 1,
+        };
+        click.last = Some((time, point));
+        click.dragging = true;
+
+        if click.count == 1 && shift && session.terminal.has_selection() {
+            session.terminal.update_selection(point, side);
+        } else {
+            let ty = match click.count {
+                1 => SelectionType::Simple,
+                2 => SelectionType::Semantic,
+                _ => SelectionType::Lines,
+            };
+            session.terminal.start_selection(ty, point, side);
+        }
+    } else if session.click.dragging {
+        if !down {
+            session.click.dragging = false;
+            return;
+        }
+        // Dragging past the top/bottom edge scrolls through the history.
+        if pos.y < rect.top() {
+            session.terminal.scroll_lines(1);
+            ui.ctx().request_repaint();
+        } else if pos.y > rect.bottom() {
+            session.terminal.scroll_lines(-1);
+            ui.ctx().request_repaint();
+        }
+        let clamped = Pos2::new(pos.x, pos.y.clamp(rect.top(), rect.bottom() - 1.0));
+        let (point, side) = cell_at(session, rect, cell, clamped);
+        session.terminal.update_selection(point, side);
     }
 }
 
@@ -287,6 +386,7 @@ fn paint(ui: &egui::Ui, session: &Session, rect: Rect, cell: CellSize, focused: 
     painter.rect_filled(rect, 0.0, c32(default_bg));
 
     let offset = content.display_offset as i32;
+    let selection = content.selection;
     let cursor = content.cursor;
     let cursor_row = cursor.point.line.0 + offset;
     let cursor_col = cursor.point.column.0;
@@ -317,8 +417,11 @@ fn paint(ui: &egui::Ui, session: &Session, rect: Rect, cell: CellSize, focused: 
         let width = if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
 
         let (fg, bg) = palette.cell_colors(cell, colors);
+        let selected = selection.is_some_and(|s| s.contains_cell(&indexed, cursor.point, cursor.shape));
         let (fg, bg) = if block_cursor && row == cursor_row && col == cursor_col {
             (c32(bg), Some(cursor_color))
+        } else if selected {
+            (c32(fg), Some(SELECTION_BG))
         } else {
             (c32(fg), (bg != default_bg).then(|| c32(bg)))
         };

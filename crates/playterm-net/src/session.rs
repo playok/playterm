@@ -7,7 +7,8 @@ use tokio::sync::{mpsc, oneshot};
 /// Called from network threads whenever a new event is queued, so the UI can wake up.
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Protocol {
     #[default]
     Ssh,

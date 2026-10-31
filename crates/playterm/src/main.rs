@@ -2,15 +2,18 @@
 
 mod app;
 mod boxdraw;
-mod connect_dialog;
+mod clipboard;
+mod dialogs;
 mod fonts;
 mod input;
+mod profile_form;
 mod session;
+mod sidebar;
 mod view;
 
 use eframe::egui;
 
-use crate::connect_dialog::ConnectRequest;
+use playterm_config::SessionProfile;
 
 const USAGE: &str = "사용법: playterm [--cp949] [ssh://[user@]host[:port] | telnet://host[:port]]...";
 
@@ -48,7 +51,7 @@ fn main() -> eframe::Result {
     )
 }
 
-fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<ConnectRequest>, String> {
+fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<SessionProfile>, String> {
     let mut charset = playterm_term::Charset::Utf8;
     let mut requests = Vec::new();
     for arg in args {
@@ -56,9 +59,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<ConnectRequest>,
             "--cp949" | "--euc-kr" => charset = playterm_term::Charset::Cp949,
             "-h" | "--help" => return Err(String::new()),
             url => {
-                let mut req = ConnectRequest::from_url(url)?;
-                req.charset = charset;
-                requests.push(req);
+                let mut profile = profile_form::parse_url(url)?;
+                profile.charset = charset;
+                requests.push(profile);
             }
         }
     }

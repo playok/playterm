@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 alacritty_terminal = "0.26.0"
 encoding_rs = "0.8.44"
+serde = { version = "1.0.229", features = ["derive"] }

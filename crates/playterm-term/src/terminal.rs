@@ -2,6 +2,8 @@ use std::sync::mpsc;
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
@@ -119,6 +121,53 @@ impl Terminal {
         self.term.scroll_display(Scroll::Bottom);
     }
 
+    /// Grid point for a cell of the visible screen (row 0 = top of the viewport).
+    pub fn viewport_point(&self, row: usize, col: usize) -> Point {
+        let row = row.min(self.size.rows - 1) as i32;
+        let offset = self.term.grid().display_offset() as i32;
+        Point::new(Line(row - offset), Column(col.min(self.size.cols - 1)))
+    }
+
+    pub fn start_selection(&mut self, ty: SelectionType, point: Point, side: Side) {
+        self.term.selection = Some(Selection::new(ty, point, side));
+    }
+
+    pub fn update_selection(&mut self, point: Point, side: Side) {
+        if let Some(selection) = &mut self.term.selection {
+            selection.update(point, side);
+        }
+    }
+
+    /// Selects the whole scrollback and screen.
+    pub fn select_all(&mut self) {
+        let top = Line(-(self.term.grid().history_size() as i32));
+        let bottom = Line(self.size.rows as i32 - 1);
+        let mut selection = Selection::new(SelectionType::Lines, Point::new(top, Column(0)), Side::Left);
+        selection.update(Point::new(bottom, Column(self.size.cols - 1)), Side::Right);
+        self.term.selection = Some(selection);
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.term.selection = None;
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.term.selection.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
+    /// Selected text. Empty rows at the end (e.g. the unused bottom of the screen after
+    /// "select all") collapse into a single trailing newline.
+    pub fn selection_text(&self) -> Option<String> {
+        if !self.has_selection() {
+            return None;
+        }
+        let mut text = self.term.selection_to_string()?;
+        while text.ends_with("\n\n") {
+            text.pop();
+        }
+        (!text.is_empty()).then_some(text)
+    }
+
     pub fn term(&self) -> &Term<Listener> {
         &self.term
     }
@@ -195,6 +244,37 @@ mod tests {
         t.feed(b"\x1b[c");
         let events = t.take_events();
         assert!(matches!(events.as_slice(), [TerminalEvent::Reply(r)] if r.starts_with(b"\x1b[?")));
+    }
+
+    #[test]
+    fn selection_kinds() {
+        let mut t = Terminal::new(20, 3, Charset::Utf8, 100);
+        t.feed(b"hello world\r\nsecond line");
+
+        t.start_selection(SelectionType::Simple, t.viewport_point(0, 0), Side::Left);
+        assert!(!t.has_selection(), "a click without drag selects nothing");
+        t.update_selection(t.viewport_point(0, 4), Side::Right);
+        assert_eq!(t.selection_text().as_deref(), Some("hello"));
+
+        t.start_selection(SelectionType::Semantic, t.viewport_point(0, 8), Side::Left);
+        assert_eq!(t.selection_text().as_deref(), Some("world"));
+
+        t.start_selection(SelectionType::Lines, t.viewport_point(1, 3), Side::Left);
+        assert_eq!(t.selection_text().as_deref(), Some("second line\n"));
+
+        t.select_all();
+        assert_eq!(t.selection_text().as_deref(), Some("hello world\nsecond line\n"));
+        t.clear_selection();
+        assert_eq!(t.selection_text(), None);
+    }
+
+    #[test]
+    fn hangul_selection() {
+        let mut t = Terminal::new(20, 2, Charset::Utf8, 100);
+        t.feed("가나 다라".as_bytes());
+        t.start_selection(SelectionType::Simple, t.viewport_point(0, 0), Side::Left);
+        t.update_selection(t.viewport_point(0, 3), Side::Right);
+        assert_eq!(t.selection_text().as_deref(), Some("가나"));
     }
 
     #[test]

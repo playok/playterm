@@ -6,9 +6,12 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+arboard = "3.7.0"
 directories = "6.0.0"
 eframe = "0.37.0"
 env_logger = "0.11.11"
 log = "0.4.35"
+playterm-config = { version = "0.1.0", path = "../playterm-config" }
 playterm-net = { version = "0.1.0", path = "../playterm-net" }
 playterm-term = { version = "0.1.0", path = "../playterm-term" }
+zeroize = "1.9.1"
