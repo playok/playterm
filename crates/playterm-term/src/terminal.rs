@@ -136,6 +136,12 @@ impl Terminal {
         self.parser.advance(&mut self.term, text.as_bytes());
     }
 
+    /// Switches the wire charset (when a tab connects to a different host).
+    pub fn set_charset(&mut self, charset: Charset) {
+        self.decoder = OutputDecoder::new(charset);
+        self.encoder = InputEncoder::new(charset);
+    }
+
     /// Encodes user-typed text into the wire charset.
     pub fn encode_input(&self, text: &str) -> Vec<u8> {
         self.encoder.encode(text)

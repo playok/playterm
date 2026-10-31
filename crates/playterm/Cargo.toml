@@ -17,6 +17,7 @@ playterm-config = { version = "0.1.0", path = "../playterm-config" }
 playterm-net = { version = "0.1.0", path = "../playterm-net" }
 playterm-term = { version = "0.1.0", path = "../playterm-term" }
 rfd = "0.17.2"
+unicode-width = "0.2.3"
 zeroize = "1.9.1"
 
 [dev-dependencies]

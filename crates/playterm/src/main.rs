@@ -3,9 +3,11 @@
 mod app;
 mod boxdraw;
 mod clipboard;
+mod console;
 mod dialogs;
 mod fonts;
 mod input;
+mod local_fs;
 mod logging;
 mod menu;
 mod mouse;

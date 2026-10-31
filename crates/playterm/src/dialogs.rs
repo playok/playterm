@@ -219,6 +219,7 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
 // Help
 
 const SHORTCUTS: &[(&str, &str)] = &[
+    ("Ctrl+Shift+N", "새 탭 (로컬 명령 프롬프트)"),
     ("Ctrl+Shift+T", "빠른 연결"),
     ("Ctrl+Shift+S", "사이트 관리"),
     ("Ctrl+Shift+B", "사이트 목록 표시/숨김"),

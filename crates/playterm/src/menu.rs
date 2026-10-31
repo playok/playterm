@@ -11,6 +11,7 @@ use crate::sidebar::VaultState;
 #[derive(Clone)]
 pub enum Command {
     QuickConnect,
+    NewTab,
     SiteManager,
     NewSite,
     Quit,
@@ -103,6 +104,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
 
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("파일", |ui| {
+            item(ui, out, "새 탭", "Ctrl+Shift+N", true, Command::NewTab);
             item(ui, out, "빠른 연결…", "Ctrl+Shift+T", true, Command::QuickConnect);
             item(ui, out, "사이트 관리…", "Ctrl+Shift+S", true, Command::SiteManager);
             item(ui, out, "새 사이트…", "", true, Command::NewSite);
@@ -142,11 +144,13 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
         });
 
         ui.menu_button("탭", |ui| {
+            item(ui, out, "새 탭", "Ctrl+Shift+N", true, Command::NewTab);
+            ui.separator();
             item(ui, out, "다음 탭", "Ctrl+Tab", n > 1, Command::NextTab);
             item(ui, out, "이전 탭", "Ctrl+Shift+Tab", n > 1, Command::PrevTab);
             ui.separator();
             item(ui, out, "탭 복제", "Ctrl+Shift+D", active.is_some(), Command::Duplicate(i));
-            item(ui, out, "다시 연결", "", active.is_some(), Command::Reconnect(i));
+            item(ui, out, "다시 연결", "", active.is_some_and(|s| s.has_target()), Command::Reconnect(i));
             ui.separator();
             item(ui, out, "탭 닫기", "Ctrl+Shift+W", active.is_some(), Command::Close(i));
             item(ui, out, "다른 탭 모두 닫기", "", n > 1, Command::CloseOthers(i));
