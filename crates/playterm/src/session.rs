@@ -440,8 +440,7 @@ impl Session {
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         // The first picture of an RDP connection (the view takes later changes itself).
-        if self.rdp.pending.is_none()
-            && !self.rdp.has_picture()
+        if !self.rdp.has_picture()
             && let Some(frame) = self.remote.as_ref().and_then(|r| r.handle.take_frame())
         {
             self.rdp.pending = Some(frame);

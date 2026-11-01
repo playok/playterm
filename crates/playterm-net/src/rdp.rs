@@ -1,14 +1,16 @@
 //! RDP sessions (Windows Remote Desktop) on the IronRDP protocol crates.
 //!
 //! The connection runs TCP → TLS → NLA (CredSSP), then the active session decodes the screen into
-//! an RGBA image and sends input as fast-path events. The Windows clipboard backend owns a window
-//! and is not `Send`, so each session runs on a thread of its own with a single-threaded runtime.
+//! an RGBA image and sends input as fast-path events. Each session runs on a thread of its own
+//! with a single-threaded runtime; the Windows clipboard backend gets another thread, whose window
+//! is served by a blocking message loop even while the session waits on the clipboard.
 //!
-//! Screens reach the UI through a "latest frame" slot (at most ~60 per second), so a busy UI skips
-//! frames instead of queueing them. The server's TLS certificate is pinned like an SSH host key:
-//! confirmed on first use, refused if it changes.
+//! The decoded image is shared with the UI, which copies only what changed since it last looked
+//! (woken at most ~60 times per second). The server's TLS certificate is pinned like an SSH host
+//! key: confirmed on first use, refused if it changes.
 
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Context as _, anyhow, bail};
@@ -87,55 +89,67 @@ pub struct RdpFrame {
     pub rgba: Vec<u8>,
 }
 
-/// The remote screen as the network side last saw it, and what changed since the UI looked.
-#[derive(Default)]
+/// The decoded remote screen, shared by the session (which draws into it) and the UI (which copies
+/// the changed parts out).
 pub(crate) struct SharedScreen {
-    width: u16,
-    height: u16,
-    rgba: Vec<u8>,
+    image: DecodedImage,
     /// Union of the changes not yet taken: left, top, right, bottom (exclusive).
     dirty: Option<[u16; 4]>,
 }
 
+impl Default for SharedScreen {
+    fn default() -> Self {
+        Self { image: DecodedImage::new(PixelFormat::RgbA32, 0, 0), dirty: None }
+    }
+}
+
+/// The smallest rectangle (left, top, right, bottom) holding both.
+fn union(a: [u16; 4], b: [u16; 4]) -> [u16; 4] {
+    [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
+}
+
+/// `rect` (left, top, right, bottom exclusive) of an RGBA image with rows of `stride` bytes.
+fn copy_rect(data: &[u8], stride: usize, rect: [u16; 4]) -> Vec<u8> {
+    let [left, top, right, bottom] = rect.map(usize::from);
+    let mut rgba = Vec::with_capacity((right - left) * 4 * (bottom - top));
+    for y in top..bottom {
+        rgba.extend_from_slice(&data[y * stride + left * 4..y * stride + right * 4]);
+    }
+    rgba
+}
+
 impl SharedScreen {
-    /// Copies `rect` (left, top, right, bottom exclusive) of a `width` x `height` RGBA image.
-    pub(crate) fn update(&mut self, width: u16, height: u16, image: &[u8], rect: [u16; 4]) {
-        let stride = usize::from(width) * 4;
-        let rect = if (self.width, self.height) != (width, height) {
-            // A new size: the UI starts over with the whole picture.
-            self.width = width;
-            self.height = height;
-            self.rgba = vec![0; stride * usize::from(height)];
-            self.dirty = None;
-            [0, 0, width, height]
-        } else {
-            [rect[0].min(width), rect[1].min(height), rect[2].min(width), rect[3].min(height)]
-        };
-        if rect[0] >= rect[2] || rect[1] >= rect[3] || image.len() < stride * usize::from(height) {
-            return;
+    /// A new, black desktop of this size; the UI starts over with the whole picture.
+    pub(crate) fn reset(&mut self, width: u16, height: u16) {
+        self.image = DecodedImage::new(PixelFormat::RgbA32, width, height);
+        self.dirty = Some([0, 0, width, height]);
+    }
+
+    /// Notes a changed `rect` (left, top, right, bottom exclusive) for the UI.
+    pub(crate) fn changed(&mut self, rect: [u16; 4]) {
+        let (width, height) = (self.image.width(), self.image.height());
+        let rect = [rect[0].min(width), rect[1].min(height), rect[2].min(width), rect[3].min(height)];
+        if rect[0] < rect[2] && rect[1] < rect[3] {
+            self.dirty = Some(self.dirty.map_or(rect, |d| union(d, rect)));
         }
-        let (x0, x1) = (usize::from(rect[0]) * 4, usize::from(rect[2]) * 4);
-        for y in usize::from(rect[1])..usize::from(rect[3]) {
-            let row = y * stride;
-            self.rgba[row + x0..row + x1].copy_from_slice(&image[row + x0..row + x1]);
-        }
-        self.dirty = Some(match self.dirty {
-            Some(d) => [d[0].min(rect[0]), d[1].min(rect[1]), d[2].max(rect[2]), d[3].max(rect[3])],
-            None => rect,
-        });
     }
 
     /// The changes since the last call, if any.
     pub(crate) fn take(&mut self) -> Option<RdpFrame> {
-        let [left, top, right, bottom] = self.dirty.take()?;
-        let stride = usize::from(self.width) * 4;
-        let (x0, x1) = (usize::from(left) * 4, usize::from(right) * 4);
-        let mut rgba = Vec::with_capacity((x1 - x0) * usize::from(bottom - top));
-        for y in usize::from(top)..usize::from(bottom) {
-            rgba.extend_from_slice(&self.rgba[y * stride + x0..y * stride + x1]);
-        }
-        Some(RdpFrame { width: self.width, height: self.height, rect: [left, top, right - left, bottom - top], rgba })
+        let rect = self.dirty.take()?;
+        let rgba = copy_rect(self.image.data(), self.image.stride(), rect);
+        let [left, top, right, bottom] = rect;
+        Some(RdpFrame {
+            width: self.image.width(),
+            height: self.image.height(),
+            rect: [left, top, right - left, bottom - top],
+            rgba,
+        })
     }
+}
+
+fn lock(screen: &Mutex<SharedScreen>) -> MutexGuard<'_, SharedScreen> {
+    screen.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +183,7 @@ pub mod scancode {
     pub const LEFT_CTRL: u16 = 0x1D;
     pub const LEFT_SHIFT: u16 = 0x2A;
     pub const LEFT_ALT: u16 = 0x38;
+    pub const RIGHT_ALT: u16 = 0xE038;
     pub const C: u16 = 0x2E;
     pub const V: u16 = 0x2F;
     pub const X: u16 = 0x2D;
@@ -340,6 +355,67 @@ impl ClipboardMessageProxy for ClipboardProxy {
     }
 }
 
+/// The Windows clipboard backend on a thread of its own. Its hidden window must keep handling
+/// messages while the session thread is busy: when a local program pastes remote data, the window
+/// waits for the session to fetch it.
+#[cfg(windows)]
+struct ClipboardThread {
+    factory: Box<dyn CliprdrBackendFactory + Send>,
+    thread_id: u32,
+}
+
+#[cfg(windows)]
+impl ClipboardThread {
+    fn start(proxy: ClipboardProxy) -> anyhow::Result<Self> {
+        use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, TranslateMessage};
+
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new().name("playterm-rdp-clipboard".into()).spawn(move || {
+            let clipboard = match ironrdp_cliprdr_native::WinClipboard::new(proxy) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e.to_string()));
+                    return;
+                }
+            };
+            // SAFETY: no preconditions.
+            let thread_id = unsafe { GetCurrentThreadId() };
+            if ready_tx.send(Ok((clipboard.backend_factory(), thread_id))).is_err() {
+                return;
+            }
+            // SAFETY: a plain blocking message loop on this thread, until WM_QUIT (0) or an error (-1);
+            // `msg` is written by GetMessageW before use.
+            unsafe {
+                let mut msg: MSG = std::mem::zeroed();
+                while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            // The window goes away on the thread that made it.
+            drop(clipboard);
+        })?;
+        let (factory, thread_id) = ready_rx
+            .recv()
+            .map_err(|_| anyhow!("clipboard thread ended"))?
+            .map_err(|e| anyhow!(e))?;
+        Ok(Self { factory, thread_id })
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ClipboardThread {
+    fn drop(&mut self) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+        // SAFETY: posts to the thread's message queue (created with its window); fails harmlessly if
+        // the thread is already gone.
+        unsafe {
+            PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0);
+        }
+    }
+}
+
 enum Outcome {
     Ended,
     BadPassword,
@@ -374,7 +450,7 @@ async fn run(
     let (clip_tx, mut clip_rx) = mpsc::unbounded_channel();
     #[cfg(windows)]
     let clipboard = if params.rdp.clipboard {
-        match ironrdp_cliprdr_native::WinClipboard::new(ClipboardProxy(clip_tx)) {
+        match ClipboardThread::start(ClipboardProxy(clip_tx)) {
             Ok(c) => Some(c),
             Err(e) => {
                 sink.notice(tr!("클립보드 공유를 시작하지 못했습니다: {e}", "Clipboard sharing could not start: {e}"));
@@ -384,12 +460,13 @@ async fn run(
     } else {
         None
     };
+    #[cfg(windows)]
+    let factory = clipboard.as_ref().map(|c| &*c.factory);
     #[cfg(not(windows))]
-    let clipboard: Option<ironrdp_cliprdr_native::StubClipboard> = {
+    let factory: Option<&(dyn CliprdrBackendFactory + Send)> = {
         drop(clip_tx);
         None
     };
-    let factory = clipboard.as_ref().map(|c| c.backend_factory());
     let has_clipboard = factory.is_some();
 
     let mut password = params.password.clone().map(Zeroizing::new);
@@ -415,7 +492,7 @@ async fn run(
             }
         };
         let clip = if has_clipboard { Some(&mut clip_rx) } else { None };
-        match session(&params, &current, factory.as_deref(), &mut commands, clip, &sink).await? {
+        match session(&params, &current, factory, &mut commands, clip, &sink).await? {
             Outcome::Ended => return Ok(()),
             Outcome::BadPassword => sink.notice(t("인증 실패, 다시 시도하세요.", "Authentication failed, try again.")),
         }
@@ -423,12 +500,13 @@ async fn run(
     bail!(t("인증 실패: 시도 횟수를 초과했습니다", "Authentication failed: too many attempts"))
 }
 
-/// NTSTATUS codes in a CredSSP error that mean "wrong user name or password".
-const BAD_CREDENTIALS: [u32; 4] = [
+/// Status codes in a CredSSP error that mean "wrong user name or password".
+const BAD_CREDENTIALS: [u32; 5] = [
     0xC000_0064, // STATUS_NO_SUCH_USER
     0xC000_006A, // STATUS_WRONG_PASSWORD
     0xC000_006D, // STATUS_LOGON_FAILURE
-    0xC007_030C, // SEC_E_LOGON_DENIED as some servers report it
+    0x8009_030C, // SEC_E_LOGON_DENIED
+    0xC007_030C, // SEC_E_LOGON_DENIED as some servers (IronRDP) report it
 ];
 
 /// How a failed connection should be handled.
@@ -440,10 +518,14 @@ enum Failure {
 }
 
 fn classify(e: &ConnectorError) -> Failure {
-    let ConnectorErrorKind::Credssp(err) = e.kind() else { return Failure::Error(e.to_string()) };
+    let err = match e.kind() {
+        ConnectorErrorKind::Credssp(err) => err,
+        ConnectorErrorKind::AccessDenied => return Failure::BadPassword,
+        _ => return Failure::Error(e.to_string()),
+    };
     let status = err.nstatus.map(|s| s.0);
     if status.is_some_and(|s| BAD_CREDENTIALS.contains(&s))
-        || (status.is_none() && err.error_type == ironrdp_connector::sspi::ErrorKind::LogonDenied)
+        || err.error_type == ironrdp_connector::sspi::ErrorKind::LogonDenied
     {
         return Failure::BadPassword;
     }
@@ -621,7 +703,8 @@ async fn session(
     sink.send(SessionEvent::Connected);
 
     let (mut reader, mut writer) = ironrdp_tokio::split_tokio_framed(framed);
-    let mut image = DecodedImage::new(PixelFormat::RgbA32, result.desktop_size.width, result.desktop_size.height);
+    let screen = sink.screen();
+    lock(&screen).reset(result.desktop_size.width, result.desktop_size.height);
     let activation_factory = result.activation_factory;
     let mut stage = ActiveStageBuilder {
         static_channels: result.static_channels,
@@ -638,11 +721,8 @@ async fn session(
     let mut frames = tokio::time::interval(FRAME_INTERVAL);
     frames.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut housekeeping = tokio::time::interval(Duration::from_secs(5));
-    // The clipboard backend's hidden window lives on this thread: its messages are handled here.
-    let mut pump = tokio::time::interval(Duration::from_millis(10));
-    pump.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Changed region not yet published: left, top, right, bottom (exclusive).
-    let mut dirty: Option<[u16; 4]> = None;
+    // The screen changed since the UI was last woken.
+    let mut changed = true;
     let mut closing: Option<tokio::time::Instant> = None;
     let mut ended_by_server = true;
     let mut commands_open = true;
@@ -656,23 +736,18 @@ async fn session(
                     Err(_) if closing.is_some() => break 'session None,
                     Err(e) => return Err(anyhow!(e).context(t("수신 오류", "Receive error"))),
                 };
-                stage.process(&mut image, action, &payload, None)?
+                stage.process(&mut lock(&screen).image, action, &payload, None)?
             }
-            _ = frames.tick(), if dirty.is_some() => {
-                if let Some(rect) = dirty.take() {
-                    sink.update_screen(image.width(), image.height(), image.data(), rect);
-                }
-                Vec::new()
-            }
-            _ = pump.tick(), if clip_rx.is_some() => {
-                pump_messages();
+            _ = frames.tick(), if changed => {
+                changed = false;
+                sink.wake();
                 Vec::new()
             }
             () = async { tokio::time::sleep_until(closing.unwrap_or_else(tokio::time::Instant::now)).await },
                 if closing.is_some() => break 'session None,
             command = commands.recv(), if commands_open => match command {
-                Some(SessionCommand::Rdp(inputs)) => input(&mut stage, &mut image, &inputs)?,
-                Some(SessionCommand::Input(bytes)) => input(&mut stage, &mut image, &bytes_to_inputs(&bytes))?,
+                Some(SessionCommand::Rdp(inputs)) => input(&mut stage, &screen, &inputs)?,
+                Some(SessionCommand::Input(bytes)) => input(&mut stage, &screen, &bytes_to_inputs(&bytes))?,
                 Some(SessionCommand::Resize { .. }) => Vec::new(),
                 Some(SessionCommand::SendBreak) => {
                     sink.notice(t("RDP 세션에서는 BREAK 신호를 지원하지 않습니다", "RDP sessions do not support BREAK"));
@@ -725,11 +800,8 @@ async fn session(
                 }
                 ActiveStageOutput::GraphicsUpdate(r) => {
                     // Inclusive in the PDU; exclusive here.
-                    let rect = [r.left, r.top, r.right.saturating_add(1), r.bottom.saturating_add(1)];
-                    dirty = Some(match dirty {
-                        Some(d) => [d[0].min(rect[0]), d[1].min(rect[1]), d[2].max(rect[2]), d[3].max(rect[3])],
-                        None => rect,
-                    });
+                    lock(&screen).changed([r.left, r.top, r.right.saturating_add(1), r.bottom.saturating_add(1)]);
+                    changed = true;
                 }
                 ActiveStageOutput::Terminate(reason) => break 'session Some(reason),
                 ActiveStageOutput::DeactivateAll => {
@@ -751,7 +823,8 @@ async fn session(
                             ..
                         } = activation.connection_activation_state()
                         {
-                            image = DecodedImage::new(PixelFormat::RgbA32, desktop_size.width, desktop_size.height);
+                            lock(&screen).reset(desktop_size.width, desktop_size.height);
+                            changed = true;
                             stage.set_fastpath_processor(
                                 fast_path::ProcessorBuilder {
                                     io_channel_id: activation.io_channel_id(),
@@ -764,7 +837,6 @@ async fn session(
                             );
                             stage.set_share_id(share_id);
                             stage.set_enable_server_pointer(enable_server_pointer);
-                            dirty = Some([0, 0, desktop_size.width, desktop_size.height]);
                             break;
                         }
                     }
@@ -779,25 +851,8 @@ async fn session(
     Ok(Outcome::Ended)
 }
 
-/// Handles the window messages queued for this thread (the clipboard backend's window).
-#[cfg(windows)]
-fn pump_messages() {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage};
-    // SAFETY: a plain message loop on this thread; `msg` is written by PeekMessageW before use.
-    unsafe {
-        let mut msg: MSG = std::mem::zeroed();
-        while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn pump_messages() {}
-
 /// Keyboard and mouse into session output (frames to send).
-fn input(stage: &mut ActiveStage, image: &mut DecodedImage, inputs: &[RdpInput]) -> anyhow::Result<Vec<ActiveStageOutput>> {
+fn input(stage: &mut ActiveStage, screen: &Mutex<SharedScreen>, inputs: &[RdpInput]) -> anyhow::Result<Vec<ActiveStageOutput>> {
     let mut outputs = Vec::new();
     let mut events: SmallVec<[FastPathInputEvent; 2]> = SmallVec::new();
     for i in inputs {
@@ -812,7 +867,7 @@ fn input(stage: &mut ActiveStage, image: &mut DecodedImage, inputs: &[RdpInput])
         }
     }
     if !events.is_empty() {
-        outputs.extend(stage.process_fastpath_input(image, &events)?);
+        outputs.extend(stage.process_fastpath_input(&mut lock(screen).image, &events)?);
     }
     Ok(outputs)
 }
@@ -902,20 +957,25 @@ mod tests {
     #[test]
     fn shared_screen_copies_changed_parts() {
         let mut screen = SharedScreen::default();
-        let image: Vec<u8> = (0..4 * 3 * 4).map(|i| i as u8).collect(); // 4 x 3 pixels
+        assert!(screen.take().is_none(), "no desktop yet");
         // A new size: the whole picture.
-        screen.update(4, 3, &image, [1, 1, 2, 2]);
+        screen.reset(4, 3);
         let f = screen.take().unwrap();
         assert_eq!((f.width, f.height, f.rect, f.rgba.len()), (4, 3, [0, 0, 4, 3], 48));
         assert!(screen.take().is_none(), "nothing new");
-        // Two changes before the UI looks: their union.
-        screen.update(4, 3, &image, [0, 0, 1, 1]);
-        screen.update(4, 3, &image, [2, 1, 3, 2]);
+        // Two changes before the UI looks: their union; off-screen parts are cut.
+        screen.changed([0, 0, 1, 1]);
+        screen.changed([2, 1, 9, 2]);
+        screen.changed([5, 5, 6, 6]);
         let f = screen.take().unwrap();
-        assert_eq!(f.rect, [0, 0, 3, 2]);
-        assert_eq!(f.rgba.len(), 3 * 2 * 4);
-        // Row 1 of the region starts at pixel (0, 1) of the image.
-        assert_eq!(&f.rgba[12..16], &image[16..20]);
+        assert_eq!(f.rect, [0, 0, 4, 2]);
+        assert_eq!(f.rgba.len(), 4 * 2 * 4);
+
+        let image: Vec<u8> = (0..4 * 3 * 4).map(|i| i as u8).collect(); // 4 x 3 pixels
+        let part = copy_rect(&image, 16, [1, 1, 3, 3]);
+        assert_eq!(part.len(), 2 * 2 * 4);
+        // Row 1 of the region starts at pixel (1, 2) of the image.
+        assert_eq!(&part[8..12], &image[36..40]);
     }
 
     #[test]

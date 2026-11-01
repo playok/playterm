@@ -204,7 +204,7 @@ impl SessionHandle {
 
     /// The part of the RDP screen that changed since the last call.
     pub fn take_frame(&self) -> Option<RdpFrame> {
-        self.screen.lock().ok()?.take()
+        self.screen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
     }
 
     pub fn send(&self, data: Vec<u8>) {
@@ -253,12 +253,13 @@ impl EventSink {
         self.waker.clone()
     }
 
-    /// Copies the changed `rect` (left, top, right, bottom exclusive) of the decoded RDP image
-    /// for the UI.
-    pub fn update_screen(&self, width: u16, height: u16, image: &[u8], rect: [u16; 4]) {
-        if let Ok(mut screen) = self.screen.lock() {
-            screen.update(width, height, image, rect);
-        }
+    /// The RDP screen shared with the UI.
+    pub(crate) fn screen(&self) -> Arc<Mutex<SharedScreen>> {
+        self.screen.clone()
+    }
+
+    /// Wakes the UI (the RDP screen changed).
+    pub(crate) fn wake(&self) {
         (self.waker)();
     }
 

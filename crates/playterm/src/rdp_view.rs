@@ -27,6 +27,8 @@ pub struct RdpScreen {
     pub size: (u16, u16),
     /// Scan codes sent as pressed (released again when the view loses focus).
     down: BTreeSet<u16>,
+    /// Scan codes of keys held down whose press went out as text, not as a key.
+    typing: BTreeSet<u16>,
     buttons: BTreeSet<u8>,
     last_pos: Option<(u16, u16)>,
     /// Wheel movement not yet sent, in 1/120 notches.
@@ -63,8 +65,28 @@ impl RdpScreen {
             let button = [RdpMouseButton::Left, RdpMouseButton::Right, RdpMouseButton::Middle][usize::from(id)];
             out.push(RdpInput::MouseButton { button, pressed: false, x, y });
         }
+        self.typing.clear();
         self.clipboard_key = false;
         out
+    }
+
+    /// Puts a changed part of the remote screen into the texture.
+    fn apply(&mut self, ctx: &egui::Context, id: u64, frame: RdpFrame) {
+        let [x, y, w, h] = frame.rect.map(usize::from);
+        let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &frame.rgba);
+        let whole = (x, y, w, h) == (0, 0, usize::from(frame.width), usize::from(frame.height));
+        match &mut self.texture {
+            // Only the changed part goes to the GPU.
+            Some(texture) if self.size == (frame.width, frame.height) => {
+                texture.set_partial([x, y], image, TextureOptions::LINEAR);
+            }
+            // A new picture or size always comes whole from the network side.
+            _ if whole => {
+                self.texture = Some(ctx.load_texture(format!("rdp-{id}"), image, TextureOptions::LINEAR));
+                self.size = (frame.width, frame.height);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -145,7 +167,7 @@ fn scan(key: Key) -> Option<u16> {
         F12 => 0x58,
         ControlRight => 0xE01D,
         PrintScreen => 0xE037,
-        AltRight => 0xE038,
+        AltRight => scancode::RIGHT_ALT,
         Home => 0xE047,
         ArrowUp => 0xE048,
         PageUp => 0xE049,
@@ -211,24 +233,10 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) -> ViewOu
     let screen = &mut session.rdp;
     screen.view_px = tab_px;
 
-    if let Some(frame) = screen.pending.take().or_else(|| session.take_rdp_frame()) {
-        let screen = &mut session.rdp;
-        let [x, y, w, h] = frame.rect.map(usize::from);
-        let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &frame.rgba);
-        let whole = (x, y, w, h) == (0, 0, usize::from(frame.width), usize::from(frame.height));
-        match &mut screen.texture {
-            // Only the changed part goes to the GPU.
-            Some(texture) if screen.size == (frame.width, frame.height) => {
-                texture.set_partial([x, y], image, TextureOptions::LINEAR);
-            }
-            // A new picture or size always comes whole from the network side.
-            _ if whole => {
-                let name = format!("rdp-{}", session.id);
-                screen.texture = Some(ui.ctx().load_texture(name, image, TextureOptions::LINEAR));
-                screen.size = (frame.width, frame.height);
-            }
-            _ => {}
-        }
+    // The first picture (taken while polling), then whatever changed since.
+    let first = screen.pending.take();
+    for frame in first.into_iter().chain(session.take_rdp_frame()) {
+        session.rdp.apply(ui.ctx(), session.id, frame);
     }
     let screen = &mut session.rdp;
 
@@ -357,19 +365,28 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) -> ViewOu
 fn keyboard_event(event: &Event, screen: &mut RdpScreen, inputs: &mut Vec<RdpInput>) {
     match event {
         Event::Key { key, physical_key, pressed, modifiers, .. } => {
-            let key = physical_key.unwrap_or(*key);
+            let key = match physical_key {
+                // The keypad without NumLock: egui names its physical keys after the digits, the
+                // logical key tells Insert, End, the arrows, ...
+                Some(p) if types_text(*p) && !types_text(*key) && scan(*key).is_some() => *key,
+                Some(p) => *p,
+                None => *key,
+            };
             let Some(code) = scan(key) else { return };
             if *pressed {
                 let shortcut = modifiers.ctrl || modifiers.alt || modifiers.mac_cmd;
                 if !types_text(key) || shortcut {
                     screen.down.insert(code);
                     inputs.push(RdpInput::Key { scancode: code, pressed: true });
+                } else {
+                    // The character follows as text.
+                    screen.typing.insert(code);
                 }
             } else if screen.down.remove(&code) {
                 inputs.push(RdpInput::Key { scancode: code, pressed: false });
-            } else if is_clipboard_key(key)
-                && (std::mem::take(&mut screen.clipboard_key) || modifiers.ctrl || modifiers.shift)
-            {
+            } else if screen.typing.remove(&code) {
+                // Typed as text: nothing is held remotely.
+            } else if std::mem::take(&mut screen.clipboard_key) || swallowed_shortcut(key, modifiers) {
                 // egui swallowed the press as Copy / Cut / Paste (Ctrl+C/X/V, Ctrl/Shift+Insert,
                 // Shift+Delete; Ctrl+V sends nothing at all with an empty clipboard). The
                 // modifiers are already down remotely: the key itself completes the shortcut.
@@ -377,17 +394,26 @@ fn keyboard_event(event: &Event, screen: &mut RdpScreen, inputs: &mut Vec<RdpInp
                 inputs.push(RdpInput::Key { scancode: code, pressed: false });
             }
         }
-        // Alt+letter is a remote shortcut (menus), already sent as keys; not text too.
-        Event::Text(text) if !screen.down.contains(&scancode::LEFT_ALT) => inputs.push(RdpInput::Text(text.clone())),
+        // Alt+letter is a remote shortcut (menus), already sent as keys; not text too. AltGr
+        // (left Ctrl + right Alt on Windows) types characters.
+        Event::Text(_)
+            if screen.down.contains(&scancode::LEFT_ALT)
+                || (screen.down.contains(&scancode::RIGHT_ALT) && !screen.down.contains(&scancode::LEFT_CTRL)) => {}
+        Event::Text(text) => inputs.push(RdpInput::Text(text.clone())),
         Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty() => inputs.push(RdpInput::Text(text.clone())),
         Event::Copy | Event::Cut | Event::Paste(_) | Event::PasteImage(_) => screen.clipboard_key = true,
         _ => {}
     }
 }
 
-/// Keys egui may turn into Copy / Cut / Paste.
-fn is_clipboard_key(key: Key) -> bool {
-    matches!(key, Key::C | Key::X | Key::V | Key::Insert | Key::Delete)
+/// Shortcuts egui turns into Copy / Cut / Paste, so that only their release arrives.
+fn swallowed_shortcut(key: Key, modifiers: &egui::Modifiers) -> bool {
+    match key {
+        Key::C | Key::X | Key::V => modifiers.ctrl,
+        Key::Insert => modifiers.ctrl || modifiers.shift,
+        Key::Delete => modifiers.shift,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -439,6 +465,22 @@ mod tests {
         let k = |scancode, pressed| RdpInput::Key { scancode, pressed };
         assert_eq!(out, vec![k(0x1D, true), k(0x1E, true), k(0x1E, false), k(0x1D, false)]);
         assert!(s.down.is_empty());
+        out.clear();
+        // A capital V (Shift held) is text only, its release included.
+        let shift = |key, pressed| Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers { shift: true, ..Default::default() },
+        };
+        keyboard_event(&shift(Key::ShiftLeft, true), &mut s, &mut out);
+        keyboard_event(&shift(Key::V, true), &mut s, &mut out);
+        keyboard_event(&Event::Text("V".into()), &mut s, &mut out);
+        keyboard_event(&shift(Key::V, false), &mut s, &mut out);
+        keyboard_event(&key(Key::ShiftLeft, false, false), &mut s, &mut out);
+        assert_eq!(out, vec![k(0x2A, true), RdpInput::Text("V".into()), k(0x2A, false)]);
+        assert!(s.typing.is_empty());
     }
 
     #[test]
@@ -460,6 +502,18 @@ mod tests {
         keyboard_event(&ev(Key::ShiftLeft, false, false, false, false), &mut s, &mut out);
         assert_eq!(out, vec![k(0x2A, true), k(0xE052, true), k(0xE052, false), k(0x2A, false)]);
         out.clear();
+        // The keypad's 0 without NumLock is Insert.
+        let keypad = |pressed| Event::Key {
+            key: Key::Insert,
+            physical_key: Some(Key::Num0),
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        keyboard_event(&keypad(true), &mut s, &mut out);
+        keyboard_event(&keypad(false), &mut s, &mut out);
+        assert_eq!(out, vec![k(0xE052, true), k(0xE052, false)]);
+        out.clear();
         // Ctrl+V with an empty clipboard: no Paste event at all, still sent.
         keyboard_event(&ev(Key::ControlLeft, true, true, false, false), &mut s, &mut out);
         keyboard_event(&ev(Key::V, false, true, false, false), &mut s, &mut out);
@@ -475,5 +529,17 @@ mod tests {
         let released = s.release_all();
         assert_eq!(released.len(), 2);
         assert!(s.down.is_empty());
+        out.clear();
+        // The right Alt alone works like the left one ...
+        keyboard_event(&ev(Key::AltRight, true, false, false, true), &mut s, &mut out);
+        keyboard_event(&Event::Text("f".into()), &mut s, &mut out);
+        assert_eq!(out, vec![k(0xE038, true)]);
+        s.release_all();
+        out.clear();
+        // ... but with the left Ctrl it is AltGr, which types characters.
+        keyboard_event(&ev(Key::ControlLeft, true, true, false, false), &mut s, &mut out);
+        keyboard_event(&ev(Key::AltRight, true, true, false, true), &mut s, &mut out);
+        keyboard_event(&Event::Text("@".into()), &mut s, &mut out);
+        assert_eq!(out.last(), Some(&RdpInput::Text("@".into())));
     }
 }
