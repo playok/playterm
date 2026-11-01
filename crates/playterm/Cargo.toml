@@ -10,6 +10,7 @@ arboard = "3.7.0"
 chrono = "0.4.45"
 directories = "6.0.0"
 eframe = { version = "0.37.0", features = ["glow"] }
+egui_tiles = "0.18"
 encoding_rs = "0.8.44"
 env_logger = "0.11.11"
 log = "0.4.35"

@@ -359,7 +359,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) -> ViewOu
     }
 
     session.send_rdp(inputs);
-    ViewOutput::default()
+    ViewOutput { focused: response.has_focus(), ..ViewOutput::default() }
 }
 
 fn keyboard_event(event: &Event, screen: &mut RdpScreen, inputs: &mut Vec<RdpInput>) {

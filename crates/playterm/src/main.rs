@@ -7,6 +7,7 @@ mod clipboard;
 mod compose_bar;
 mod console;
 mod dialogs;
+mod dock;
 mod file_icons;
 mod fonts;
 mod import_dialog;

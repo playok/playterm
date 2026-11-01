@@ -27,6 +27,8 @@ pub struct ViewOutput {
     pub zoom_steps: f32,
     /// What was typed in this tab, for simultaneous input to other tabs.
     pub inputs: Vec<UserInput>,
+    /// The view has the keyboard focus.
+    pub focused: bool,
 }
 
 /// Keyboard input as typed (before encoding), so it can be repeated in another tab with that
@@ -123,6 +125,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     }
     session.mouse.last_focus = has_focus;
 
+    output.focused = response.has_focus();
     if focused {
         handle_keyboard(ui, session, &mut output.inputs);
     }

@@ -14,6 +14,7 @@ use crate::autologin::LoginScript;
 use crate::compose_bar::{self, ComposeBar};
 use crate::console::Request;
 use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultMode, VaultResult};
+use crate::dock::{BROADCAST_COLOR, Dock};
 use crate::import_dialog::{ImportDialog, ImportResult};
 use crate::logging::{self, LogPlan};
 use crate::menu::{self, Command, MenuState};
@@ -25,7 +26,7 @@ use crate::settings_dialog::{SettingsDialog, SettingsResult};
 use crate::sidebar::{self, Sidebar, SidebarAction, VaultState};
 use crate::site_manager::{SiteManager, SiteManagerResult};
 use crate::view::UserInput;
-use crate::{clipboard, fonts, rdp_view, status_bar, view};
+use crate::{clipboard, fonts, status_bar, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
 /// App shortcuts, consumed before the terminal sees the key events. Ctrl+Shift+Tab must come
@@ -118,9 +119,6 @@ fn open_new_window(profile: Option<&SessionProfile>) -> Result<(), String> {
     cmd.spawn().map(drop).map_err(|e| e.to_string())
 }
 
-/// Simultaneous input: the banner and the receiving tabs.
-const BROADCAST_COLOR: Color32 = Color32::from_rgb(230, 140, 30);
-
 /// Whether the vault holds a password for `p` (while locked, the profile flag is the best guess).
 fn has_secret(vault: &Vault, p: &SessionProfile) -> bool {
     if vault.is_unlocked() { vault.get(&p.id).is_some() } else { p.save_password && vault.exists() }
@@ -168,8 +166,10 @@ pub struct PlaytermApp {
     sftp_panel: bool,
     /// Command input bar under the terminal (shown per `settings.compose_bar`).
     compose: ComposeBar,
-    /// Size of the terminal area in pixels: the size an RDP desktop opened now would get.
+    /// Size of the active tab's area in pixels: the size an RDP desktop opened now would get.
     view_px: (u16, u16),
+    /// The tabs and how they are docked (split side by side or above each other).
+    dock: Dock,
 }
 
 impl PlaytermApp {
@@ -228,6 +228,7 @@ impl PlaytermApp {
             sftp_panel: false,
             compose: ComposeBar::default(),
             view_px: (1280, 800),
+            dock: Dock::default(),
         };
         for profile in initial {
             // A saved site (opened in a new window) connects as one: with its vault password.
@@ -1181,69 +1182,6 @@ impl PlaytermApp {
                     action = Some(Command::ToggleBroadcast);
                 }
             }
-            ui.separator();
-            let receiving = |s: &Session| self.broadcast && s.in_broadcast && s.state == SessionState::Connected;
-            for (i, s) in self.sessions.iter().enumerate() {
-                let dot = match s.state {
-                    SessionState::Local => Color32::from_rgb(140, 140, 140),
-                    SessionState::Connecting => Color32::from_rgb(220, 180, 40),
-                    SessionState::Connected => Color32::from_rgb(60, 190, 90),
-                    SessionState::Closed => Color32::from_rgb(200, 70, 70),
-                };
-                ui.label(RichText::new("●").color(dot));
-                if s.is_logging() {
-                    ui.label(RichText::new("REC").small().color(Color32::from_rgb(220, 60, 60)))
-                        .on_hover_text(s.terminal.log().map(|l| l.path().display().to_string()).unwrap_or_default());
-                }
-                let title = RichText::new(s.tab_title());
-                let title = if receiving(s) { title.color(BROADCAST_COLOR) } else { title };
-                // The color goes behind the tab (a tint) and under it (a bar).
-                let tint = ui.painter().add(egui::Shape::Noop);
-                let tab = ui.selectable_label(i == self.active, title);
-                if let Some(color) = s.tab_color.map(menu::color32) {
-                    let rect = tab.rect;
-                    ui.painter().set(tint, egui::Shape::rect_filled(rect, 4.0, color.gamma_multiply(0.3)));
-                    let bar = egui::Rect::from_min_max(
-                        egui::pos2(rect.left() + 2.0, rect.bottom() - 3.0),
-                        egui::pos2(rect.right() - 2.0, rect.bottom()),
-                    );
-                    ui.painter().rect_filled(bar, 1.5, color);
-                }
-                if tab.clicked() {
-                    self.active = i;
-                }
-                if tab.middle_clicked() {
-                    action = Some(Command::Close(i));
-                }
-                tab.context_menu(|ui| {
-                    menu::session_items(ui, &mut action, i, s);
-                    ui.separator();
-                    let mark = if s.in_broadcast { "✔" } else { "  " };
-                    if ui.button(format!("{mark} {}", t("동시 입력에 포함", "Include in simultaneous input"))).clicked() {
-                        action = Some(Command::ToggleInBroadcast(i));
-                        ui.close();
-                    }
-                    menu::tab_color_menu(ui, &mut action, i, s.tab_color);
-                    ui.separator();
-                    let entries = [
-                        (t("복제", "Duplicate"), Command::Duplicate(i)),
-                        (t("새 창으로 열기", "Open in new window"), Command::OpenInNewWindow(i)),
-                        (t("다시 연결", "Reconnect"), Command::Reconnect(i)),
-                        (t("닫기", "Close"), Command::Close(i)),
-                        (t("다른 탭 모두 닫기", "Close other tabs"), Command::CloseOthers(i)),
-                    ];
-                    for (label, a) in entries {
-                        if ui.button(label).clicked() {
-                            action = Some(a);
-                            ui.close();
-                        }
-                    }
-                });
-                if ui.small_button("✕").on_hover_text(t("탭 닫기 (Ctrl+Shift+W)", "Close tab (Ctrl+Shift+W)")).clicked() {
-                    action = Some(Command::Close(i));
-                }
-                ui.add_space(6.0);
-            }
             if self.sessions.get(self.active).is_some_and(|s| s.can_sftp())
                 && ui.button("SFTP").on_hover_text(t("파일 브라우저 (Ctrl+Shift+E)", "File browser (Ctrl+Shift+E)")).clicked()
             {
@@ -1522,29 +1460,27 @@ impl eframe::App for PlaytermApp {
         }
 
         let style = self.view_style();
-        let mut view_px = self.view_px;
         let output = egui::CentralPanel::no_frame()
-            .show(ui, |ui| {
-                let area = ui.available_rect_before_wrap();
-                let ppp = ui.ctx().pixels_per_point();
-                view_px = ((area.width() * ppp) as u16, (area.height() * ppp) as u16);
-                self.sessions.get_mut(self.active).map(|s| {
-                    if s.shows_rdp() { rdp_view::show(ui, s, !modal_open) } else { view::show(ui, s, !modal_open, &style) }
-                })
-            })
+            .show(ui, |ui| self.dock.show(ui, &mut self.sessions, self.active, !modal_open, self.broadcast, &style))
             .inner;
-        self.view_px = view_px;
+        if let Some(px) = output.active_px {
+            self.view_px = px;
+        }
         // RDP tabs not on screen (another tab, a shortcut switched away) hold no keys or buttons.
-        for (i, s) in self.sessions.iter_mut().enumerate() {
-            if (i != self.active || !s.shows_rdp()) && s.is_rdp() {
+        for s in &mut self.sessions {
+            if s.is_rdp() && (!output.shown.contains(&s.id) || !s.shows_rdp()) {
                 s.release_rdp_input();
             }
         }
-        if let Some(output) = output {
-            if output.zoom_steps != 0.0 {
-                self.zoom(output.zoom_steps);
-            }
-            self.broadcast_input(&output.inputs);
+        if let Some(i) = output.activate.and_then(|id| self.index_of(id)) {
+            self.active = i;
+        }
+        if output.view.zoom_steps != 0.0 {
+            self.zoom(output.view.zoom_steps);
+        }
+        self.broadcast_input(&output.view.inputs);
+        if let Some(command) = output.command {
+            self.run(&ctx, command);
         }
         if let Some(changed) = self.settings_unsaved {
             if changed.elapsed() >= SETTINGS_SAVE_DELAY {
