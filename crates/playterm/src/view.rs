@@ -13,7 +13,7 @@ use crate::input::{key_bytes, paste_bytes};
 use crate::mouse::{self, MouseAction, MouseButton, MouseMods};
 use crate::search_bar::{self, BarAction};
 use crate::session::Session;
-use crate::{boxdraw, clipboard};
+use crate::{boxdraw, clipboard, toast};
 
 /// How the terminal is drawn (from the app settings).
 #[derive(Clone, Copy, Debug)]
@@ -262,6 +262,7 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session, keys: &ClipboardKeys, i
 pub fn copy_selection(ctx: &egui::Context, session: &mut Session) -> bool {
     match session.terminal.selection_text() {
         Some(text) => {
+            toast::copied(ctx, &text);
             ctx.copy_text(text);
             session.terminal.clear_selection();
             true
@@ -343,6 +344,7 @@ fn handle_mouse(
             if keys.copy_on_select
                 && let Some(text) = session.terminal.selection_text().filter(|t| !t.is_empty())
             {
+                toast::copied(ui.ctx(), &text);
                 ui.ctx().copy_text(text);
             }
             return;

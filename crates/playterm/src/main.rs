@@ -30,6 +30,7 @@ mod sidebar;
 mod site_manager;
 mod status_bar;
 mod template_dialog;
+mod toast;
 mod view;
 
 use std::sync::Arc;

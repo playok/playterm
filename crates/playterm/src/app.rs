@@ -1609,6 +1609,7 @@ impl eframe::App for PlaytermApp {
             }
         }
 
+        crate::toast::show(&ctx);
         self.update_window_title(&ctx);
     }
 }

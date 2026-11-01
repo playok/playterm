@@ -142,6 +142,8 @@ Connection commands connect in that tab, and the prompt comes back when the conn
     - Paste: Ctrl+V · Ctrl+Shift+V · Shift+Insert · **right click** (as in PuTTY, off by default — then Ctrl+right click opens the menu) · **middle click** (off by default)
     - Keys turned off go to the remote side as they are (with Ctrl+V off, vim and others get ^V). Menus and the shortcut list show the keys that are on.
     - Dialogs and text fields always take Ctrl+C/V/X, Ctrl/Shift+Insert and Shift+Delete, whatever the setting.
+    - Copying in the terminal slides up a short notice at the bottom, like `Copied · 104 chars · 3 lines “pla…~>”`: the size and the first
+      and last 3 characters (line breaks shown as ⏎, tabs as →), so copying the wrong range is noticed right away.
 - **Status bar** (bottom of the window, View → Status bar): connection state, target, encoding, logging indicator,
   terminal size (columns×rows), data received/sent on this connection (↓/↑, bytes after decryption), Caps Lock and Num Lock.
 - Font size: **Ctrl+wheel**, **Ctrl+= / Ctrl+- / Ctrl+0** (also in the View menu). The size is saved.
