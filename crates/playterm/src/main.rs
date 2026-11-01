@@ -3,6 +3,7 @@
 mod app;
 mod autologin;
 mod boxdraw;
+mod clip_keys;
 mod clipboard;
 mod compose_bar;
 mod console;
@@ -143,6 +144,8 @@ fn native_options(renderer: eframe::Renderer, icon: Arc<egui::IconData>) -> efra
             .with_inner_size([1000.0, 640.0])
             .with_min_inner_size([420.0, 260.0])
             .with_icon(icon),
+        // The terminal reads the clipboard keys itself (see `clip_keys`).
+        clipboard_shortcuts: false,
         ..Default::default()
     };
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {

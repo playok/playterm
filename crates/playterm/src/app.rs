@@ -28,7 +28,7 @@ use crate::site_manager::{SiteManager, SiteManagerResult};
 use crate::licenses::LicensesDialog;
 use crate::template_dialog::{TemplateDialog, TemplateResult};
 use crate::view::UserInput;
-use crate::{clipboard, fonts, status_bar, view};
+use crate::{clip_keys, clipboard, fonts, status_bar, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
 /// App shortcuts, consumed before the terminal sees the key events. Ctrl+Shift+Tab must come
@@ -803,6 +803,7 @@ impl PlaytermApp {
         view::ViewStyle {
             font_size: self.settings.font_size,
             selection: Color32::from_rgb(selection.r, selection.g, selection.b),
+            clipboard: self.settings.clipboard,
         }
     }
 
@@ -1065,7 +1066,7 @@ impl PlaytermApp {
                 }
             },
             Modal::Shortcuts => {
-                if !dialogs::shortcuts(ctx) {
+                if !dialogs::shortcuts(ctx, &self.settings.clipboard) {
                     self.modal = Some(Modal::Shortcuts);
                 }
             }
@@ -1210,8 +1211,15 @@ impl PlaytermApp {
 
     /// App shortcuts, consumed before the terminal sees the key events.
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        let keys = self.settings.clipboard;
         for (shortcut, what) in SHORTCUTS {
-            if !ctx.input_mut(|i| i.consume_shortcut(shortcut)) {
+            // Turned off in the settings: the key goes to the terminal.
+            let off = match what {
+                Shortcut::Copy => !keys.ctrl_shift_c,
+                Shortcut::Paste => !keys.ctrl_shift_v,
+                _ => false,
+            };
+            if off || !ctx.input_mut(|i| i.consume_shortcut(shortcut)) {
                 continue;
             }
             let i = self.active;
@@ -1252,6 +1260,8 @@ impl PlaytermApp {
             broadcast: self.broadcast,
             prevent_screensaver: self.settings.prevent_screensaver,
             sftp_panel: self.sftp_panel,
+            copy_hint: clip_keys::copy_hint(&self.settings.clipboard),
+            paste_hint: clip_keys::paste_hint(&self.settings.clipboard),
         };
         if let Some(command) = menu::menu_bar(ui, &state) {
             let ctx = ui.ctx().clone();
@@ -1469,6 +1479,14 @@ fn load_profiles(path: &Path) -> (ProfileStore, Option<String>) {
 }
 
 impl eframe::App for PlaytermApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Text fields get the usual clipboard keys; a terminal or remote desktop with the
+        // keyboard reads them itself (see `clip_keys`).
+        if !self.dock.has_focus() {
+            clip_keys::widget_shortcuts(&mut raw_input.events, clipboard::read_text);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         for session in &mut self.sessions {

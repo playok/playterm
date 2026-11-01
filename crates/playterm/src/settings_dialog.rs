@@ -91,6 +91,7 @@ impl SettingsDialog {
                 ui.end_row();
                 self.sleep_row(ui);
                 self.timeout_row(ui);
+                self.clipboard_rows(ui);
             });
             ui.add_space(8.0);
             self.preview(ui);
@@ -241,6 +242,41 @@ impl SettingsDialog {
                 "세션이 연결되어 있는 동안 Windows 가 유휴 상태로 절전에 들어가 연결이 끊기는 것을 막습니다.\n덮개를 닫거나 직접 절전을 고르면 그대로 절전합니다.",
                 "Stops Windows from going to sleep when idle, which would drop the connections, while a session is connected.\nClosing the lid or choosing Sleep still works.",
             ));
+        ui.end_row();
+    }
+
+    /// Which keys and mouse buttons copy and paste in the terminal.
+    fn clipboard_rows(&mut self, ui: &mut egui::Ui) {
+        let keys = &mut self.draft.clipboard;
+        ui.label(t("복사", "Copy"));
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut keys.copy_on_select, t("선택하면 바로 복사", "Copy on select")).on_hover_text(t(
+                "마우스로 드래그하거나 더블클릭해 선택하면 바로 클립보드에 복사합니다 (PuTTY 방식).",
+                "Text selected by dragging or double-clicking goes to the clipboard right away (as in PuTTY).",
+            ));
+            ui.checkbox(&mut keys.ctrl_c, "Ctrl+C").on_hover_text(t(
+                "선택 영역이 있을 때만 복사하고, 없으면 ^C (중단 신호)를 보냅니다.\n끄면 Ctrl+C 는 항상 ^C 를 보냅니다.",
+                "Copies only when there is a selection, otherwise sends ^C (interrupt).\nOff: Ctrl+C always sends ^C.",
+            ));
+            ui.checkbox(&mut keys.ctrl_shift_c, "Ctrl+Shift+C");
+            ui.checkbox(&mut keys.ctrl_insert, "Ctrl+Insert");
+        });
+        ui.end_row();
+
+        ui.label(t("붙여넣기", "Paste"));
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut keys.ctrl_v, "Ctrl+V").on_hover_text(t(
+                "끄면 Ctrl+V 는 ^V 로 원격에 전달됩니다 (vim 의 블록 선택 등).",
+                "Off: Ctrl+V is sent as ^V (vim's block selection and the like).",
+            ));
+            ui.checkbox(&mut keys.ctrl_shift_v, "Ctrl+Shift+V");
+            ui.checkbox(&mut keys.shift_insert, "Shift+Insert");
+            ui.checkbox(&mut keys.right_click_paste, t("오른쪽 클릭", "Right click")).on_hover_text(t(
+                "터미널을 마우스 오른쪽 버튼으로 클릭하면 붙여넣습니다 (PuTTY 방식).\n메뉴는 Ctrl+오른쪽 클릭으로 엽니다.",
+                "Right-clicking the terminal pastes (as in PuTTY).\nCtrl+right click opens the menu.",
+            ));
+            ui.checkbox(&mut keys.middle_click_paste, t("가운데 클릭", "Middle click"));
+        });
         ui.end_row();
     }
 

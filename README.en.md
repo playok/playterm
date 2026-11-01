@@ -137,6 +137,11 @@ Connection commands connect in that tab, and the prompt comes back when the conn
   - Connection timeout (default 15 s, 3–300 s): gives up when an SSH, Telnet or RDP server does not answer for that long. It covers everything
     from the TCP connect to the finished login (the SSH handshake and authentication, RDP's TLS and logon), not counting time spent confirming a
     host key or typing a password. Applies to new connections.
+  - Copy / paste: the keys the terminal uses.
+    - Copy: **copy on select** (as in PuTTY, off by default) · Ctrl+C (only with a selection, ^C otherwise) · Ctrl+Shift+C · Ctrl+Insert
+    - Paste: Ctrl+V · Ctrl+Shift+V · Shift+Insert · **right click** (as in PuTTY, off by default — then Ctrl+right click opens the menu) · **middle click** (off by default)
+    - Keys turned off go to the remote side as they are (with Ctrl+V off, vim and others get ^V). Menus and the shortcut list show the keys that are on.
+    - Dialogs and text fields always take Ctrl+C/V/X, Ctrl/Shift+Insert and Shift+Delete, whatever the setting.
 - **Status bar** (bottom of the window, View → Status bar): connection state, target, encoding, logging indicator,
   terminal size (columns×rows), data received/sent on this connection (↓/↑, bytes after decryption), Caps Lock and Num Lock.
 - Font size: **Ctrl+wheel**, **Ctrl+= / Ctrl+- / Ctrl+0** (also in the View menu). The size is saved.
@@ -270,7 +275,7 @@ Check **Save password** in the password dialog (for a saved site) to store the p
 | File | Contents |
 |---|---|
 | `sessions.toml` | Saved sites and templates (no passwords) |
-| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout |
+| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys |
 | `vault.toml` | Saved passwords, encrypted with the master password → Argon2id → XChaCha20-Poly1305 |
 | `known_hosts` | SSH host keys. If a known host's key changes, the connection is refused (protection against man-in-the-middle attacks) |
 | `known_rdp_hosts` | RDP server certificate fingerprints. A changed certificate is refused |
@@ -294,8 +299,9 @@ Check **Save password** in the password dialog (for a saved site) to store the p
 | Drag / double-click / triple-click | Select characters / words / lines (Shift+click extends) |
 | Shift+drag | Local selection even inside programs that use the mouse (vim `mouse=a`, htop, mc, tmux) |
 | Ctrl+C | Copy if there is a selection, otherwise send ^C |
-| Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
-| Ctrl+V, Shift+Insert | Paste |
+| Ctrl+Shift+C, Ctrl+Insert | Copy |
+| Ctrl+Shift+V, Ctrl+V, Shift+Insert | Paste |
+| (setting) drag to select / right or middle click | Copy on select / paste — Copy / paste in Tools → Settings (off by default) |
 | F11 | Full screen |
 | Ctrl+wheel, Ctrl+= / Ctrl+- / Ctrl+0 | Font larger / smaller / default size |
 

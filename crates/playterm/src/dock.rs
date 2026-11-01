@@ -93,6 +93,11 @@ impl Dock {
         }
     }
 
+    /// Whether a terminal or remote desktop had the keyboard focus last frame.
+    pub fn has_focus(&self) -> bool {
+        self.focused.is_some()
+    }
+
     /// Lays out these sessions (opened together, so tabs of one group) side by side, stacked or in
     /// a grid on the next frame.
     pub fn arrange(&mut self, ids: Vec<u64>, layout: TemplateLayout) {

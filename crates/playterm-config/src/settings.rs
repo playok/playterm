@@ -60,6 +60,41 @@ impl PreventSleep {
     pub const ALL: [PreventSleep; 3] = [PreventSleep::Off, PreventSleep::System, PreventSleep::Display];
 }
 
+/// Which keys and mouse buttons copy and paste in the terminal. A key that is off goes to the
+/// remote side as a key (Ctrl+V as ^V, Shift+Insert as Insert, ...).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClipboardKeys {
+    /// Selecting text with the mouse copies it right away (PuTTY style).
+    pub copy_on_select: bool,
+    /// Ctrl+C copies when there is a selection (^C otherwise).
+    pub ctrl_c: bool,
+    pub ctrl_shift_c: bool,
+    pub ctrl_insert: bool,
+    pub ctrl_v: bool,
+    pub ctrl_shift_v: bool,
+    pub shift_insert: bool,
+    /// The right button pastes (Ctrl+right click opens the menu).
+    pub right_click_paste: bool,
+    pub middle_click_paste: bool,
+}
+
+impl Default for ClipboardKeys {
+    fn default() -> Self {
+        Self {
+            copy_on_select: false,
+            ctrl_c: true,
+            ctrl_shift_c: true,
+            ctrl_insert: true,
+            ctrl_v: true,
+            ctrl_shift_v: true,
+            shift_insert: true,
+            right_click_paste: false,
+            middle_click_paste: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -82,6 +117,8 @@ pub struct AppSettings {
     pub prevent_screensaver: bool,
     /// Seconds to wait for a server while connecting before giving up (prompts not counted).
     pub connect_timeout: u32,
+    /// Copy / paste keys of the terminal.
+    pub clipboard: ClipboardKeys,
 }
 
 impl AppSettings {
@@ -137,6 +174,7 @@ impl Default for AppSettings {
             prevent_sleep: PreventSleep::System,
             prevent_screensaver: false,
             connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
+            clipboard: ClipboardKeys::default(),
         }
     }
 }
@@ -163,6 +201,7 @@ mod tests {
             prevent_sleep: PreventSleep::Display,
             prevent_screensaver: true,
             connect_timeout: 60,
+            clipboard: ClipboardKeys { copy_on_select: true, ctrl_v: false, right_click_paste: true, ..Default::default() },
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);
@@ -174,6 +213,10 @@ mod tests {
         assert_eq!(s.connect_timeout, AppSettings::MIN_CONNECT_TIMEOUT, "no endless wait");
         std::fs::write(&path, "theme = \"Dracula\"\n").unwrap();
         assert_eq!(AppSettings::load(&path).unwrap().connect_timeout, 15, "older files get the default");
+        assert_eq!(AppSettings::load(&path).unwrap().clipboard, ClipboardKeys::default());
+        std::fs::write(&path, "[clipboard]\ncopy_on_select = true\n").unwrap();
+        let keys = AppSettings::load(&path).unwrap().clipboard;
+        assert!(keys.copy_on_select && keys.ctrl_shift_c, "keys left out keep their defaults");
 
         std::fs::write(&path, "font_size = \"big\"").unwrap();
         assert!(AppSettings::load(&path).is_err());

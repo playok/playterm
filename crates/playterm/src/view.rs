@@ -4,9 +4,11 @@ use eframe::egui::{
     self, Color32, Event, EventFilter, FontFamily, FontId, ImeEvent, Pos2, Rect, Sense,
     Shape, Stroke, Vec2,
 };
+use playterm_config::ClipboardKeys;
 use playterm_i18n::t;
 use playterm_term::{Cell, CursorShape, Flags, Point, Rgb, SearchMatch, SelectionType, Side, TermMode};
 
+use crate::clip_keys::{self, ClipAction};
 use crate::input::{key_bytes, paste_bytes};
 use crate::mouse::{self, MouseAction, MouseButton, MouseMods};
 use crate::search_bar::{self, BarAction};
@@ -18,6 +20,7 @@ use crate::{boxdraw, clipboard};
 pub struct ViewStyle {
     pub font_size: f32,
     pub selection: Color32,
+    pub clipboard: ClipboardKeys,
 }
 
 /// What the terminal widget asks of the app this frame.
@@ -127,7 +130,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
 
     output.focused = response.has_focus();
     if focused {
-        handle_keyboard(ui, session, &mut output.inputs);
+        handle_keyboard(ui, session, &style.clipboard, &mut output.inputs);
     }
 
     // Mouse goes to the application when it asked for it (vim `mouse=a`, htop, mc, tmux),
@@ -139,7 +142,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     if report {
         report_mouse(ui, session, &response, rect, cell, mode);
     } else {
-        handle_mouse(ui, session, &response, rect, cell);
+        handle_mouse(ui, session, &response, rect, cell, &style.clipboard);
     }
     if response.hovered() && !behind_modal {
         ui.ctx().set_cursor_icon(if report { egui::CursorIcon::Default } else { egui::CursorIcon::Text });
@@ -155,7 +158,15 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
         }
     }
     if !report {
-        response.context_menu(|ui| context_menu(ui, session));
+        let ctrl = ui.input(|i| i.modifiers.ctrl);
+        if clip_keys::paste_click(&response, &style.clipboard, ctrl) {
+            if let Some(text) = clipboard::read_text() {
+                paste(session, &text);
+                output.inputs.push(UserInput::Paste(text));
+            }
+        } else {
+            response.context_menu(|ui| context_menu(ui, session, &style.clipboard));
+        }
     }
 
     let matches = match session.search.as_mut() {
@@ -183,7 +194,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     output
 }
 
-fn handle_keyboard(ui: &egui::Ui, session: &mut Session, inputs: &mut Vec<UserInput>) {
+fn handle_keyboard(ui: &egui::Ui, session: &mut Session, keys: &ClipboardKeys, inputs: &mut Vec<UserInput>) {
     let events = ui.input(|i| i.events.clone());
     let mode = *session.terminal.term().mode();
     let app_cursor = mode.contains(TermMode::APP_CURSOR);
@@ -198,6 +209,21 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session, inputs: &mut Vec<UserIn
                     inputs.push(UserInput::Text(text));
                 }
             }
+            Event::Key { key, pressed: true, modifiers, .. }
+                if let Some(action) = clip_keys::terminal_action(key, modifiers, keys, session.terminal.has_selection()) =>
+            {
+                match action {
+                    ClipAction::Copy => {
+                        copy_selection(ui.ctx(), session);
+                    }
+                    ClipAction::Paste => {
+                        if let Some(text) = clipboard::read_text() {
+                            paste(session, &text);
+                            inputs.push(UserInput::Paste(text));
+                        }
+                    }
+                }
+            }
             Event::Key { key, pressed: true, modifiers, .. } => {
                 if let Some(bytes) = key_bytes(key, modifiers, app_cursor) {
                     skip_text = modifiers.alt && !modifiers.ctrl;
@@ -205,8 +231,8 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session, inputs: &mut Vec<UserIn
                     inputs.push(UserInput::Key { key, modifiers });
                 }
             }
-            // egui turns Ctrl+C / Ctrl+X into clipboard events. Like Windows Terminal, Ctrl+C
-            // copies when there is a selection and is the interrupt signal otherwise.
+            // egui's clipboard shortcuts are off (see `clip_keys`); a keyboard's own Copy / Cut /
+            // Paste keys still arrive this way.
             Event::Copy => {
                 if !copy_selection(ui.ctx(), session) {
                     session.send_bytes(vec![0x03]);
@@ -249,15 +275,13 @@ pub fn paste(session: &mut Session, text: &str) {
     session.send_text(&paste_bytes(text, bracketed));
 }
 
-fn context_menu(ui: &mut egui::Ui, session: &mut Session) {
-    if ui
-        .add_enabled(session.terminal.has_selection(), egui::Button::new(t("복사", "Copy")).shortcut_text("Ctrl+Shift+C"))
-        .clicked()
-    {
+fn context_menu(ui: &mut egui::Ui, session: &mut Session, keys: &ClipboardKeys) {
+    let copy = egui::Button::new(t("복사", "Copy")).shortcut_text(clip_keys::copy_hint(keys));
+    if ui.add_enabled(session.terminal.has_selection(), copy).clicked() {
         copy_selection(ui.ctx(), session);
         ui.close();
     }
-    if ui.add(egui::Button::new(t("붙여넣기", "Paste")).shortcut_text("Ctrl+Shift+V")).clicked() {
+    if ui.add(egui::Button::new(t("붙여넣기", "Paste")).shortcut_text(clip_keys::paste_hint(keys))).clicked() {
         if let Some(text) = clipboard::read_text() {
             paste(session, &text);
         }
@@ -279,7 +303,14 @@ fn cell_at(session: &Session, rect: Rect, cell: CellSize, pos: Pos2) -> (Point, 
     (session.terminal.viewport_point(y.floor() as usize, col), side)
 }
 
-fn handle_mouse(ui: &egui::Ui, session: &mut Session, response: &egui::Response, rect: Rect, cell: CellSize) {
+fn handle_mouse(
+    ui: &egui::Ui,
+    session: &mut Session,
+    response: &egui::Response,
+    rect: Rect,
+    cell: CellSize,
+    keys: &ClipboardKeys,
+) {
     let (pressed, down, pos, shift, time) = ui.input(|i| {
         (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.interact_pos(), i.modifiers.shift, i.time)
     });
@@ -308,6 +339,12 @@ fn handle_mouse(ui: &egui::Ui, session: &mut Session, response: &egui::Response,
     } else if session.click.dragging {
         if !down {
             session.click.dragging = false;
+            // Copy on select: the selection stays on screen.
+            if keys.copy_on_select
+                && let Some(text) = session.terminal.selection_text().filter(|t| !t.is_empty())
+            {
+                ui.ctx().copy_text(text);
+            }
             return;
         }
         // Dragging past the top/bottom edge scrolls through the history.

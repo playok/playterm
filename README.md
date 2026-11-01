@@ -130,6 +130,11 @@ playterm rdp://user@host                  # Windows 원격 데스크톱
   - 색 테마: Campbell, One Half Dark/Light, Solarized Dark/Light, Tango Dark, Dracula, Gruvbox Dark
   - 연결 시간 제한 (기본 15초, 3~300초): SSH · Telnet · RDP 서버가 이 시간 동안 응답하지 않으면 연결을 포기합니다. TCP 연결부터 로그인을 마칠 때까지
     (SSH 핸드셰이크·인증, RDP 의 TLS·로그인 포함) 적용되고, 호스트 키 확인이나 비밀번호 입력을 기다리는 시간은 세지 않습니다. 새 연결부터 적용됩니다.
+  - 복사 / 붙여넣기: 터미널에서 쓸 키를 고릅니다.
+    - 복사: **선택하면 바로 복사**(PuTTY 방식, 기본 끔) · Ctrl+C(선택 영역이 있을 때만, 없으면 ^C) · Ctrl+Shift+C · Ctrl+Insert
+    - 붙여넣기: Ctrl+V · Ctrl+Shift+V · Shift+Insert · **오른쪽 클릭**(PuTTY 방식, 기본 끔 — 켜면 메뉴는 Ctrl+오른쪽 클릭) · **가운데 클릭**(기본 끔)
+    - 끈 키는 원격으로 그대로 전달됩니다 (예: Ctrl+V 를 끄면 vim 등에서 ^V 로 쓸 수 있음). 메뉴와 단축키 목록에는 켜 둔 키가 표시됩니다.
+    - 대화상자·입력칸에서는 설정과 관계없이 Ctrl+C/V/X, Ctrl/Shift+Insert, Shift+Delete 가 늘 동작합니다.
 - **상태 표시줄** (창 아래, 보기 → 상태 표시줄로 켜고 끔): 연결 상태, 접속 대상, 인코딩, 로그 기록 중 표시,
   터미널 크기(열×행), 이 연결에서 받은/보낸 데이터(↓/↑, 암호화 해제 후 바이트), Caps Lock · Num Lock 상태.
 - 글꼴 크기: **Ctrl+휠**, **Ctrl+= / Ctrl+- / Ctrl+0** (보기 메뉴에도 있음). 바꾼 크기는 저장됩니다.
@@ -254,7 +259,7 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 | 파일 | 내용 |
 |---|---|
 | `sessions.toml` | 저장된 세션과 템플릿 (비밀번호 없음) |
-| `settings.toml` | 언어, 화면 테마, 글꼴, 크기, 색 테마, 스크롤백, 상태 표시줄, 명령 입력창, 절전 방지, 화면보호기 진입 방지, 연결 시간 제한 |
+| `settings.toml` | 언어, 화면 테마, 글꼴, 크기, 색 테마, 스크롤백, 상태 표시줄, 명령 입력창, 절전 방지, 화면보호기 진입 방지, 연결 시간 제한, 복사 / 붙여넣기 키 |
 | `vault.toml` | 저장된 비밀번호. 마스터 비밀번호 → Argon2id → XChaCha20-Poly1305 로 암호화 |
 | `known_hosts` | SSH 호스트 키. 알려진 호스트의 키가 바뀌면 접속을 거부합니다(중간자 공격 방지) |
 | `known_rdp_hosts` | RDP 서버 인증서 지문. 바뀌면 접속을 거부합니다 |
@@ -278,8 +283,9 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 | 드래그 / 더블클릭 / 트리플클릭 | 문자 / 단어 / 줄 선택 (Shift+클릭으로 확장) |
 | Shift+드래그 | 마우스를 쓰는 프로그램(vim `mouse=a`, htop, mc, tmux) 안에서도 로컬 선택 |
 | Ctrl+C | 선택 영역이 있으면 복사, 없으면 ^C 전송 |
-| Ctrl+Shift+C / Ctrl+Shift+V | 복사 / 붙여넣기 |
-| Ctrl+V, Shift+Insert | 붙여넣기 |
+| Ctrl+Shift+C, Ctrl+Insert | 복사 |
+| Ctrl+Shift+V, Ctrl+V, Shift+Insert | 붙여넣기 |
+| (설정) 드래그 선택 / 오른쪽·가운데 클릭 | 선택하면 바로 복사 / 붙여넣기 — 도구 → 설정의 복사 / 붙여넣기 (기본 끔) |
 | F11 | 전체 화면 |
 | Ctrl+휠, Ctrl+= / Ctrl+- / Ctrl+0 | 글꼴 크게 / 작게 / 기본 크기 |
 

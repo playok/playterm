@@ -86,6 +86,9 @@ pub struct MenuState<'a> {
     pub broadcast: bool,
     pub prevent_screensaver: bool,
     pub sftp_panel: bool,
+    /// Keys shown next to Copy and Paste.
+    pub copy_hint: &'static str,
+    pub paste_hint: &'static str,
 }
 
 /// Adds a menu item; a click records `command` and closes the menu.
@@ -173,8 +176,8 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
 
         ui.menu_button(t("편집", "Edit"), |ui| {
             let has_selection = active.is_some_and(|s| s.terminal.has_selection());
-            item(ui, out, t("복사", "Copy"), "Ctrl+Shift+C", has_selection, Command::Copy);
-            item(ui, out, t("붙여넣기", "Paste"), "Ctrl+Shift+V", active.is_some(), Command::Paste);
+            item(ui, out, t("복사", "Copy"), st.copy_hint, has_selection, Command::Copy);
+            item(ui, out, t("붙여넣기", "Paste"), st.paste_hint, active.is_some(), Command::Paste);
             item(ui, out, t("모두 선택", "Select all"), "", active.is_some(), Command::SelectAll);
             item(ui, out, t("찾기…", "Find…"), "Ctrl+Shift+F", active.is_some(), Command::Find);
             ui.separator();
