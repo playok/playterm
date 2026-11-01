@@ -7,7 +7,8 @@
 //! menus); the tree only holds their ids and is brought in line with the list every frame.
 
 use eframe::egui::{self, Color32, Id, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextStyle, Ui, WidgetText};
-use egui_tiles::{Behavior, Container, SimplificationOptions, TabState, Tile, TileId, Tiles, UiResponse};
+use egui_tiles::{Behavior, Container, ContainerKind, SimplificationOptions, TabState, Tile, TileId, Tiles, UiResponse};
+use playterm_config::TemplateLayout;
 use playterm_i18n::t;
 
 use crate::menu::{self, Command};
@@ -25,6 +26,8 @@ pub struct Dock {
     shown_active: Option<u64>,
     /// The pane that had keyboard focus last frame.
     focused: Option<u64>,
+    /// Sessions just opened together, to lay out once their tabs exist.
+    arrange: Option<(Vec<u64>, TemplateLayout)>,
 }
 
 /// What the tabs and panes did this frame.
@@ -44,7 +47,7 @@ pub struct DockOutput {
 
 impl Default for Dock {
     fn default() -> Self {
-        Self { tree: egui_tiles::Tree::empty(Id::unique("playterm-dock")), shown_active: None, focused: None }
+        Self { tree: egui_tiles::Tree::empty(Id::unique("playterm-dock")), shown_active: None, focused: None, arrange: None }
     }
 }
 
@@ -90,6 +93,52 @@ impl Dock {
         }
     }
 
+    /// Lays out these sessions (opened together, so tabs of one group) side by side, stacked or in
+    /// a grid on the next frame.
+    pub fn arrange(&mut self, ids: Vec<u64>, layout: TemplateLayout) {
+        self.arrange = Some((ids, layout));
+    }
+
+    /// Gives each pane of `ids` a group of its own, arranged in the place of the group they were
+    /// in; that group stays beside them if it has other tabs.
+    fn apply_arrange(&mut self, ids: &[u64], layout: TemplateLayout) {
+        let kind = match layout {
+            TemplateLayout::Tabs => return,
+            TemplateLayout::Columns => ContainerKind::Horizontal,
+            TemplateLayout::Rows => ContainerKind::Vertical,
+            TemplateLayout::Grid => ContainerKind::Grid,
+        };
+        let tiles = &mut self.tree.tiles;
+        let panes: Vec<TileId> = ids.iter().filter_map(|id| tiles.find_pane(id)).collect();
+        if panes.len() < 2 {
+            return;
+        }
+        let Some(home) = tiles.parent_of(panes[0]) else { return };
+        let home_parent = tiles.parent_of(home);
+        for &pane in &panes {
+            if let Some(parent) = tiles.parent_of(pane)
+                && let Some(Tile::Container(container)) = tiles.get_mut(parent)
+            {
+                container.remove_child(pane);
+            }
+        }
+        let groups: Vec<TileId> = panes.iter().map(|&pane| tiles.insert_tab_tile(vec![pane])).collect();
+        let arranged = tiles.insert_container(Container::new(kind, groups));
+        let home_empty = matches!(tiles.get(home), Some(Tile::Container(c)) if c.is_empty());
+        let replacement = if home_empty { arranged } else { tiles.insert_horizontal_tile(vec![home, arranged]) };
+        match home_parent {
+            Some(parent) => {
+                if let Some(Tile::Container(container)) = tiles.get_mut(parent) {
+                    let _ = container.replace_child(home, replacement);
+                }
+            }
+            None => self.tree.root = Some(replacement),
+        }
+        if home_empty {
+            tiles.remove(home);
+        }
+    }
+
     /// The tab group holding the session `id`.
     fn group_of(&self, id: Option<u64>) -> Option<TileId> {
         let tile = self.tree.tiles.find_pane(&id?)?;
@@ -127,6 +176,9 @@ impl Dock {
     ) -> DockOutput {
         let active_id = sessions.get(active).map(|s| s.id);
         self.sync(sessions, active_id);
+        if let Some((ids, layout)) = self.arrange.take() {
+            self.apply_arrange(&ids, layout);
+        }
         // The active session changed (a shortcut, a new tab): its pane takes the keyboard from the
         // pane that had it.
         if self.focused.is_some() && self.focused != active_id {
@@ -371,5 +423,70 @@ impl Behavior<u64> for DockView<'_> {
         if action == egui_tiles::EditAction::TileDropped {
             self.dropped = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ids of the panes in each tab group, and the kinds of the containers above them.
+    fn shape(dock: &Dock) -> String {
+        fn walk(tiles: &Tiles<u64>, tile: TileId, out: &mut String) {
+            match tiles.get(tile) {
+                Some(Tile::Pane(id)) => out.push_str(&id.to_string()),
+                Some(Tile::Container(c)) => {
+                    out.push_str(&format!("{:?}(", c.kind()));
+                    for (i, child) in c.children().enumerate() {
+                        if i > 0 {
+                            out.push(' ');
+                        }
+                        walk(tiles, *child, out);
+                    }
+                    out.push(')');
+                }
+                None => out.push('?'),
+            }
+        }
+        let mut out = String::new();
+        if let Some(root) = dock.tree.root {
+            walk(&dock.tree.tiles, root, &mut out);
+        }
+        out
+    }
+
+    fn dock_with(groups: &[&[u64]]) -> Dock {
+        let mut dock = Dock::default();
+        let tiles = &mut dock.tree.tiles;
+        let tabs: Vec<TileId> = groups
+            .iter()
+            .map(|ids| {
+                let panes = ids.iter().map(|&id| tiles.insert_pane(id)).collect();
+                tiles.insert_tab_tile(panes)
+            })
+            .collect();
+        dock.tree.root = Some(if tabs.len() == 1 { tabs[0] } else { tiles.insert_horizontal_tile(tabs) });
+        dock
+    }
+
+    #[test]
+    fn arranges_sessions_opened_together() {
+        // Only the new sessions: they take the place of their group.
+        let mut dock = dock_with(&[&[1, 2, 3]]);
+        dock.apply_arrange(&[1, 2, 3], TemplateLayout::Grid);
+        assert_eq!(shape(&dock), "Grid(Tabs(1) Tabs(2) Tabs(3))");
+        // Other tabs in the group stay, beside the arrangement.
+        let mut dock = dock_with(&[&[9, 1, 2]]);
+        dock.apply_arrange(&[1, 2], TemplateLayout::Rows);
+        assert_eq!(shape(&dock), "Horizontal(Tabs(9) Vertical(Tabs(1) Tabs(2)))");
+        // In a split view, only that group's place is used.
+        let mut dock = dock_with(&[&[7], &[1, 2]]);
+        dock.apply_arrange(&[1, 2], TemplateLayout::Columns);
+        assert_eq!(shape(&dock), "Horizontal(Tabs(7) Horizontal(Tabs(1) Tabs(2)))");
+        // Tabs, or a single session: nothing to do.
+        let mut dock = dock_with(&[&[1, 2]]);
+        dock.apply_arrange(&[1, 2], TemplateLayout::Tabs);
+        dock.apply_arrange(&[1], TemplateLayout::Grid);
+        assert_eq!(shape(&dock), "Tabs(1 2)");
     }
 }

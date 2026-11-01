@@ -1,12 +1,22 @@
 //! Saved-site list on the left side of the window. Sites are edited in the site manager;
-//! this list is for quick access.
+//! this list is for quick access: several sites can be selected (Ctrl / Shift + click) and
+//! connected at once or saved as a template, which opens them all again later.
+
+use std::collections::BTreeSet;
 
 use eframe::egui::{self, RichText};
-use playterm_config::{ProfileStore, SessionProfile};
+use playterm_config::{ProfileStore, SessionProfile, SiteTemplate, TemplateLayout};
 use playterm_i18n::{t, tr};
 
 pub enum SidebarAction {
     Connect(String),
+    /// Connect these sites, laid out this way.
+    ConnectMany(Vec<String>, TemplateLayout),
+    /// A new template with these sites (the template dialog opens).
+    NewTemplate(Vec<String>),
+    OpenTemplate(String),
+    EditTemplate(String),
+    DeleteTemplate(String),
     /// Open the site manager, with this site selected if any.
     Manage(Option<String>),
     /// Open the site manager on a new site.
@@ -93,16 +103,81 @@ pub fn find(sites: &[&SessionProfile], query: &str) -> Result<String, String> {
     }
 }
 
+/// The sites from `a` to `b` (either order) in `order`; just `b` if `a` is not there.
+fn range(order: &[String], a: &str, b: &str) -> Vec<String> {
+    let (Some(i), Some(j)) = (order.iter().position(|s| s == a), order.iter().position(|s| s == b)) else {
+        return vec![b.to_owned()];
+    };
+    order[i.min(j)..=i.max(j)].to_vec()
+}
+
+/// Whether a template's name contains `filter` (ignoring case).
+fn template_matches(template: &SiteTemplate, filter: &str) -> bool {
+    let filter = filter.trim().to_lowercase();
+    filter.is_empty() || template.name.to_lowercase().contains(&filter)
+}
+
 #[derive(Default)]
 pub struct Sidebar {
     filter: String,
+    /// The site last clicked: the end a Shift+click range starts from.
     selected: Option<String>,
+    /// All selected sites.
+    chosen: BTreeSet<String>,
+    /// Site ids in the order shown last frame, for Shift+click ranges and the order of a selection.
+    order: Vec<String>,
 }
 
 impl Sidebar {
     /// The site last clicked in the list.
     pub fn selected(&self) -> Option<&str> {
         self.selected.as_deref()
+    }
+
+    /// The selected sites in list order.
+    fn chosen_in_order(&self) -> Vec<String> {
+        self.order.iter().filter(|id| self.chosen.contains(*id)).cloned().collect()
+    }
+
+    /// A click on site `id`, with these modifiers.
+    fn click(&mut self, id: &str, modifiers: egui::Modifiers) {
+        if modifiers.shift {
+            let anchor = self.selected.clone().unwrap_or_else(|| id.to_owned());
+            if !modifiers.command {
+                self.chosen.clear();
+            }
+            self.chosen.extend(range(&self.order, &anchor, id));
+            return;
+        }
+        if modifiers.command {
+            if !self.chosen.remove(id) {
+                self.chosen.insert(id.to_owned());
+            }
+        } else {
+            self.chosen = BTreeSet::from([id.to_owned()]);
+        }
+        self.selected = Some(id.to_owned());
+    }
+
+    /// Menu entries for the selected sites.
+    fn many_items(ui: &mut egui::Ui, ids: &[String], action: &mut Option<SidebarAction>) {
+        let n = ids.len();
+        if ui.button(tr!("선택한 {n}개 연결 (탭)", "Connect {n} selected (tabs)")).clicked() {
+            *action = Some(SidebarAction::ConnectMany(ids.to_vec(), TemplateLayout::Tabs));
+            ui.close();
+        }
+        ui.menu_button(t("나란히 연결", "Connect side by side"), |ui| {
+            for layout in [TemplateLayout::Columns, TemplateLayout::Rows, TemplateLayout::Grid] {
+                if ui.button(layout.label()).clicked() {
+                    *action = Some(SidebarAction::ConnectMany(ids.to_vec(), layout));
+                    ui.close();
+                }
+            }
+        });
+        if ui.button(t("템플릿으로 저장…", "Save as template…")).clicked() {
+            *action = Some(SidebarAction::NewTemplate(ids.to_vec()));
+            ui.close();
+        }
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, store: &ProfileStore, vault: VaultState) -> Option<SidebarAction> {
@@ -144,6 +219,32 @@ impl Sidebar {
                 action = Some(a);
             }
         });
+        // Sites deleted elsewhere are no longer selected.
+        self.chosen.retain(|id| store.get(id).is_some());
+        // Under the list, so the list does not move while sites are being picked.
+        if self.chosen.len() > 1 {
+            let ids = self.chosen_in_order();
+            egui::Panel::bottom("sidebar-selection").show(ui, |ui| ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr!("{}개 선택", "{} selected", ids.len())).strong());
+                if ui.small_button(t("연결", "Connect")).on_hover_text(t("탭으로 모두 연결", "Connect all as tabs")).clicked() {
+                    action = Some(SidebarAction::ConnectMany(ids.clone(), TemplateLayout::Tabs));
+                }
+                ui.menu_button(RichText::new(t("나란히 ▾", "Side by side ▾")).small(), |ui| {
+                    for layout in [TemplateLayout::Columns, TemplateLayout::Rows, TemplateLayout::Grid] {
+                        if ui.button(layout.label()).clicked() {
+                            action = Some(SidebarAction::ConnectMany(ids.clone(), layout));
+                            ui.close();
+                        }
+                    }
+                });
+                if ui.small_button(t("템플릿 저장", "Save template")).clicked() {
+                    action = Some(SidebarAction::NewTemplate(ids.clone()));
+                }
+                if ui.small_button("✕").on_hover_text(t("선택 해제", "Clear the selection")).clicked() {
+                    self.chosen.clear();
+                }
+            }));
+        }
         ui.separator();
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -151,6 +252,19 @@ impl Sidebar {
                 ui.weak(t("저장된 사이트가 없습니다.\n[+] 로 추가하세요.", "No saved sites.\nAdd one with [+]."));
                 return;
             }
+            let templates: Vec<&SiteTemplate> =
+                store.templates().iter().filter(|tpl| template_matches(tpl, &self.filter)).collect();
+            if !templates.is_empty() {
+                egui::CollapsingHeader::new(RichText::new(t("템플릿", "Templates")).strong())
+                    .id_salt("templates")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for template in templates {
+                            Self::template_item(ui, store, template, &mut action);
+                        }
+                    });
+            }
+            self.order.clear();
             for (folder, items) in grouped(store, &self.filter) {
                 if folder.is_empty() {
                     self.items(ui, &items, &mut action);
@@ -161,13 +275,52 @@ impl Sidebar {
                         .show(ui, |ui| self.items(ui, &items, &mut action));
                 }
             }
+            ui.add_space(6.0);
+            ui.weak(RichText::new(t(
+                "Ctrl·Shift+클릭으로 여러 개를 골라 한 번에 연결하거나 템플릿으로 저장합니다.",
+                "Ctrl/Shift+click to pick several sites, then connect them at once or save a template.",
+            ))
+            .small());
         });
         action
     }
 
+    fn template_item(ui: &mut egui::Ui, store: &ProfileStore, template: &SiteTemplate, action: &mut Option<SidebarAction>) {
+        let names: Vec<String> =
+            template.sites.iter().filter_map(|id| store.get(id)).map(SessionProfile::display_name).collect();
+        let response = ui
+            .push_id(("template", &template.id), |ui| {
+                ui.selectable_label(false, format!("▦ {}  ({})", template.name, names.len()))
+            })
+            .inner
+            .on_hover_text(tr!(
+                "{}\n배치: {}  (더블클릭: 모두 연결)",
+                "{}\nLayout: {}  (double-click: connect all)",
+                names.join(", "),
+                template.layout.label()
+            ));
+        if response.double_clicked() {
+            *action = Some(SidebarAction::OpenTemplate(template.id.clone()));
+        }
+        response.context_menu(|ui| {
+            let entries = [
+                (t("모두 연결", "Connect all"), SidebarAction::OpenTemplate(template.id.clone())),
+                (t("편집…", "Edit…"), SidebarAction::EditTemplate(template.id.clone())),
+                (t("삭제", "Delete"), SidebarAction::DeleteTemplate(template.id.clone())),
+            ];
+            for (label, a) in entries {
+                if ui.button(label).clicked() {
+                    *action = Some(a);
+                    ui.close();
+                }
+            }
+        });
+    }
+
     fn items(&mut self, ui: &mut egui::Ui, items: &[&SessionProfile], action: &mut Option<SidebarAction>) {
         for p in items {
-            let selected = self.selected.as_deref() == Some(p.id.as_str());
+            self.order.push(p.id.clone());
+            let selected = self.chosen.contains(&p.id);
             // Explicit id: auto ids inside a collapsing body are not stable across frames,
             // which loses the context-menu popup state.
             // A site with a tab color shows it as a bar before its name.
@@ -185,12 +338,18 @@ impl Sidebar {
                 .inner
                 .on_hover_text(tr!("{}  (더블클릭: 연결)", "{}  (double-click: connect)", summary(p)));
             if response.clicked() {
-                self.selected = Some(p.id.clone());
+                let modifiers = ui.input(|i| i.modifiers);
+                self.click(&p.id, modifiers);
             }
             if response.double_clicked() {
                 *action = Some(SidebarAction::Connect(p.id.clone()));
             }
+            let many = (selected && self.chosen.len() > 1).then(|| self.chosen_in_order());
             response.context_menu(|ui| {
+                if let Some(ids) = &many {
+                    Self::many_items(ui, ids, action);
+                    ui.separator();
+                }
                 let entries = [
                     (t("연결", "Connect"), SidebarAction::Connect(p.id.clone())),
                     (t("편집…", "Edit…"), SidebarAction::Manage(Some(p.id.clone()))),
@@ -232,6 +391,32 @@ mod tests {
         assert!(find(&sites, "0").unwrap_err().contains("여러 사이트"), "no site 0, two addresses with 0");
         assert!(find(&sites, "99").unwrap_err().contains("99번"));
         assert!(find(&sites, "nope").unwrap_err().contains("찾을 수 없습니다"));
+    }
+
+    #[test]
+    fn ranges() {
+        let order: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+        assert_eq!(range(&order, "b", "d"), ["b", "c", "d"]);
+        assert_eq!(range(&order, "d", "b"), ["b", "c", "d"]);
+        assert_eq!(range(&order, "gone", "c"), ["c"]);
+    }
+
+    #[test]
+    fn selecting() {
+        let mut s = Sidebar { order: ["a", "b", "c", "d"].map(String::from).to_vec(), ..Default::default() };
+        let none = egui::Modifiers::NONE;
+        let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+        let shift = egui::Modifiers { shift: true, ..Default::default() };
+        s.click("b", none);
+        s.click("d", shift);
+        assert_eq!(s.chosen_in_order(), ["b", "c", "d"]);
+        s.click("c", ctrl);
+        assert_eq!(s.chosen_in_order(), ["b", "d"], "Ctrl+click toggles");
+        s.click("a", ctrl);
+        assert_eq!(s.chosen_in_order(), ["a", "b", "d"]);
+        s.click("c", none);
+        assert_eq!(s.chosen_in_order(), ["c"], "a plain click selects one");
+        assert_eq!(s.selected(), Some("c"));
     }
 
     #[test]

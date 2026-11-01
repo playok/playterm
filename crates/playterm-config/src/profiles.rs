@@ -204,37 +204,82 @@ impl SessionProfile {
     }
 }
 
+/// How the sessions of a template are placed when it is opened.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TemplateLayout {
+    /// Tabs of one group.
+    #[default]
+    Tabs,
+    /// Side by side.
+    Columns,
+    /// One above the other.
+    Rows,
+    Grid,
+}
+
+impl TemplateLayout {
+    pub const ALL: [Self; 4] = [Self::Tabs, Self::Columns, Self::Rows, Self::Grid];
+
+    pub fn label(self) -> &'static str {
+        use playterm_i18n::t;
+        match self {
+            Self::Tabs => t("탭으로", "As tabs"),
+            Self::Columns => t("좌우로 나란히", "Side by side"),
+            Self::Rows => t("위아래로", "Stacked"),
+            Self::Grid => t("격자", "Grid"),
+        }
+    }
+}
+
+/// Sites opened together, under a name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SiteTemplate {
+    pub id: String,
+    pub name: String,
+    /// Site ids, in opening order.
+    pub sites: Vec<String>,
+    pub layout: TemplateLayout,
+}
+
+impl Default for SiteTemplate {
+    fn default() -> Self {
+        Self { id: random_id(), name: String::new(), sites: Vec::new(), layout: TemplateLayout::Tabs }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct ProfileFile {
     #[serde(default, rename = "session")]
     sessions: Vec<SessionProfile>,
+    #[serde(default, rename = "template", skip_serializing_if = "Vec::is_empty")]
+    templates: Vec<SiteTemplate>,
 }
 
-/// The `sessions.toml` file.
+/// The `sessions.toml` file: the sites and the templates that open several of them.
 pub struct ProfileStore {
     path: PathBuf,
     profiles: Vec<SessionProfile>,
+    templates: Vec<SiteTemplate>,
 }
 
 impl ProfileStore {
     /// Loads profiles from `path`; a missing file is an empty store.
     pub fn load(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
-        let profiles = match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                toml::from_str::<ProfileFile>(&text)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display())))?
-                    .sessions
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        let file = match std::fs::read_to_string(&path) {
+            Ok(text) => toml::from_str::<ProfileFile>(&text)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display())))?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => ProfileFile::default(),
             Err(e) => return Err(e),
         };
-        Ok(Self { path, profiles })
+        Ok(Self { path, profiles: file.sessions, templates: file.templates })
     }
 
     /// An empty store that will be written to `path` on the first change.
     pub fn empty(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into(), profiles: Vec::new() }
+        Self { path: path.into(), profiles: Vec::new(), templates: Vec::new() }
     }
 
     pub fn path(&self) -> &Path {
@@ -258,8 +303,34 @@ impl ProfileStore {
         self.save()
     }
 
+    /// Removes a site (from the templates too) and saves.
     pub fn remove(&mut self, id: &str) -> io::Result<()> {
         self.profiles.retain(|p| p.id != id);
+        for template in &mut self.templates {
+            template.sites.retain(|s| s != id);
+        }
+        self.save()
+    }
+
+    pub fn templates(&self) -> &[SiteTemplate] {
+        &self.templates
+    }
+
+    pub fn template(&self, id: &str) -> Option<&SiteTemplate> {
+        self.templates.iter().find(|t| t.id == id)
+    }
+
+    /// Inserts or replaces (by id) a template and saves.
+    pub fn upsert_template(&mut self, template: SiteTemplate) -> io::Result<()> {
+        match self.templates.iter_mut().find(|t| t.id == template.id) {
+            Some(existing) => *existing = template,
+            None => self.templates.push(template),
+        }
+        self.save()
+    }
+
+    pub fn remove_template(&mut self, id: &str) -> io::Result<()> {
+        self.templates.retain(|t| t.id != id);
         self.save()
     }
 
@@ -272,7 +343,7 @@ impl ProfileStore {
     }
 
     fn save(&self) -> io::Result<()> {
-        let file = ProfileFile { sessions: self.profiles.clone() };
+        let file = ProfileFile { sessions: self.profiles.clone(), templates: self.templates.clone() };
         let text = toml::to_string_pretty(&file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         write_atomic(&self.path, text.as_bytes())
     }
@@ -281,6 +352,32 @@ impl ProfileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn templates_are_saved_and_follow_site_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        let mut store = ProfileStore::load(&path).unwrap();
+        let a = SessionProfile { host: "a".into(), ..Default::default() };
+        let b = SessionProfile { host: "b".into(), ..Default::default() };
+        store.upsert(a.clone()).unwrap();
+        store.upsert(b.clone()).unwrap();
+        let template = SiteTemplate {
+            name: "lab".into(),
+            sites: vec![b.id.clone(), a.id.clone()],
+            layout: TemplateLayout::Grid,
+            ..Default::default()
+        };
+        store.upsert_template(template.clone()).unwrap();
+        assert_eq!(ProfileStore::load(&path).unwrap().template(&template.id), Some(&template));
+
+        store.remove(&b.id).unwrap();
+        let reloaded = ProfileStore::load(&path).unwrap();
+        assert_eq!(reloaded.template(&template.id).unwrap().sites, vec![a.id.clone()], "a deleted site leaves its templates");
+        store.remove_template(&template.id).unwrap();
+        assert!(ProfileStore::load(&path).unwrap().templates().is_empty());
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("[[template]]"), "no empty section");
+    }
 
     #[test]
     fn roundtrip_and_remove() {

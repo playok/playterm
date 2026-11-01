@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
-use playterm_config::{AppSettings, Language, PreventSleep, ProfileStore, SessionProfile, UiTheme, Vault};
+use playterm_config::{AppSettings, Language, PreventSleep, ProfileStore, SessionProfile, TemplateLayout, UiTheme, Vault};
 use playterm_i18n::{t, tr};
 use playterm_net::{ConnectParams, NetRuntime, Waker};
 use playterm_term::{LogMode, Palette, Theme};
@@ -25,6 +25,7 @@ use crate::session::{Session, SessionSpec, SessionState, TermSetup};
 use crate::settings_dialog::{SettingsDialog, SettingsResult};
 use crate::sidebar::{self, Sidebar, SidebarAction, VaultState};
 use crate::site_manager::{SiteManager, SiteManagerResult};
+use crate::template_dialog::{TemplateDialog, TemplateResult};
 use crate::view::UserInput;
 use crate::{clipboard, fonts, status_bar, view};
 
@@ -83,6 +84,8 @@ enum Pending {
     Unlock,
     /// Connect a saved profile, using its stored password, in the given tab if any.
     Connect(String, Option<u64>),
+    /// Connect several saved profiles, laid out this way.
+    ConnectMany(Vec<String>, TemplateLayout),
     /// Store a password typed in the site manager (and connect, in the given tab if any).
     StoreSecret { id: String, password: Zeroizing<String>, connect: bool, target: Option<u64> },
     /// Store the password of a successful login ("save password" in the login dialog).
@@ -93,6 +96,8 @@ enum Modal {
     QuickConnect(Box<QuickConnect>),
     Vault(VaultDialog, Pending),
     ConfirmDelete(String),
+    Template(Box<TemplateDialog>),
+    ConfirmDeleteTemplate(String),
     Shortcuts,
     About,
     Settings(Box<SettingsDialog>),
@@ -362,6 +367,52 @@ impl PlaytermApp {
         self.open_session(&profile, password, Some(profile.display_name()));
     }
 
+    /// Connects several saved sites (one vault unlock for all of them), then lays them out.
+    fn connect_many(&mut self, ids: Vec<String>, layout: TemplateLayout) {
+        let ids: Vec<String> = ids.into_iter().filter(|id| self.store.get(id).is_some()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let wants_secret = ids.iter().filter_map(|id| self.store.get(id)).any(|p| p.save_password);
+        if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
+            let reason = tr!(
+                "사이트 {}개의 저장된 비밀번호를 사용합니다.",
+                "Uses the saved passwords of {} sites.",
+                ids.len()
+            );
+            self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, reason), Pending::ConnectMany(ids, layout)));
+            return;
+        }
+        self.open_many(&ids, layout, true);
+    }
+
+    /// Opens the sites (with their stored passwords if `secrets`) and arranges their tabs.
+    fn open_many(&mut self, ids: &[String], layout: TemplateLayout, secrets: bool) {
+        let mut opened = Vec::new();
+        for id in ids {
+            let Some(profile) = self.store.get(id).cloned() else { continue };
+            if secrets {
+                self.connect_saved(id);
+            } else {
+                self.open_session(&profile, None, Some(profile.display_name()));
+            }
+            if let Some(s) = self.sessions.get(self.active) {
+                opened.push(s.id);
+            }
+        }
+        self.dock.arrange(opened, layout);
+    }
+
+    /// Connects every site of a template.
+    fn open_template(&mut self, id: &str) {
+        let Some(template) = self.store.template(id).cloned() else { return };
+        if !template.sites.iter().any(|s| self.store.get(s).is_some()) {
+            self.status = Some(tr!("'{}' 템플릿에 사이트가 없습니다", "Template '{}' has no sites", template.name));
+            return;
+        }
+        self.connect_many(template.sites, template.layout);
+    }
+
     fn close_session(&mut self, index: usize) {
         let mut session = self.sessions.remove(index);
         session.close();
@@ -464,6 +515,7 @@ impl PlaytermApp {
         match pending {
             Pending::Unlock => {}
             Pending::Connect(id, target) => self.connect_in(target, |app| app.connect_saved(&id)),
+            Pending::ConnectMany(ids, layout) => self.open_many(&ids, layout, true),
             Pending::StoreSecret { id, password, connect, target } => {
                 let r = self.vault.set(&id, &password);
                 self.report(t("비밀번호 저장 실패", "Could not save the password"), r);
@@ -484,6 +536,8 @@ impl PlaytermApp {
                     self.connect_in(target, |app| app.open_session(&p, None, Some(p.display_name())));
                 }
             }
+            // Each site asks for its password.
+            Pending::ConnectMany(ids, layout) => self.open_many(&ids, layout, false),
             Pending::SaveLogin { .. } => {
                 self.status = Some(t("비밀번호는 저장되지 않았습니다", "The password was not saved").into());
             }
@@ -533,6 +587,15 @@ impl PlaytermApp {
     fn sidebar_action(&mut self, action: SidebarAction) {
         match action {
             SidebarAction::Connect(id) => self.connect_saved(&id),
+            SidebarAction::ConnectMany(ids, layout) => self.connect_many(ids, layout),
+            SidebarAction::NewTemplate(ids) => self.modal = Some(Modal::Template(Box::new(TemplateDialog::new(ids)))),
+            SidebarAction::OpenTemplate(id) => self.open_template(&id),
+            SidebarAction::EditTemplate(id) => {
+                if let Some(template) = self.store.template(&id).cloned() {
+                    self.modal = Some(Modal::Template(Box::new(TemplateDialog::edit(template))));
+                }
+            }
+            SidebarAction::DeleteTemplate(id) => self.modal = Some(Modal::ConfirmDeleteTemplate(id)),
             SidebarAction::Manage(id) => self.open_site_manager(id.as_deref(), false, None),
             SidebarAction::New => self.open_site_manager(None, true, None),
             SidebarAction::Duplicate(id) => {
@@ -1062,6 +1125,35 @@ impl PlaytermApp {
                     self.modal = Some(Modal::Vault(dialog, pending));
                 }
             },
+            Modal::Template(mut dialog) => match dialog.show(ctx, &self.store) {
+                TemplateResult::Open => self.modal = Some(Modal::Template(dialog)),
+                TemplateResult::Cancel => {}
+                TemplateResult::Save(template) => {
+                    let name = template.name.clone();
+                    let r = self.store.upsert_template(template);
+                    self.report(t("템플릿 저장 실패", "Could not save the template"), r);
+                    self.info = Some(tr!(
+                        "'{name}' 템플릿을 저장했습니다 (사이트 목록 위 '템플릿' 에서 더블클릭으로 엽니다)",
+                        "Saved template '{name}' (double-click it under 'Templates' in the site list)"
+                    ));
+                    self.show_sidebar = true;
+                }
+            },
+            Modal::ConfirmDeleteTemplate(id) => {
+                let name = self.store.template(&id).map(|tpl| tpl.name.clone()).unwrap_or_default();
+                let text = tr!(
+                    "'{name}' 템플릿을 삭제할까요? (사이트는 그대로 남습니다)",
+                    "Delete template '{name}'? (Its sites stay.)"
+                );
+                match dialogs::confirm(ctx, t("템플릿 삭제", "Delete template"), &text, t("삭제", "Delete")) {
+                    None => self.modal = Some(Modal::ConfirmDeleteTemplate(id)),
+                    Some(false) => {}
+                    Some(true) => {
+                        let r = self.store.remove_template(&id);
+                        self.report(t("템플릿 삭제 실패", "Could not delete the template"), r);
+                    }
+                }
+            }
             Modal::ConfirmDelete(id) => {
                 let name = self.store.get(&id).map(|p| p.display_name()).unwrap_or_default();
                 let text = tr!("'{name}' 사이트를 삭제할까요?", "Delete site '{name}'?");

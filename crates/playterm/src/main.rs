@@ -27,6 +27,7 @@ mod sftp_view;
 mod sidebar;
 mod site_manager;
 mod status_bar;
+mod template_dialog;
 mod view;
 
 use std::sync::Arc;
