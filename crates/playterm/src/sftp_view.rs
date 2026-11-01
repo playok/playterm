@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use eframe::egui::{self, RichText};
+
+use crate::file_icons;
 use playterm_i18n::{t, tr};
 use playterm_net::{RemoteEntry, SftpConnection, SftpEvent, TransferState, remote_join, remote_parent};
 
@@ -328,27 +330,37 @@ impl SftpBrowser {
             }
             ui.end_row();
             for entry in &self.entries {
-                let label = if entry.is_dir { format!("{}/", entry.name) } else { entry.name.clone() };
-                let mut text = RichText::new(label);
+                let mut text = RichText::new(&entry.name);
                 if entry.is_dir {
                     text = text.strong();
+                }
+                if entry.name.starts_with('.') {
+                    // Hidden files, as `ls` leaves them out.
+                    text = text.weak();
                 }
                 let selected = self.selected.contains(&entry.name);
                 let response = ui
                     .push_id(&entry.name, |ui| {
-                        if compact {
-                            ui.set_min_width(name_width);
-                            ui.set_max_width(name_width);
-                            let details = format!(
-                                "{}\n{}",
-                                entry.mtime.map(format_time).unwrap_or_default(),
-                                entry.permissions.map(|m| mode_string(m, entry.is_dir)).unwrap_or_default()
-                            );
-                            ui.add(egui::Button::selectable(selected, text).truncate())
-                                .on_hover_text(format!("{}\n{}", entry.name, details.trim()))
-                        } else {
-                            ui.selectable_label(selected, text)
-                        }
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            if compact {
+                                ui.set_min_width(name_width);
+                                ui.set_max_width(name_width);
+                            }
+                            file_icons::icon(ui, file_icons::kind(entry), entry.is_symlink);
+                            if compact {
+                                let details = format!(
+                                    "{}\n{}",
+                                    entry.mtime.map(format_time).unwrap_or_default(),
+                                    entry.permissions.map(|m| mode_string(m, entry.is_dir)).unwrap_or_default()
+                                );
+                                ui.add(egui::Button::selectable(selected, text).truncate())
+                                    .on_hover_text(format!("{}\n{}", entry.name, details.trim()))
+                            } else {
+                                ui.selectable_label(selected, text)
+                            }
+                        })
+                        .inner
                     })
                     .inner;
                 if response.clicked() {
