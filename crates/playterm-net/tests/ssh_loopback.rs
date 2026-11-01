@@ -363,6 +363,20 @@ fn time_spent_on_prompts_does_not_count() {
 }
 
 #[test]
+fn host_key_of_another_type_is_a_changed_key() {
+    // The host is on record with an ECDSA key; the server (or a man in the middle) only
+    // offers Ed25519. That must be refused as a changed key, not asked as a first visit.
+    let fx = Fixture::new("other-type", &[]);
+    let recorded = random_key(Algorithm::Ecdsa { curve: russh::keys::EcdsaCurve::NistP256 });
+    known_hosts::learn_known_hosts_path("127.0.0.1", fx.port, recorded.public_key(), &fx.known_hosts).unwrap();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    match skip_notices(&h) {
+        SessionEvent::Closed(Some(reason)) => assert!(reason.contains("ecdsa") && reason.contains("ssh-ed25519"), "{reason}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
 fn wrong_password_falls_back_to_prompt() {
     let fx = Fixture::new("prompt", &[]);
     fx.trust_host();

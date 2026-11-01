@@ -6,7 +6,7 @@ use anyhow::Context as _;
 use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
 use playterm_config::{AppSettings, Language, PreventSleep, ProfileStore, SessionProfile, TemplateLayout, UiTheme, Vault};
 use playterm_i18n::{t, tr};
-use playterm_net::{ConnectParams, NetRuntime, Waker};
+use playterm_net::{ConnectParams, NetRuntime, Protocol, Waker};
 use playterm_term::{LogMode, Palette, Theme};
 use zeroize::Zeroizing;
 
@@ -128,6 +128,26 @@ fn open_new_window(profile: Option<&SessionProfile>) -> Result<(), String> {
     cmd.spawn().map(drop).map_err(|e| e.to_string())
 }
 
+/// What a saved password of `p` is for. Stored with the password (encrypted), so a site that
+/// now points somewhere else (sessions.toml is plain text) does not get it.
+pub fn vault_target(p: &SessionProfile) -> String {
+    let scheme = match p.protocol {
+        Protocol::Ssh => "ssh",
+        Protocol::Telnet => "telnet",
+        Protocol::Rdp => "rdp",
+        Protocol::Serial => return format!("serial://{}", p.serial.port),
+    };
+    format!("{scheme}://{}@{}:{}", p.username, p.host.to_lowercase(), p.port)
+}
+
+/// A change to a saved password that waits for the vault to be unlocked.
+enum VaultTodo {
+    /// The site was deleted or no longer saves its password.
+    Forget(String),
+    /// The user changed the site: its password goes with the new target.
+    Rebind(String),
+}
+
 /// Whether the vault holds a password for `p` (while locked, the profile flag is the best guess).
 fn has_secret(vault: &Vault, p: &SessionProfile) -> bool {
     if vault.is_unlocked() { vault.get(&p.id).is_some() } else { p.save_password && vault.exists() }
@@ -139,6 +159,8 @@ pub struct PlaytermApp {
     known_hosts: PathBuf,
     store: ProfileStore,
     vault: Vault,
+    /// Changes made while the vault was locked, applied when it is unlocked.
+    vault_todo: Vec<VaultTodo>,
     sessions: Vec<Session>,
     active: usize,
     next_id: u64,
@@ -213,6 +235,7 @@ impl PlaytermApp {
             waker: Arc::new(move || ctx.request_repaint()),
             known_hosts: config_dir.join("known_hosts"),
             vault: Vault::new(config_dir.join("vault.toml")),
+            vault_todo: Vec::new(),
             modal: None,
             store,
             sessions: Vec::new(),
@@ -368,8 +391,49 @@ impl PlaytermApp {
             self.modal = Some(Modal::Vault(dialog, Pending::Connect(id.to_owned(), target)));
             return;
         }
-        let password = if wants_secret { self.vault.get(id).map(str::to_owned) } else { None };
+        let password = if wants_secret { self.saved_password(&profile) } else { None };
         self.open_session(&profile, password, Some(profile.display_name()));
+    }
+
+    /// The saved password of `profile`, if it was saved for where the site points now.
+    fn saved_password(&mut self, profile: &SessionProfile) -> Option<String> {
+        let secret = self.vault.get(&profile.id)?.to_owned();
+        let now = vault_target(profile);
+        match self.vault.target(&profile.id) {
+            Some(saved) if saved == now => Some(secret),
+            Some(saved) => {
+                self.status = Some(tr!(
+                    "'{}' 의 접속 대상이 비밀번호를 저장할 때와 달라({saved} → {now}) 저장된 비밀번호를 보내지 않았습니다. \
+                     직접 바꾼 것이라면 로그인할 때 '비밀번호 저장' 을 다시 선택하세요.",
+                    "The target of '{}' differs from when its password was saved ({saved} → {now}), so the saved password was not sent. \
+                     If you changed it, choose 'Save password' again when logging in.",
+                    profile.display_name()
+                ));
+                None
+            }
+            // Saved by an older version; bound to the site on this unlock.
+            None => {
+                let r = self.vault.rebind(&profile.id, &now);
+                self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+                Some(secret)
+            }
+        }
+    }
+
+    /// Saves `password` for site `id` in the (unlocked) vault, for where the site points now.
+    fn set_secret(&mut self, id: &str, password: &str) -> Result<(), playterm_config::VaultError> {
+        let target = self.store.get(id).map(vault_target).unwrap_or_default();
+        self.vault.set(id, &target, password)
+    }
+
+    /// Forgets the password of `id` now, or on the next unlock if the vault is locked.
+    fn forget_secret(&mut self, id: &str) {
+        if self.vault.is_unlocked() {
+            let r = self.vault.remove(id);
+            self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+        } else {
+            self.vault_todo.push(VaultTodo::Forget(id.to_owned()));
+        }
     }
 
     /// Connects several saved sites (one vault unlock for all of them), then lays them out.
@@ -440,10 +504,17 @@ impl PlaytermApp {
         let r = self.store.upsert(profile);
         self.report(t("사이트 저장 실패", "Could not save the site"), r);
 
-        // If the vault is locked, a stale secret is pruned on the next unlock instead.
-        if !save_password && self.vault.is_unlocked() {
-            let r = self.vault.remove(&id);
-            self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+        if !save_password {
+            self.forget_secret(&id);
+        } else if password.is_none() {
+            // The user edited the site here: its saved password follows the new target.
+            if self.vault.is_unlocked() {
+                let target = self.store.get(&id).map(vault_target).unwrap_or_default();
+                let r = self.vault.rebind(&id, &target);
+                self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+            } else {
+                self.vault_todo.push(VaultTodo::Rebind(id.clone()));
+            }
         }
         match password {
             Some(password) if save_password => self.store_secret(id, password, connect),
@@ -479,7 +550,7 @@ impl PlaytermApp {
 
     /// Stores a login password in the (unlocked) vault and marks the site as saving it.
     fn finish_save_login(&mut self, id: &str, password: &str) {
-        if let Err(e) = self.vault.set(id, password) {
+        if let Err(e) = self.set_secret(id, password) {
             self.status = Some(format!("{}: {e}", t("비밀번호 저장 실패", "Could not save the password")));
             return;
         }
@@ -494,7 +565,7 @@ impl PlaytermApp {
 
     fn store_secret(&mut self, id: String, password: Zeroizing<String>, connect: bool) {
         if self.vault.is_unlocked() {
-            let r = self.vault.set(&id, &password);
+            let r = self.set_secret(&id, &password);
             self.report(t("비밀번호 저장 실패", "Could not save the password"), r);
             if connect {
                 self.connect_saved(&id);
@@ -513,16 +584,28 @@ impl PlaytermApp {
 
     /// Runs after the vault was unlocked or created.
     fn vault_ready(&mut self, pending: Pending) {
-        // Drop secrets of deleted profiles and of profiles that no longer save passwords.
+        // Changes made while it was locked. Nothing else is removed: the site list may be
+        // incomplete (unreadable file, another window), and a lost password cannot come back.
+        for todo in std::mem::take(&mut self.vault_todo) {
+            let r = match todo {
+                VaultTodo::Forget(id) => self.vault.remove(&id),
+                VaultTodo::Rebind(id) => match self.store.get(&id).map(vault_target) {
+                    Some(target) => self.vault.rebind(&id, &target),
+                    None => Ok(()),
+                },
+            };
+            self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+        }
+        // Passwords saved by older versions get the target of their site as it is now.
         let store = &self.store;
-        let r = self.vault.retain(|id| store.get(id).is_some_and(|p| p.save_password));
-        self.report(t("볼트 정리 실패", "Could not clean up the password vault"), r);
+        let r = self.vault.bind_missing(|id| store.get(id).filter(|p| p.save_password).map(vault_target));
+        self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
         match pending {
             Pending::Unlock => {}
             Pending::Connect(id, target) => self.connect_in(target, |app| app.connect_saved(&id)),
             Pending::ConnectMany(ids, layout) => self.open_many(&ids, layout, true),
             Pending::StoreSecret { id, password, connect, target } => {
-                let r = self.vault.set(&id, &password);
+                let r = self.set_secret(&id, &password);
                 self.report(t("비밀번호 저장 실패", "Could not save the password"), r);
                 if connect {
                     self.connect_in(target, |app| app.connect_saved(&id));
@@ -564,7 +647,7 @@ impl PlaytermApp {
         let r = self.store.upsert(copy.clone());
         self.report(t("사이트 저장 실패", "Could not save the site"), r);
         if let Some(secret) = secret {
-            let r = self.vault.set(&copy.id, &secret);
+            let r = self.vault.set(&copy.id, &vault_target(&copy), &secret);
             self.report(t("비밀번호 복사 실패", "Could not copy the password"), r);
         }
         Some(copy)
@@ -1175,10 +1258,7 @@ impl PlaytermApp {
                     Some(true) => {
                         let r = self.store.remove(&id);
                         self.report(t("사이트 삭제 실패", "Could not delete the site"), r);
-                        if self.vault.is_unlocked() {
-                            let r = self.vault.remove(&id);
-                            self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
-                        }
+                        self.forget_secret(&id);
                     }
                 }
             }

@@ -1,3 +1,5 @@
 # Link the C runtime statically so playterm.exe runs without the VC++ Redistributable.
 [target.'cfg(all(windows, target_env = "msvc"))']
-rustflags = ["-C", "target-feature=+crt-static"]
+# /DEPENDENTLOADFLAG:0x800 (LOAD_LIBRARY_SEARCH_SYSTEM32): the DLLs playterm.exe imports are
+# loaded from System32 only, never from the exe's folder, where a planted DLL would run first.
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/DEPENDENTLOADFLAG:0x800"]

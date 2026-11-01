@@ -60,6 +60,8 @@ release.cmd                                  # 또는: pwsh scripts\package.ps1 
   (ARM64 exe 는 UPX 5.3.0 이상 필요). 압축된 exe 는 창(프로세스)마다 메모리에서 풀리므로 창을 여러 개 띄우면 메모리를 조금 더 씁니다.
   UPX 압축 exe 는 백신이 오탐하는 경우가 있으니, 필요하면 `release.cmd noupx` 로 압축 없이 만드세요.
 - C 런타임을 정적으로 링크하므로(`.cargo/config.toml`) VC++ 재배포 패키지 없이 실행됩니다.
+- DLL 은 System32 에서만 불러옵니다(`/DEPENDENTLOADFLAG` 링크 옵션과 시작 시 `SetDefaultDllDirectories`). exe 와 같은 폴더(예: 다운로드 폴더)에
+  같은 이름의 DLL 이 있어도 쓰이지 않습니다.
 - 화면은 OpenGL(glow)로 그리고, OpenGL 을 쓸 수 없는 환경(GPU 없는 VM 등)에서는 자동으로 wgpu(DX12)로 전환합니다.
   환경변수 `PLAYTERM_RENDERER=wgpu` 또는 `glow` 로 강제할 수 있습니다.
 - 아이콘은 `assets/make_icon.py` 로 생성합니다 (`playterm.png`, `playterm.ico`).
@@ -267,8 +269,8 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 |---|---|
 | `sessions.toml` | 저장된 세션과 템플릿 (비밀번호 없음) |
 | `settings.toml` | 언어, 화면 테마, 글꼴, 크기, 색 테마, 스크롤백, 상태 표시줄, 명령 입력창, 절전 방지, 화면보호기 진입 방지, 연결 시간 제한, 복사 / 붙여넣기 키 |
-| `vault.toml` | 저장된 비밀번호. 마스터 비밀번호 → Argon2id → XChaCha20-Poly1305 로 암호화 |
-| `known_hosts` | SSH 호스트 키. 알려진 호스트의 키가 바뀌면 접속을 거부합니다(중간자 공격 방지) |
+| `vault.toml` | 저장된 비밀번호. 마스터 비밀번호 → Argon2id → XChaCha20-Poly1305 로 암호화. 비밀번호마다 저장할 때의 접속 대상(프로토콜·사용자·호스트·포트)도 함께 암호화해 두어, `sessions.toml` 에서 사이트의 대상이 바뀌면 그 비밀번호를 보내지 않습니다(playterm 에서 직접 고친 경우는 따라감). 창을 여러 개 띄워도 서로 저장한 비밀번호를 지우지 않습니다 |
+| `known_hosts` | SSH 호스트 키. 알려진 호스트의 키가 바뀌면 — 종류가 다른 키여도 — 접속을 거부합니다(중간자 공격 방지). 알고 있는 키 종류를 먼저 요청합니다 |
 | `known_rdp_hosts` | RDP 서버 인증서 지문. 바뀌면 접속을 거부합니다 |
 
 ## 단축키

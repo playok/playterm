@@ -48,6 +48,7 @@ fn usage() -> &'static str {
 }
 
 fn main() -> eframe::Result {
+    restrict_dll_search();
     env_logger::init();
     // The language is needed before the window exists (command-line errors).
     if let Some(dir) = app::config_dir()
@@ -137,6 +138,21 @@ fn renderers() -> Vec<eframe::Renderer> {
     }
 }
 
+/// DLLs loaded by name are taken from System32 only, not from the folder playterm.exe is in
+/// (often Downloads) or the current directory, where a planted DLL would otherwise run inside
+/// the process that holds the unlocked password vault. (DLLs the exe imports directly are
+/// covered by the `/DEPENDENTLOADFLAG` link option in `.cargo/config.toml`.)
+fn restrict_dll_search() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories};
+        // SAFETY: plain Win32 call with a valid flag.
+        if unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) } == 0 {
+            log::warn!("SetDefaultDllDirectories failed: {}", std::io::Error::last_os_error());
+        }
+    }
+}
+
 fn native_options(renderer: eframe::Renderer, icon: Arc<egui::IconData>) -> eframe::NativeOptions {
     let mut options = eframe::NativeOptions {
         renderer,
@@ -155,6 +171,9 @@ fn native_options(renderer: eframe::Renderer, icon: Arc<egui::IconData>) -> efra
         if cfg!(windows) && std::env::var_os("WGPU_BACKEND").is_none() {
             setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
         }
+        // FXC (d3dcompiler_47.dll) ships with Windows; the default would first look for
+        // dxcompiler.dll, which is not a system DLL.
+        setup.instance_descriptor.backend_options.dx12.shader_compiler = eframe::wgpu::Dx12Compiler::Fxc;
         // The default (Performance) reserves large GPU heaps up front; a terminal draws
         // little, and this roughly halves the process memory.
         let base = setup.device_descriptor.clone();

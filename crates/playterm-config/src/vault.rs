@@ -4,10 +4,15 @@
 //! - Cipher: XChaCha20-Poly1305 with a fresh random nonce on every save
 //! - The KDF parameters and salt are bound as associated data, so tampering with the
 //!   header makes decryption fail instead of silently weakening the key.
+//! - Each secret records the target it was saved for (`ssh://user@host:port`), inside the
+//!   encrypted part: the site list is plain text, and a password must not follow a site that
+//!   was pointed somewhere else.
+//! - Every change re-reads the file first and applies just that change, so two playterm
+//!   windows do not undo each other's saved passwords.
 
 use std::collections::BTreeMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::Engine as _;
@@ -36,6 +41,8 @@ pub enum VaultError {
     Missing,
     EmptyPassword,
     Format(String),
+    /// The file was replaced (another window reset and recreated the vault) since unlocking.
+    Replaced,
     Io(io::Error),
 }
 
@@ -49,6 +56,10 @@ impl std::fmt::Display for VaultError {
             VaultError::EmptyPassword => {
                 f.write_str(t("마스터 비밀번호는 비워둘 수 없습니다", "The master password cannot be empty"))
             }
+            VaultError::Replaced => f.write_str(t(
+                "다른 창에서 볼트를 새로 만들었습니다. 잠금을 다시 풀어 주세요",
+                "The password vault was recreated in another window. Unlock it again",
+            )),
             VaultError::Format(detail) => {
                 f.write_str(&tr!("볼트 파일 형식 오류: {detail}", "Invalid password vault file: {detail}"))
             }
@@ -88,12 +99,16 @@ struct VaultFile {
 #[derive(Serialize)]
 struct ContentsRef<'a> {
     secrets: BTreeMap<&'a str, &'a str>,
+    targets: &'a BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
 struct Contents {
     #[serde(default)]
     secrets: BTreeMap<String, String>,
+    /// Secret id -> what it was saved for (absent in files from older versions).
+    #[serde(default)]
+    targets: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy)]
@@ -133,6 +148,52 @@ struct Unlocked {
     kdf: Kdf,
     salt: [u8; SALT_LEN],
     secrets: BTreeMap<String, Zeroizing<String>>,
+    targets: BTreeMap<String, String>,
+}
+
+impl Unlocked {
+    /// The secrets in the vault file as it is now, decrypted with this key.
+    fn read(&self, path: &Path) -> Result<Option<Decrypted>, VaultError> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            // Deleted meanwhile: what is in memory is written back.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let file: VaultFile = toml::from_str(&text).map_err(|e| VaultError::Format(e.to_string()))?;
+        let salt: [u8; SALT_LEN] = decode_fixed(&file.salt, "salt")?;
+        let same_kdf = (file.m_cost, file.t_cost, file.p_cost) == (self.kdf.m_cost, self.kdf.t_cost, self.kdf.p_cost);
+        if salt != self.salt || !same_kdf {
+            return Err(VaultError::Replaced);
+        }
+        let contents = decrypt(&self.key, self.kdf, &salt, &file).map_err(|_| VaultError::Replaced)?;
+        Ok(Some(contents))
+    }
+}
+
+/// Secrets and their targets, as decrypted from the file.
+type Decrypted = (BTreeMap<String, Zeroizing<String>>, BTreeMap<String, String>);
+
+/// Decrypts the contents of `file` (whose salt is `salt`) with `key`.
+fn decrypt(
+    key: &[u8; 32],
+    kdf: Kdf,
+    salt: &[u8],
+    file: &VaultFile,
+) -> Result<Decrypted, VaultError> {
+    let nonce: [u8; NONCE_LEN] = decode_fixed(&file.nonce, "nonce")?;
+    let ciphertext = B64.decode(&file.ciphertext).map_err(|e| VaultError::Format(e.to_string()))?;
+    let cipher = XChaCha20Poly1305::new(&Key::from(*key));
+    let aad = kdf.aad(salt);
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(&XNonce::from(nonce), Payload { msg: &ciphertext, aad: &aad })
+            .map_err(|_| VaultError::WrongPassword)?,
+    );
+    let text = std::str::from_utf8(&plaintext).map_err(|e| VaultError::Format(e.to_string()))?;
+    let contents: Contents = toml::from_str(text).map_err(|e| VaultError::Format(e.to_string()))?;
+    let secrets = contents.secrets.into_iter().map(|(k, v)| (k, Zeroizing::new(v))).collect();
+    Ok((secrets, contents.targets))
 }
 
 /// The `vault.toml` file. Starts locked; secrets are only available after [`Vault::unlock`].
@@ -166,7 +227,7 @@ impl Vault {
         getrandom::fill(&mut salt).map_err(|e| io::Error::other(e.to_string()))?;
         let kdf = Kdf::DEFAULT;
         let key = kdf.derive(master, &salt)?;
-        self.unlocked = Some(Unlocked { key, kdf, salt, secrets: BTreeMap::new() });
+        self.unlocked = Some(Unlocked { key, kdf, salt, secrets: BTreeMap::new(), targets: BTreeMap::new() });
         self.save()
     }
 
@@ -189,23 +250,10 @@ impl Vault {
             return Err(VaultError::Format(t("KDF 비용이 비정상적으로 큽니다", "The KDF cost is abnormally high").into()));
         }
         let salt: [u8; SALT_LEN] = decode_fixed(&file.salt, "salt")?;
-        let nonce: [u8; NONCE_LEN] = decode_fixed(&file.nonce, "nonce")?;
-        let ciphertext = B64.decode(&file.ciphertext).map_err(|e| VaultError::Format(e.to_string()))?;
-
         let kdf = Kdf { m_cost: file.m_cost, t_cost: file.t_cost, p_cost: file.p_cost };
         let key = kdf.derive(master, &salt)?;
-        let cipher = XChaCha20Poly1305::new(&Key::from(*key));
-        let aad = kdf.aad(&salt);
-        let plaintext = Zeroizing::new(
-            cipher
-                .decrypt(&XNonce::from(nonce), Payload { msg: &ciphertext, aad: &aad })
-                .map_err(|_| VaultError::WrongPassword)?,
-        );
-        let text = std::str::from_utf8(&plaintext).map_err(|e| VaultError::Format(e.to_string()))?;
-        let contents: Contents = toml::from_str(text).map_err(|e| VaultError::Format(e.to_string()))?;
-        let secrets = contents.secrets.into_iter().map(|(k, v)| (k, Zeroizing::new(v))).collect();
-
-        self.unlocked = Some(Unlocked { key, kdf, salt, secrets });
+        let (secrets, targets) = decrypt(&key, kdf, &salt, &file)?;
+        self.unlocked = Some(Unlocked { key, kdf, salt, secrets, targets });
         Ok(())
     }
 
@@ -218,26 +266,64 @@ impl Vault {
         self.unlocked.as_ref()?.secrets.get(id).map(|s| s.as_str())
     }
 
-    pub fn set(&mut self, id: &str, secret: &str) -> Result<(), VaultError> {
-        let unlocked = self.unlocked.as_mut().ok_or(VaultError::Locked)?;
-        unlocked.secrets.insert(id.to_owned(), Zeroizing::new(secret.to_owned()));
-        self.save()
+    /// What the secret `id` was saved for (see [`Vault::set`]); `None` for secrets saved by
+    /// older versions until [`Vault::bind_missing`] records it.
+    pub fn target(&self, id: &str) -> Option<&str> {
+        self.unlocked.as_ref()?.targets.get(id).map(String::as_str)
+    }
+
+    /// Stores `secret` for `id`, to be used with `target` (e.g. `ssh://user@host:22`) only.
+    pub fn set(&mut self, id: &str, target: &str, secret: &str) -> Result<(), VaultError> {
+        self.update(|u| {
+            u.secrets.insert(id.to_owned(), Zeroizing::new(secret.to_owned()));
+            u.targets.insert(id.to_owned(), target.to_owned());
+            true
+        })
+    }
+
+    /// Moves the secret `id` to a new target (the user changed the site in playterm).
+    pub fn rebind(&mut self, id: &str, target: &str) -> Result<(), VaultError> {
+        self.update(|u| {
+            let has = u.secrets.contains_key(id);
+            if has {
+                u.targets.insert(id.to_owned(), target.to_owned());
+            }
+            has
+        })
     }
 
     pub fn remove(&mut self, id: &str) -> Result<(), VaultError> {
-        let unlocked = self.unlocked.as_mut().ok_or(VaultError::Locked)?;
-        if unlocked.secrets.remove(id).is_some() {
-            self.save()?;
-        }
-        Ok(())
+        self.update(|u| {
+            u.targets.remove(id);
+            u.secrets.remove(id).is_some()
+        })
     }
 
-    /// Drops secrets whose id no longer passes `keep` (e.g. deleted profiles).
-    pub fn retain(&mut self, keep: impl Fn(&str) -> bool) -> Result<(), VaultError> {
+    /// Records a target for secrets saved by older versions, which have none: `target_of` gives
+    /// the site's current one (or `None` if the site is gone).
+    pub fn bind_missing(&mut self, target_of: impl Fn(&str) -> Option<String>) -> Result<(), VaultError> {
+        self.update(|u| {
+            let missing: Vec<(String, String)> = u
+                .secrets
+                .keys()
+                .filter(|id| !u.targets.contains_key(*id))
+                .filter_map(|id| Some((id.clone(), target_of(id)?)))
+                .collect();
+            let changed = !missing.is_empty();
+            u.targets.extend(missing);
+            changed
+        })
+    }
+
+    /// Applies `change` to the vault as it is on disk now (another window may have saved since)
+    /// and writes it if `change` returns true.
+    fn update(&mut self, change: impl FnOnce(&mut Unlocked) -> bool) -> Result<(), VaultError> {
         let unlocked = self.unlocked.as_mut().ok_or(VaultError::Locked)?;
-        let before = unlocked.secrets.len();
-        unlocked.secrets.retain(|id, _| keep(id));
-        if unlocked.secrets.len() != before {
+        if let Some((secrets, targets)) = unlocked.read(&self.path)? {
+            unlocked.secrets = secrets;
+            unlocked.targets = targets;
+        }
+        if change(unlocked) {
             self.save()?;
         }
         Ok(())
@@ -257,6 +343,7 @@ impl Vault {
         let unlocked = self.unlocked.as_ref().ok_or(VaultError::Locked)?;
         let contents = ContentsRef {
             secrets: unlocked.secrets.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect(),
+            targets: &unlocked.targets,
         };
         let plaintext =
             Zeroizing::new(toml::to_string(&contents).map_err(|e| VaultError::Format(e.to_string()))?);
@@ -307,21 +394,27 @@ mod tests {
         let (_dir, mut v) = vault();
         assert!(!v.exists());
         v.create("correct horse").unwrap();
-        v.set("p1", "s3cret!").unwrap();
-        v.set("p2", "한글비번").unwrap();
+        v.set("p1", "ssh://me@a:22", "s3cret!").unwrap();
+        v.set("p2", "telnet://b:23", "한글비번").unwrap();
         v.lock();
         assert_eq!(v.get("p1"), None);
-        assert!(matches!(v.set("p3", "x"), Err(VaultError::Locked)));
+        assert!(matches!(v.set("p3", "x", "x"), Err(VaultError::Locked)));
 
         v.unlock("correct horse").unwrap();
         assert_eq!(v.get("p1"), Some("s3cret!"));
         assert_eq!(v.get("p2"), Some("한글비번"));
+        assert_eq!(v.target("p1"), Some("ssh://me@a:22"));
 
-        v.remove("p1").unwrap();
-        v.retain(|id| id != "p2").unwrap();
+        v.rebind("p1", "ssh://me@new:22").unwrap();
         v.lock();
         v.unlock("correct horse").unwrap();
-        assert_eq!((v.get("p1"), v.get("p2")), (None, None));
+        assert_eq!(v.target("p1"), Some("ssh://me@new:22"));
+
+        v.remove("p1").unwrap();
+        v.remove("p2").unwrap();
+        v.lock();
+        v.unlock("correct horse").unwrap();
+        assert_eq!((v.get("p1"), v.get("p2"), v.target("p1")), (None, None, None));
     }
 
     #[test]
@@ -329,9 +422,10 @@ mod tests {
         let (_dir, mut v) = vault();
         v.create("master").unwrap();
         // A long id: random ciphertext text could contain a short one like "p1" by chance.
-        v.set("site-id-for-plaintext-check", "very-secret-value").unwrap();
+        v.set("site-id-for-plaintext-check", "ssh://user@target-host-check:22", "very-secret-value").unwrap();
         let raw = std::fs::read_to_string(&v.path).unwrap();
         assert!(!raw.contains("very-secret-value"));
+        assert!(!raw.contains("target-host-check"), "targets are encrypted too");
         assert!(!raw.contains("site-id-for-plaintext-check"), "secret ids are encrypted too");
 
         v.lock();
@@ -364,11 +458,44 @@ mod tests {
     }
 
     #[test]
+    fn two_windows_keep_each_others_passwords() {
+        let (dir, mut a) = vault();
+        a.create("m").unwrap();
+        let mut b = Vault::new(dir.path().join("vault.toml"));
+        b.unlock("m").unwrap();
+        // Each window saves a password the other one has not seen.
+        a.set("from-a", "ssh://a", "1").unwrap();
+        b.set("from-b", "ssh://b", "2").unwrap();
+        a.remove("missing").unwrap();
+        a.set("from-a-2", "ssh://a2", "3").unwrap();
+        let mut c = Vault::new(dir.path().join("vault.toml"));
+        c.unlock("m").unwrap();
+        assert_eq!((c.get("from-a"), c.get("from-b"), c.get("from-a-2")), (Some("1"), Some("2"), Some("3")));
+
+        // A vault recreated elsewhere is not overwritten with old contents.
+        c.reset().unwrap();
+        c.create("other").unwrap();
+        assert!(matches!(a.set("x", "t", "y"), Err(VaultError::Replaced)));
+    }
+
+    #[test]
+    fn older_secrets_get_their_target_once() {
+        let (_dir, mut v) = vault();
+        v.create("m").unwrap();
+        v.set("p1", "ssh://kept", "1").unwrap();
+        // As written by an older version: a secret without a target.
+        v.unlocked.as_mut().unwrap().secrets.insert("old".into(), Zeroizing::new("2".into()));
+        v.save().unwrap();
+        v.bind_missing(|id| Some(format!("ssh://now-{id}"))).unwrap();
+        assert_eq!((v.target("p1"), v.target("old")), (Some("ssh://kept"), Some("ssh://now-old")));
+    }
+
+    #[test]
     fn each_save_uses_a_new_nonce() {
         let (_dir, mut v) = vault();
         v.create("m").unwrap();
         let first = std::fs::read_to_string(&v.path).unwrap();
-        v.set("a", "1").unwrap();
+        v.set("a", "t", "1").unwrap();
         v.remove("a").unwrap();
         let second = std::fs::read_to_string(&v.path).unwrap();
         assert_ne!(first, second);

@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use playterm_i18n::{t, tr};
 use russh::client;
-use russh::keys::{HashAlg, PublicKeyOrCertificate, known_hosts};
+use russh::keys::{Algorithm, HashAlg, PublicKeyOrCertificate, known_hosts};
 use russh::{ChannelMsg, Disconnect};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -36,31 +37,34 @@ impl client::Handler for ClientHandler {
             bail!(t("인증서 기반 호스트 키는 아직 지원하지 않습니다", "Certificate host keys are not supported yet"));
         };
 
-        match known_hosts::check_known_hosts_path(&self.host, self.port, key, &self.known_hosts) {
-            Ok(true) => Ok(true),
-            Ok(false) => {
-                let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
-                let accepted = self
-                    .sink
-                    .confirm_host_key(&self.host, self.port, key.algorithm().to_string(), fingerprint)
-                    .await;
-                if accepted
-                    && let Err(e) =
-                        known_hosts::learn_known_hosts_path(&self.host, self.port, key, &self.known_hosts)
-                {
-                    self.sink.notice(tr!("known_hosts 저장 실패: {e}", "Could not save known_hosts: {e}"));
-                }
-                Ok(accepted)
-            }
-            Err(russh::keys::Error::KeyChanged { line }) => bail!(tr!(
-                "경고: 호스트 키가 변경되었습니다! 중간자 공격일 수 있습니다. \
-                 정상적인 변경이라면 {} 의 {line}번째 줄을 삭제하세요.",
-                "WARNING: the host key has changed! This could be a man-in-the-middle attack. \
-                 If the change is legitimate, delete line {line} of {}.",
-                self.known_hosts.display()
-            )),
-            Err(e) => Err(e).context(t("known_hosts 확인 실패", "Could not check known_hosts")),
+        let known = known_hosts::known_host_keys_path(&self.host, self.port, &self.known_hosts)
+            .context(t("known_hosts 확인 실패", "Could not check known_hosts"))?;
+        if known.iter().any(|(_, recorded)| recorded.key_data() == key.key_data()) {
+            return Ok(true);
         }
+        // Any other key for a host we know is a changed key, whatever its type: a
+        // man-in-the-middle offering only another algorithm must not pass as a first visit.
+        if !known.is_empty() {
+            let types: Vec<String> = known.iter().map(|(_, k)| k.algorithm().to_string()).collect();
+            let lines: Vec<String> = known.iter().map(|(line, _)| line.to_string()).collect();
+            bail!(tr!(
+                "경고: 호스트 키가 변경되었습니다! 저장된 키({})가 아닌 {} 키를 받았습니다. 중간자 공격일 수 있습니다. \
+                 정상적인 변경이라면 {} 의 {}번째 줄을 삭제하세요.",
+                "WARNING: the host key has changed! Got a {1} key instead of the known one ({0}). This could be a \
+                 man-in-the-middle attack. If the change is legitimate, delete line {3} of {2}.",
+                types.join(", "),
+                key.algorithm(),
+                self.known_hosts.display(),
+                lines.join(", ")
+            ));
+        }
+        let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
+        let accepted =
+            self.sink.confirm_host_key(&self.host, self.port, key.algorithm().to_string(), fingerprint).await;
+        if accepted && let Err(e) = known_hosts::learn_known_hosts_path(&self.host, self.port, key, &self.known_hosts) {
+            self.sink.notice(tr!("known_hosts 저장 실패: {e}", "Could not save known_hosts: {e}"));
+        }
+        Ok(accepted)
     }
 
     async fn auth_banner(
@@ -100,6 +104,30 @@ impl client::Handler for ClientHandler {
     }
 }
 
+/// Host key algorithms in `order`, those already known for the host first, as OpenSSH does: a
+/// server with several host keys then shows the one on record, instead of another type that
+/// would be refused as a changed key.
+fn prefer_known_host_keys(order: &[Algorithm], host: &str, port: u16, known_hosts: &Path) -> Vec<Algorithm> {
+    let known: Vec<Algorithm> = known_hosts::known_host_keys_path(host, port, known_hosts)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, key)| key.algorithm())
+        .collect();
+    prefer(order, &known)
+}
+
+/// `order` with the algorithms of the `known` kinds moved to the front (RSA in any hash).
+fn prefer(order: &[Algorithm], known: &[Algorithm]) -> Vec<Algorithm> {
+    let same_kind = |a: &Algorithm, b: &Algorithm| match (a, b) {
+        (Algorithm::Rsa { .. }, Algorithm::Rsa { .. }) => true,
+        _ => a == b,
+    };
+    let (mut first, rest): (Vec<Algorithm>, Vec<Algorithm>) =
+        order.iter().cloned().partition(|a| known.iter().any(|k| same_kind(a, k)));
+    first.extend(rest);
+    first
+}
+
 /// TCP, the SSH handshake, authentication, forwardings and the shell channel.
 async fn open(
     params: &ConnectParams,
@@ -111,8 +139,11 @@ async fn open(
     stream.set_nodelay(true)?;
 
     // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
+    let mut preferred = russh::Preferred::default();
+    preferred.key = Cow::Owned(prefer_known_host_keys(&preferred.key, &params.host, params.port, &params.known_hosts));
     let config = Arc::new(client::Config {
         keepalive_interval: (params.keepalive.mode != KeepAliveMode::Off).then(|| params.keepalive.period()),
+        preferred,
         ..Default::default()
     });
     let handler = ClientHandler {
@@ -211,4 +242,21 @@ async fn open_sftp(session: &client::Handle<ClientHandler>, sink: &EventSink) ->
         .await
         .context(t("서버가 SFTP를 지원하지 않습니다", "The server does not support SFTP"))?;
     Ok(SftpConnection::new(sftp, sink.waker()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use russh::keys::EcdsaCurve;
+
+    #[test]
+    fn known_host_key_kinds_come_first() {
+        let order = russh::Preferred::default().key.into_owned();
+        assert_eq!(prefer(&order, &[]), order, "unknown host: the usual order");
+        let rsa = prefer(&order, &[Algorithm::Rsa { hash: None }]);
+        assert!(matches!(rsa[..3], [Algorithm::Rsa { .. }, Algorithm::Rsa { .. }, Algorithm::Rsa { .. }]), "{rsa:?}");
+        assert_eq!(rsa.len(), order.len());
+        let ecdsa = Algorithm::Ecdsa { curve: EcdsaCurve::NistP256 };
+        assert_eq!(prefer(&order, std::slice::from_ref(&ecdsa))[0], ecdsa);
+    }
 }
