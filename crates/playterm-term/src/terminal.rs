@@ -11,6 +11,7 @@ use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
 use crate::charset::{Charset, InputEncoder, OutputDecoder};
 use crate::detect::Detector;
+use crate::guard::OscGuard;
 use crate::log::{LogMode, SessionLog};
 use crate::palette::Palette;
 
@@ -94,6 +95,8 @@ impl AutoDetect {
 pub struct Terminal {
     term: Term<Listener>,
     parser: Processor<StdSyncHandler>,
+    /// Holds back OSC strings until complete and drops oversized ones (see `guard`).
+    guard: OscGuard,
     decoder: OutputDecoder,
     encoder: InputEncoder,
     events: mpsc::Receiver<Event>,
@@ -119,6 +122,7 @@ impl Terminal {
         let mut terminal = Self {
             term: Term::new(config, &size, listener.clone()),
             parser: Processor::new(),
+            guard: OscGuard::default(),
             decoder: OutputDecoder::new(charset),
             encoder: InputEncoder::new(charset),
             events: rx,
@@ -157,7 +161,7 @@ impl Terminal {
         {
             log_error = Some(e);
         }
-        let utf8 = self.decoder.decode(bytes);
+        let utf8 = self.guard.filter(self.decoder.decode(bytes));
         if let Some(log) = &mut self.log
             && let Err(e) = log.record_decoded(utf8)
         {
@@ -198,7 +202,7 @@ impl Terminal {
         if let Some(auto) = &mut self.auto {
             auto.record(Segment::Local(text.to_owned()), text.len());
         }
-        self.parser.advance(&mut self.term, text.as_bytes());
+        self.parser.advance(&mut self.term, self.guard.filter(text.as_bytes()));
     }
 
     /// Switches the wire charset (when a tab connects to a different host). With
@@ -240,16 +244,17 @@ impl Terminal {
         let config = Config { scrolling_history: self.scrollback, ..Config::default() };
         self.term = Term::new(config, &self.size, self.listener.clone());
         self.parser = Processor::new();
+        self.guard = OscGuard::default();
         // The log has this output already; replaying must not write it twice.
         let log = self.log.take();
-        self.parser.advance(&mut self.term, prefix.as_bytes());
+        self.parser.advance(&mut self.term, self.guard.filter(prefix.as_bytes()));
         for segment in segments {
             match segment {
                 Segment::Remote(bytes) => {
-                    let utf8 = self.decoder.decode(&bytes).to_vec();
-                    self.parser.advance(&mut self.term, &utf8);
+                    let utf8 = self.guard.filter(self.decoder.decode(&bytes));
+                    self.parser.advance(&mut self.term, utf8);
                 }
-                Segment::Local(text) => self.parser.advance(&mut self.term, text.as_bytes()),
+                Segment::Local(text) => self.parser.advance(&mut self.term, self.guard.filter(text.as_bytes())),
             }
         }
         self.log = log;
@@ -635,6 +640,19 @@ mod tests {
         let mut t = Terminal::new(20, 5, Charset::Utf8, 100);
         t.feed(b"\x1b]0;my title\x07");
         assert_eq!(t.take_events(), vec![TerminalEvent::Title(Some("my title".into()))]);
+    }
+
+    #[test]
+    fn remote_cannot_flood_titles() {
+        let mut t = Terminal::new(20, 5, Charset::Utf8, 100);
+        // A huge title, then pushed onto the title stack again and again: dropped, so nothing
+        // is copied, and the output after it shows normally.
+        let huge = [b"\x1b]0;".as_slice(), &vec![b'x'; 1 << 20], b"\x07"].concat();
+        t.feed(&huge);
+        t.feed(&b"\x1b[22t".repeat(4096));
+        t.feed(b"ok");
+        assert!(t.take_events().iter().all(|e| !matches!(e, TerminalEvent::Title(Some(_)))));
+        assert!(t.cursor_line_text().starts_with("ok"), "{:?}", t.cursor_line_text());
     }
 
     #[test]

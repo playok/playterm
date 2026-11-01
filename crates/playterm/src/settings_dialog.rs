@@ -278,6 +278,14 @@ impl SettingsDialog {
             ui.checkbox(&mut keys.middle_click_paste, t("가운데 클릭", "Middle click"));
         });
         ui.end_row();
+
+        ui.label(t("원격 복사", "Remote copy"));
+        ui.checkbox(&mut keys.remote_copy, t("원격 프로그램이 클립보드에 쓰기 허용 (OSC 52)", "Let remote programs set the clipboard (OSC 52)"))
+            .on_hover_text(t(
+                "tmux · vim 등이 복사한 내용을 이 PC 클립보드에 넣을 수 있습니다. 지금 보고 있는 탭만, 1MB 까지이고, 쓸 때마다 화면 아래에 알립니다.\n원격에서 클립보드를 읽는 것은 항상 막혀 있습니다.",
+                "tmux, vim and the like can put what they copy on this PC's clipboard: only from the tab on screen, up to 1 MB, with a notice each time.\nReading the clipboard from the remote side is always refused.",
+            ));
+        ui.end_row();
     }
 
     fn timeout_row(&mut self, ui: &mut egui::Ui) {

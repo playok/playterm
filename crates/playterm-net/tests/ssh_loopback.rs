@@ -635,6 +635,31 @@ fn sftp_cancel_removes_partial_upload() {
     assert!(!fx.dir.join("sftp").join("huge.bin").exists(), "partial upload must be removed");
 }
 
+#[test]
+fn sftp_cancelled_download_keeps_the_existing_file() {
+    let fx = Fixture::new("sftp-cancel-down", &[]);
+    fx.trust_host();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+
+    std::fs::write(fx.dir.join("sftp").join("huge.bin"), vec![7u8; 64 * 1024 * 1024]).unwrap();
+    let local = fx.dir.join("mine.txt");
+    std::fs::write(&local, "my file").unwrap();
+    let id = sftp.download("/huge.bin", &local, false);
+    sftp.cancel(id);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Cancelled);
+    // The download went to a partial file of its own: the file that was there is untouched,
+    // and nothing partial is left behind.
+    assert_eq!(std::fs::read_to_string(&local).unwrap(), "my file");
+    let leftovers: Vec<_> = std::fs::read_dir(&fx.dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".part"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
 // -------------------------------------------------------------------------------------------------
 // Port forwarding
 

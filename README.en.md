@@ -142,6 +142,9 @@ Connection commands connect in that tab, and the prompt comes back when the conn
     - Paste: Ctrl+V · Ctrl+Shift+V · Shift+Insert · **right click** (as in PuTTY, off by default — then Ctrl+right click opens the menu) · **middle click** (off by default)
     - Keys turned off go to the remote side as they are (with Ctrl+V off, vim and others get ^V). Menus and the shortcut list show the keys that are on.
     - Dialogs and text fields always take Ctrl+C/V/X, Ctrl/Shift+Insert and Shift+Delete, whatever the setting.
+    - Remote copy (OSC 52, on by default): remote programs such as tmux or vim can put text on this PC's clipboard, only from the tab on screen,
+      up to 1 MB, with a notice each time. Reading the clipboard from the remote side is always refused.
+    - Programs that use bracketed paste get pasted text without any ESC in it, so a paste cannot end early and run as typed commands.
     - Copying in the terminal slides up a short notice at the bottom, like `Copied · 104 chars · 3 lines “pla…~>”`: the size and the first
       and last 3 characters (line breaks shown as ⏎, tabs as →), so copying the wrong range is noticed right away.
 - **Status bar** (bottom of the window, View → Status bar): connection state, target, encoding, logging indicator,
@@ -224,6 +227,9 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
   the remote files of the current tab (it follows when you switch tabs).
   Upload / upload folder / download / new folder / delete buttons, double-click to open a folder or download a file, drag files in from Explorer to upload.
   Drag the left edge of the panel to change its width.
+- Downloads go to a partial file next to the target (`.name.….part`) that replaces it once complete, so a failed or cancelled download leaves an
+  existing file as it was. Names from the server that cannot be used on this PC or could point outside the folder (`..`, `\`, `:`, device names
+  such as `CON`, ...) are refused with a message.
 - When a download finishes, the transfer list shows **[Open folder]**, which opens Windows Explorer with the file selected (in both the SFTP window and the side panel).
 - Icons tell files apart: folders are yellow folders, files get a colored band by kind (images green, archives purple, code blue, scripts orange,
   configuration teal, documents red, media pink, executables dark red; text and others striped).

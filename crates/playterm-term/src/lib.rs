@@ -7,6 +7,7 @@
 
 mod charset;
 mod detect;
+mod guard;
 mod log;
 mod palette;
 mod search;

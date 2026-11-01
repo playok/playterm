@@ -77,6 +77,9 @@ pub struct ClipboardKeys {
     /// The right button pastes (Ctrl+right click opens the menu).
     pub right_click_paste: bool,
     pub middle_click_paste: bool,
+    /// Programs on the remote side may put text on the clipboard (OSC 52, e.g. tmux or vim
+    /// yanks). Only the current tab, with a notice each time; never read.
+    pub remote_copy: bool,
 }
 
 impl Default for ClipboardKeys {
@@ -91,6 +94,7 @@ impl Default for ClipboardKeys {
             shift_insert: true,
             right_click_paste: false,
             middle_click_paste: false,
+            remote_copy: true,
         }
     }
 }

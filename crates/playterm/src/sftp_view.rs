@@ -7,7 +7,9 @@ use eframe::egui::{self, RichText};
 
 use crate::file_icons;
 use playterm_i18n::{t, tr};
-use playterm_net::{RemoteEntry, SftpConnection, SftpEvent, TransferState, remote_join, remote_parent};
+use playterm_net::{
+    RemoteEntry, SftpConnection, SftpEvent, TransferState, is_safe_local_name, remote_join, remote_parent,
+};
 
 struct Transfer {
     id: u64,
@@ -182,7 +184,21 @@ impl SftpBrowser {
             }
         } else {
             match rfd::FileDialog::new().set_title(t("다운로드할 폴더 선택", "Choose a folder to download to")).pick_folder() {
-                Some(dir) => items.into_iter().map(|e| { let p = dir.join(&e.name); (e, p) }).collect(),
+                Some(dir) => {
+                    // The server names these: one that could reach outside the folder is refused.
+                    let (safe, unsafe_names): (Vec<_>, Vec<_>) =
+                        items.into_iter().partition(|e| is_safe_local_name(&e.name));
+                    if !unsafe_names.is_empty() {
+                        let names: Vec<String> = unsafe_names.iter().map(|e| format!("{:?}", e.name)).collect();
+                        let text = tr!(
+                            "이 PC 에 저장할 수 없는 이름이라 받지 않았습니다: {}",
+                            "Not downloaded, the names cannot be saved on this PC: {}",
+                            names.join(", ")
+                        );
+                        self.status = Some((text, true));
+                    }
+                    safe.into_iter().map(|e| { let p = dir.join(&e.name); (e, p) }).collect()
+                }
                 None => return,
             }
         };

@@ -31,6 +31,8 @@ use crate::view::UserInput;
 use crate::{clip_keys, clipboard, fonts, status_bar, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
+/// Largest text a remote program may put on the clipboard (OSC 52).
+const MAX_REMOTE_COPY: usize = 1024 * 1024;
 /// App shortcuts, consumed before the terminal sees the key events. Ctrl+Shift+Tab must come
 /// before Ctrl+Tab, whose pattern also matches it.
 const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
@@ -1489,10 +1491,21 @@ impl eframe::App for PlaytermApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let active_id = self.sessions.get(self.active).map(|s| s.id);
         for session in &mut self.sessions {
             session.poll();
             if let Some(text) = session.clipboard_store.take() {
-                ctx.copy_text(text);
+                // A program on the remote side set the clipboard (OSC 52). Only the tab the
+                // user is looking at may, within a size limit, and they see it happen: a
+                // background host must not plant text for a later paste.
+                if !self.settings.clipboard.remote_copy || Some(session.id) != active_id {
+                    log::info!("clipboard write from {} ignored", session.tab_title());
+                } else if text.len() > MAX_REMOTE_COPY {
+                    log::info!("clipboard write of {} bytes from {} ignored", text.len(), session.tab_title());
+                } else {
+                    crate::toast::remote_copied(&ctx, &session.tab_title(), &text);
+                    ctx.copy_text(text);
+                }
             }
         }
         // "Save password" from a login dialog, once that login has succeeded. Waits while another

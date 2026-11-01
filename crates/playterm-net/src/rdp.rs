@@ -46,8 +46,22 @@ use zeroize::Zeroizing;
 
 use crate::session::{ConnectParams, EventSink, PromptField, SessionCommand, SessionEvent};
 
+/// The server decides the desktop size; one that cannot be drawn (or would take gigabytes of
+/// memory, up to 65535 x 65535) ends the session instead of the whole program.
+fn check_desktop_size(width: u16, height: u16) -> anyhow::Result<()> {
+    if width == 0 || height == 0 || width > MAX_DESKTOP_SIDE || height > MAX_DESKTOP_SIDE {
+        bail!(tr!(
+            "서버가 지원할 수 없는 화면 크기를 보냈습니다 ({width} x {height}, 최대 {MAX_DESKTOP_SIDE})",
+            "The server sent a desktop size that cannot be shown ({width} x {height}, at most {MAX_DESKTOP_SIDE})"
+        ));
+    }
+    Ok(())
+}
+
 /// Wrong passwords tried before giving up.
 const MAX_PASSWORD_TRIES: usize = 3;
+/// Largest desktop side accepted from a server (also the GPU texture limit used for drawing).
+const MAX_DESKTOP_SIDE: u16 = 8192;
 /// Shortest time between two screens sent to the UI.
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -703,6 +717,7 @@ async fn session(
 
     let (mut reader, mut writer) = ironrdp_tokio::split_tokio_framed(framed);
     let screen = sink.screen();
+    check_desktop_size(result.desktop_size.width, result.desktop_size.height)?;
     lock(&screen).reset(result.desktop_size.width, result.desktop_size.height);
     let activation_factory = result.activation_factory;
     let mut stage = ActiveStageBuilder {
@@ -822,6 +837,7 @@ async fn session(
                             ..
                         } = activation.connection_activation_state()
                         {
+                            check_desktop_size(desktop_size.width, desktop_size.height)?;
                             lock(&screen).reset(desktop_size.width, desktop_size.height);
                             changed = true;
                             stage.set_fastpath_processor(
@@ -893,6 +909,16 @@ fn clipboard_message(stage: &mut ActiveStage, message: ClipboardMessage) -> anyh
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_desktop_sizes_are_bounded() {
+        for (w, h) in [(1920, 1080), (640, 480), (8192, 8192), (3840, 2160)] {
+            assert!(check_desktop_size(w, h).is_ok(), "{w}x{h}");
+        }
+        for (w, h) in [(65535, 65535), (8193, 600), (800, 9000), (0, 600), (800, 0)] {
+            assert!(check_desktop_size(w, h).is_err(), "{w}x{h} is refused");
+        }
+    }
 
     fn events(inputs: &[RdpInput]) -> Vec<FastPathInputEvent> {
         let mut out = SmallVec::new();

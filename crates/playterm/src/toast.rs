@@ -3,7 +3,7 @@
 
 use eframe::egui::text::{LayoutJob, TextFormat};
 use eframe::egui::{self, Align, Align2};
-use playterm_i18n::tr;
+use playterm_i18n::{t, tr};
 
 /// How long a notice stays, from appearing to gone, in seconds.
 const SHOW_SECS: f64 = 1.8;
@@ -49,12 +49,22 @@ pub fn snippet(text: &str) -> String {
 
 /// Shows that `text` was copied.
 pub fn copied(ctx: &egui::Context, text: &str) {
+    notify(ctx, t("복사됨", "Copied"), text);
+}
+
+/// Shows that a program on the remote side (in tab `tab`) put `text` on the clipboard.
+pub fn remote_copied(ctx: &egui::Context, tab: &str, text: &str) {
+    notify(ctx, &tr!("{tab} 에서 클립보드에 씀", "{tab} set the clipboard"), text);
+}
+
+/// `what · N chars · M lines "abc…xyz"`.
+fn notify(ctx: &egui::Context, what: &str, text: &str) {
     let chars = text.chars().filter(|&c| c != '\r').count();
     let lines = text.lines().count();
     let what = if lines > 1 {
-        tr!("복사됨 · {}자 · {}줄", "Copied · {} chars · {} lines", chars, lines)
+        tr!("{what} · {}자 · {}줄", "{what} · {} chars · {} lines", chars, lines)
     } else {
-        tr!("복사됨 · {}자", "Copied · {} chars", chars)
+        tr!("{what} · {}자", "{what} · {} chars", chars)
     };
     let toast = Toast { what, snippet: snippet(text), since: ctx.input(|i| i.time) };
     ctx.data_mut(|d| d.insert_temp(id(), toast));

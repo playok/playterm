@@ -310,12 +310,52 @@ async fn list(sftp: &SftpSession, path: &str) -> anyhow::Result<(String, Vec<Rem
     Ok((canonical, entries))
 }
 
+/// Most entries a folder download lists, and the deepest folder it follows: a server could
+/// otherwise list an endless tree.
+const MAX_TREE_ENTRIES: usize = 100_000;
+const MAX_TREE_DEPTH: usize = 64;
+
+/// Whether `name` (one entry of a server's directory listing) can be used as a single file or
+/// folder name on Windows. A server picks these names, so anything that could reach outside
+/// the chosen folder is refused: `.`/`..`, separators, drive colons, control characters,
+/// characters Windows does not allow, device names (`CON`, `NUL`, `COM1`, ...) and trailing
+/// dots or spaces, which Windows drops.
+pub fn is_safe_local_name(name: &str) -> bool {
+    const RESERVED: [&str; 6] = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+    if name.is_empty() || name == "." || name == ".." || name.ends_with(['.', ' ']) {
+        return false;
+    }
+    if name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*')) {
+        return false;
+    }
+    // The device names are reserved with any extension too (`nul.txt`).
+    let stem = name.split('.').next().unwrap_or(name).trim_end().to_ascii_uppercase();
+    let numbered = (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.len() == 4
+        && stem.as_bytes()[3].is_ascii_digit();
+    !RESERVED.contains(&stem.as_str()) && !numbered
+}
+
+/// The file a download is written to before it replaces `local`: next to it, new, so a failed
+/// or cancelled download never truncates or deletes a file that was already there.
+fn part_path(local: &Path) -> PathBuf {
+    use std::sync::atomic::AtomicUsize;
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let unique = format!("{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
+    local.with_file_name(format!(".{name}.{unique}.part"))
+}
+
 async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress: Progress) -> anyhow::Result<()> {
+    let part = part_path(local);
     let result = async {
         let mut src = sftp.open(remote).await.with_context(|| tr!("{remote} 을(를) 열 수 없습니다", "Cannot open {remote}"))?;
-        let mut dst = tokio::fs::File::create(local)
+        let mut dst = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&part)
             .await
-            .with_context(|| tr!("{} 을(를) 만들 수 없습니다", "Cannot create {}", local.display()))?;
+            .with_context(|| tr!("{} 을(를) 만들 수 없습니다", "Cannot create {}", part.display()))?;
         let mut buf = vec![0u8; CHUNK];
         loop {
             let n = src.read(&mut buf).await?;
@@ -326,12 +366,18 @@ async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress:
             progress.advance(n)?;
         }
         dst.flush().await?;
+        drop(dst);
+        // Complete: now it replaces the destination (the user chose it, or it is in the folder
+        // they chose).
+        tokio::fs::rename(&part, local)
+            .await
+            .with_context(|| tr!("{} 을(를) 만들 수 없습니다", "Cannot create {}", local.display()))?;
         anyhow::Ok(())
     }
     .await;
     if result.is_err() {
-        // Do not leave a truncated file that looks complete.
-        let _ = tokio::fs::remove_file(local).await;
+        // Only the partial file is ours to remove.
+        let _ = tokio::fs::remove_file(&part).await;
     }
     result
 }
@@ -361,16 +407,39 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     result
 }
 
-/// Remote tree as (relative path, is_dir, size), parents before children.
-async fn walk_remote(sftp: &SftpSession, root: &str) -> anyhow::Result<Vec<(String, bool, u64)>> {
+/// Remote tree as (relative path, is_dir, size), parents before children. The walk stops when
+/// the tree is unreasonably large or deep. For a `download` every name is checked with
+/// [`is_safe_local_name`] before anything is written, and cancelling stops the walk.
+async fn walk_remote(
+    sftp: &SftpSession,
+    root: &str,
+    download: Option<&Progress>,
+) -> anyhow::Result<Vec<(String, bool, u64)>> {
     let mut out = Vec::new();
     let mut stack = vec![String::new()];
     while let Some(rel) = stack.pop() {
+        if let Some(progress) = download {
+            progress.advance(0)?;
+        }
+        let depth = if rel.is_empty() { 0 } else { rel.split('/').count() };
+        if depth > MAX_TREE_DEPTH {
+            anyhow::bail!(tr!("폴더가 너무 깊습니다 ({}단계 넘음): {rel}", "Folders nested too deep (over {}): {rel}", MAX_TREE_DEPTH));
+        }
         let dir = if rel.is_empty() { root.to_owned() } else { remote_join(root, &rel) };
         for e in sftp.read_dir(dir).await? {
             let name = e.file_name();
             if name == "." || name == ".." {
                 continue;
+            }
+            if name.contains('/') || (download.is_some() && !is_safe_local_name(&name)) {
+                anyhow::bail!(tr!(
+                    "이 PC 에 저장할 수 없는 이름이 있어 다운로드하지 않았습니다: {:?}",
+                    "Not downloaded: a name cannot be saved on this PC: {:?}",
+                    name
+                ));
+            }
+            if out.len() >= MAX_TREE_ENTRIES {
+                anyhow::bail!(tr!("항목이 너무 많습니다 ({}개 넘음)", "Too many entries (over {})", MAX_TREE_ENTRIES));
             }
             let rel_child = if rel.is_empty() { name } else { format!("{rel}/{name}") };
             let meta = e.metadata();
@@ -385,11 +454,16 @@ async fn walk_remote(sftp: &SftpSession, root: &str) -> anyhow::Result<Vec<(Stri
 }
 
 async fn download_tree(sftp: &SftpSession, remote: &str, local: &Path, progress: Progress) -> anyhow::Result<()> {
-    let entries = walk_remote(sftp, remote).await?;
+    let entries = walk_remote(sftp, remote, Some(&progress)).await?;
     progress.add_total(entries.iter().filter(|e| !e.1).map(|e| e.2).sum());
     tokio::fs::create_dir_all(local).await?;
     for (rel, is_dir, _) in entries {
+        // The parts were checked in `walk_remote`; this stays inside `local` either way.
         let target: PathBuf = rel.split('/').fold(local.to_owned(), |p, part| p.join(part));
+        anyhow::ensure!(
+            target.starts_with(local) && target.components().count() == local.components().count() + rel.split('/').count(),
+            "unsafe path {rel:?}"
+        );
         if is_dir {
             tokio::fs::create_dir_all(&target).await?;
         } else {
@@ -433,7 +507,7 @@ async fn upload_tree(sftp: &SftpSession, local: &Path, remote: &str, progress: P
 }
 
 async fn remove_tree(sftp: &SftpSession, root: &str) -> anyhow::Result<()> {
-    let entries = walk_remote(sftp, root).await?;
+    let entries = walk_remote(sftp, root, None).await?;
     // Deepest first so directories are empty when removed.
     for (rel, is_dir, _) in entries.iter().rev() {
         let path = remote_join(root, rel);
@@ -446,6 +520,29 @@ async fn remove_tree(sftp: &SftpSession, root: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_names_that_could_leave_the_folder_are_refused() {
+        for ok in ["file.txt", "폴더", ".bashrc", "a b", "console.d", "COM10", "nul-ish", "x.tar.gz"] {
+            assert!(is_safe_local_name(ok), "{ok:?} is a plain name");
+        }
+        for bad in [
+            "", ".", "..", r"..\..\Startup\x.bat", "../x", "a/b", r"a\b", r"C:\x", "C:", "x:stream",
+            r"\\server\share", "nul", "NUL.txt", "con", "Com1", "lpt9.log", "aux ", "CONOUT$", "name.", "name ",
+            "a\nb", "a\u{0}b", "what?", "*", "a<b", "a|b", "\"q\"",
+        ] {
+            assert!(!is_safe_local_name(bad), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn partial_downloads_go_next_to_the_target() {
+        let target = Path::new(r"C:\Users\me\Downloads\report.pdf");
+        let (a, b) = (part_path(target), part_path(target));
+        assert_ne!(a, b, "each download has its own partial file");
+        assert_eq!(a.parent(), target.parent());
+        assert!(a.file_name().unwrap().to_string_lossy().starts_with(".report.pdf."));
+    }
 
     #[test]
     fn remote_paths() {

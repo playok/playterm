@@ -106,8 +106,10 @@ fn ctrl_key(key: Key) -> Option<Vec<u8>> {
 pub fn paste_bytes(text: &str, bracketed: bool) -> String {
     let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
     if bracketed {
-        // Strip any end marker inside the payload so pasted text cannot break out.
-        let inner = normalized.replace("\x1b[201~", "");
+        // Pasted text must not end the paste early: an end marker in it (even one that only
+        // forms once another is removed, "\x1b[20\x1b[201~1~") would let the rest run as typed
+        // commands. Like xterm, no escape (ESC, or the 8-bit CSI) goes through at all.
+        let inner: String = normalized.chars().filter(|&c| c != '\x1b' && c != '\u{9b}').collect();
         format!("\x1b[200~{inner}\x1b[201~")
     } else {
         normalized
@@ -154,6 +156,18 @@ mod tests {
     #[test]
     fn paste_normalizes_newlines() {
         assert_eq!(paste_bytes("a\r\nb\nc", false), "a\rb\rc");
-        assert_eq!(paste_bytes("x\x1b[201~y", true), "\x1b[200~xy\x1b[201~");
+        assert_eq!(paste_bytes("x\x1b[201~y", true), "\x1b[200~x[201~y\x1b[201~");
+    }
+
+    #[test]
+    fn pasted_text_cannot_end_a_bracketed_paste() {
+        for payload in ["a\x1b[201~rm -rf ~\n", "\x1b[20\x1b[201~1~rm -rf ~\n", "a\u{9b}201~b", "\x1b\x1b[201~[201~x"] {
+            let sent = paste_bytes(payload, true);
+            let inner = &sent["\x1b[200~".len()..sent.len() - "\x1b[201~".len()];
+            assert!(!inner.contains('\x1b') && !inner.contains('\u{9b}'), "{payload:?} -> {sent:?}");
+            assert_eq!(sent.matches("\x1b[201~").count(), 1, "only the real end marker: {sent:?}");
+        }
+        // Without bracketed paste the text goes as it is (newlines as Enter).
+        assert_eq!(paste_bytes("a\nb", false), "a\rb");
     }
 }

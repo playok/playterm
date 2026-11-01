@@ -25,7 +25,9 @@ pub use forward::{ForwardKind, ForwardRule};
 pub use keepalive::{KeepAlive, KeepAliveMode, decode_escapes};
 pub use rdp::{RdpFrame, RdpInput, RdpMouseButton, RdpSettings, scancode};
 pub use serial::{SerialFlow, SerialParity, SerialPortEntry, SerialSettings, list_ports};
-pub use sftp::{RemoteEntry, SftpConnection, SftpEvent, TransferState, TransferUpdate, remote_join, remote_parent};
+pub use sftp::{
+    RemoteEntry, SftpConnection, SftpEvent, TransferState, TransferUpdate, is_safe_local_name, remote_join, remote_parent,
+};
 pub use telnet::TelnetCodec;
 
 pub struct NetRuntime {
