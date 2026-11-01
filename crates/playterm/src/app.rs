@@ -330,6 +330,7 @@ impl PlaytermApp {
             cols: 80,
             rows: 24,
             known_hosts: self.known_hosts.clone(),
+            connect_timeout: std::time::Duration::from_secs(self.settings.connect_timeout.into()),
         };
         let log = profile.log.auto.then(|| LogPlan {
             dir: logging::log_dir(&profile.log.dir),

@@ -134,6 +134,9 @@ Connection commands connect in that tab, and the prompt comes back when the conn
   - Font: any font installed on this PC (system and per-user, monospaced fonts first, searchable) or a TTF/OTF/TTC file via [From file…].
     Hangul missing from the font is drawn with Malgun Gothic.
   - Color themes: Campbell, One Half Dark/Light, Solarized Dark/Light, Tango Dark, Dracula, Gruvbox Dark
+  - Connection timeout (default 15 s, 3–300 s): gives up when an SSH, Telnet or RDP server does not answer for that long. It covers everything
+    from the TCP connect to the finished login (the SSH handshake and authentication, RDP's TLS and logon), not counting time spent confirming a
+    host key or typing a password. Applies to new connections.
 - **Status bar** (bottom of the window, View → Status bar): connection state, target, encoding, logging indicator,
   terminal size (columns×rows), data received/sent on this connection (↓/↑, bytes after decryption), Caps Lock and Num Lock.
 - Font size: **Ctrl+wheel**, **Ctrl+= / Ctrl+- / Ctrl+0** (also in the View menu). The size is saved.
@@ -267,7 +270,7 @@ Check **Save password** in the password dialog (for a saved site) to store the p
 | File | Contents |
 |---|---|
 | `sessions.toml` | Saved sites and templates (no passwords) |
-| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention |
+| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout |
 | `vault.toml` | Saved passwords, encrypted with the master password → Argon2id → XChaCha20-Poly1305 |
 | `known_hosts` | SSH host keys. If a known host's key changes, the connection is refused (protection against man-in-the-middle attacks) |
 | `known_rdp_hosts` | RDP server certificate fingerprints. A changed certificate is refused |

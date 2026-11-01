@@ -90,6 +90,7 @@ impl SettingsDialog {
                 });
                 ui.end_row();
                 self.sleep_row(ui);
+                self.timeout_row(ui);
             });
             ui.add_space(8.0);
             self.preview(ui);
@@ -240,6 +241,29 @@ impl SettingsDialog {
                 "세션이 연결되어 있는 동안 Windows 가 유휴 상태로 절전에 들어가 연결이 끊기는 것을 막습니다.\n덮개를 닫거나 직접 절전을 고르면 그대로 절전합니다.",
                 "Stops Windows from going to sleep when idle, which would drop the connections, while a session is connected.\nClosing the lid or choosing Sleep still works.",
             ));
+        ui.end_row();
+    }
+
+    fn timeout_row(&mut self, ui: &mut egui::Ui) {
+        ui.label(t("연결 시간 제한", "Connection timeout"));
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut self.draft.connect_timeout)
+                    .range(AppSettings::MIN_CONNECT_TIMEOUT..=AppSettings::MAX_CONNECT_TIMEOUT)
+                    .speed(1)
+                    .suffix(t(" 초", " s")),
+            )
+            .on_hover_text(t(
+                "SSH · Telnet · RDP 서버가 이 시간 동안 응답하지 않으면 연결을 포기합니다 (TCP 연결부터 로그인까지).\n호스트 키 확인이나 비밀번호 입력을 기다리는 시간은 세지 않습니다. 새 연결부터 적용됩니다.",
+                "Gives up when an SSH, Telnet or RDP server does not answer for this long (from the TCP connect to the login).\nTime spent confirming a host key or typing a password does not count. Applies to new connections.",
+            ));
+            ui.weak(tr!(
+                "응답 없는 서버를 기다리는 최대 시간 ({}~{}초)",
+                "Longest wait for a server that does not answer ({}–{} s)",
+                AppSettings::MIN_CONNECT_TIMEOUT,
+                AppSettings::MAX_CONNECT_TIMEOUT
+            ));
+        });
         ui.end_row();
     }
 

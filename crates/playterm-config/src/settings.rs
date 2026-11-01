@@ -80,6 +80,8 @@ pub struct AppSettings {
     pub prevent_sleep: PreventSleep,
     /// Keep the screen saver from starting while playterm runs (Tools menu).
     pub prevent_screensaver: bool,
+    /// Seconds to wait for a server while connecting before giving up (prompts not counted).
+    pub connect_timeout: u32,
 }
 
 impl AppSettings {
@@ -88,6 +90,9 @@ impl AppSettings {
     pub const DEFAULT_FONT_SIZE: f32 = 15.0;
     pub const MIN_SCROLLBACK: usize = 100;
     pub const MAX_SCROLLBACK: usize = 200_000;
+    pub const MIN_CONNECT_TIMEOUT: u32 = 3;
+    pub const MAX_CONNECT_TIMEOUT: u32 = 300;
+    pub const DEFAULT_CONNECT_TIMEOUT: u32 = 15;
 
     /// Loads `path`; a missing file gives the defaults.
     pub fn load(path: &Path) -> io::Result<Self> {
@@ -113,6 +118,7 @@ impl AppSettings {
             Self::DEFAULT_FONT_SIZE
         };
         self.scrollback = self.scrollback.clamp(Self::MIN_SCROLLBACK, Self::MAX_SCROLLBACK);
+        self.connect_timeout = self.connect_timeout.clamp(Self::MIN_CONNECT_TIMEOUT, Self::MAX_CONNECT_TIMEOUT);
         self
     }
 }
@@ -130,6 +136,7 @@ impl Default for AppSettings {
             ui_theme: UiTheme::Dark,
             prevent_sleep: PreventSleep::System,
             prevent_screensaver: false,
+            connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
         }
     }
 }
@@ -155,14 +162,18 @@ mod tests {
             ui_theme: UiTheme::System,
             prevent_sleep: PreventSleep::Display,
             prevent_screensaver: true,
+            connect_timeout: 60,
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);
 
         // Missing keys take defaults; out-of-range values are clamped.
-        std::fs::write(&path, "font_size = 99\nscrollback = 1\n").unwrap();
+        std::fs::write(&path, "font_size = 99\nscrollback = 1\nconnect_timeout = 0\n").unwrap();
         let s = AppSettings::load(&path).unwrap();
         assert_eq!((s.font.as_str(), s.font_size, s.scrollback), ("Consolas", 40.0, 100));
+        assert_eq!(s.connect_timeout, AppSettings::MIN_CONNECT_TIMEOUT, "no endless wait");
+        std::fs::write(&path, "theme = \"Dracula\"\n").unwrap();
+        assert_eq!(AppSettings::load(&path).unwrap().connect_timeout, 15, "older files get the default");
 
         std::fs::write(&path, "font_size = \"big\"").unwrap();
         assert!(AppSettings::load(&path).is_err());

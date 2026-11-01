@@ -4,6 +4,7 @@
 //! [`SessionHandle`]: commands go in over a tokio channel, events come back over a std channel
 //! (so the UI thread can poll without async), and a waker callback tells the UI to repaint.
 
+mod deadline;
 mod forward;
 mod keepalive;
 mod rdp;

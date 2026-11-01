@@ -1,9 +1,11 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
+use crate::deadline::Deadline;
 use crate::forward::ForwardRule;
 use crate::keepalive::KeepAlive;
 use crate::rdp::{RdpFrame, RdpInput, RdpSettings, SharedScreen};
@@ -82,6 +84,14 @@ pub struct ConnectParams {
     pub rows: u16,
     /// known_hosts file used to verify SSH host keys.
     pub known_hosts: PathBuf,
+    /// Longest wait for the server while connecting (TCP, handshake, login), not counting
+    /// time spent waiting on the user. Unused for serial ports.
+    pub connect_timeout: Duration,
+}
+
+impl ConnectParams {
+    /// The time limit for connecting when no setting says otherwise.
+    pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 }
 
 impl fmt::Debug for ConnectParams {
@@ -98,6 +108,7 @@ impl fmt::Debug for ConnectParams {
             .field("keepalive", &self.keepalive)
             .field("rdp", &self.rdp)
             .field("term_type", &self.term_type)
+            .field("connect_timeout", &self.connect_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -191,7 +202,7 @@ impl SessionHandle {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = std_mpsc::channel();
         let screen = Arc::new(Mutex::new(SharedScreen::default()));
-        let sink = EventSink { tx: ev_tx, waker, screen: screen.clone() };
+        let sink = EventSink { tx: ev_tx, waker, screen: screen.clone(), deadline: Deadline::default() };
         (Self { commands: cmd_tx, events: ev_rx, screen }, cmd_rx, sink)
     }
 
@@ -241,9 +252,20 @@ pub(crate) struct EventSink {
     tx: std_mpsc::Sender<SessionEvent>,
     waker: Waker,
     screen: Arc<Mutex<SharedScreen>>,
+    /// The connect time limit; paused while a prompt waits on the user.
+    deadline: Deadline,
 }
 
 impl EventSink {
+    /// Runs `connecting` within the connect time limit of `params` (see [`Deadline`]).
+    pub(crate) async fn connecting<T>(
+        &self,
+        params: &ConnectParams,
+        connecting: impl Future<Output = anyhow::Result<T>>,
+    ) -> anyhow::Result<T> {
+        self.deadline.limit(params.connect_timeout, connecting).await
+    }
+
     pub fn send(&self, event: SessionEvent) {
         let _ = self.tx.send(event);
         (self.waker)();
@@ -284,6 +306,7 @@ impl EventSink {
             certificate: false,
             reply,
         }));
+        let _waiting_on_user = self.deadline.pause();
         rx.await.unwrap_or(false)
     }
 
@@ -298,6 +321,7 @@ impl EventSink {
             certificate: true,
             reply,
         }));
+        let _waiting_on_user = self.deadline.pause();
         rx.await.unwrap_or(false)
     }
 
@@ -313,6 +337,7 @@ impl EventSink {
         let (reply, rx) = oneshot::channel();
         let user = user.map(str::to_owned);
         self.send(SessionEvent::AuthPrompt(AuthPrompt { title, instructions, fields, user, reply }));
+        let _waiting_on_user = self.deadline.pause();
         rx.await.ok().flatten()
     }
 }

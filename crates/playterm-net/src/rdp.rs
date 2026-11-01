@@ -48,7 +48,6 @@ use crate::session::{ConnectParams, EventSink, PromptField, SessionCommand, Sess
 
 /// Wrong passwords tried before giving up.
 const MAX_PASSWORD_TRIES: usize = 3;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Shortest time between two screens sent to the UI.
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -607,9 +606,8 @@ async fn connect(
     clipboard: Option<&(dyn CliprdrBackendFactory + Send)>,
     sink: &EventSink,
 ) -> anyhow::Result<Result<(ironrdp_connector::ConnectionResult, Upgraded), ConnectorError>> {
-    let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((params.host.as_str(), params.port)))
+    let stream = TcpStream::connect((params.host.as_str(), params.port))
         .await
-        .context(t("연결 시간 초과", "Connection timed out"))?
         .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
     stream.set_nodelay(true)?;
     let client_addr = stream.local_addr()?;
@@ -693,7 +691,8 @@ async fn session(
     mut clip_rx: Option<&mut mpsc::UnboundedReceiver<ClipboardMessage>>,
     sink: &EventSink,
 ) -> anyhow::Result<Outcome> {
-    let (result, framed) = match connect(params, password, clipboard, sink).await? {
+    // Within the connect time limit; confirming a new certificate pauses it.
+    let (result, framed) = match sink.connecting(params, connect(params, password, clipboard, sink)).await? {
         Ok(connected) => connected,
         Err(e) => match classify(&e) {
             Failure::BadPassword => return Ok(Outcome::BadPassword),

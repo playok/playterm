@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use playterm_i18n::{t, tr};
@@ -16,8 +15,6 @@ use crate::keepalive::{IdleTimer, KeepAliveMode, sleep_until};
 use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
 use crate::sftp::SftpConnection;
 use crate::ssh_auth::authenticate;
-
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) struct ClientHandler {
     host: String,
@@ -103,20 +100,14 @@ impl client::Handler for ClientHandler {
     }
 }
 
-pub(crate) async fn run(
-    params: ConnectParams,
-    mut commands: mpsc::UnboundedReceiver<SessionCommand>,
-    sink: EventSink,
-) -> anyhow::Result<()> {
-    // Only the TCP connect is bounded by a timeout: the handshake may wait on the user
-    // (host key confirmation, password prompt) for as long as they need.
-    let stream = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        TcpStream::connect((params.host.as_str(), params.port)),
-    )
-    .await
-    .context(t("연결 시간 초과", "Connection timed out"))?
-    .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
+/// TCP, the SSH handshake, authentication, forwardings and the shell channel.
+async fn open(
+    params: &ConnectParams,
+    sink: &EventSink,
+) -> anyhow::Result<(Arc<client::Handle<ClientHandler>>, russh::Channel<client::Msg>, JoinSet<()>)> {
+    let stream = TcpStream::connect((params.host.as_str(), params.port))
+        .await
+        .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
     stream.set_nodelay(true)?;
 
     // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
@@ -133,11 +124,11 @@ pub(crate) async fn run(
     };
     let mut session = client::connect_stream(config, stream, handler).await?;
 
-    authenticate(&mut session, &params, &sink).await?;
+    authenticate(&mut session, params, sink).await?;
     // Shared with forwarding listeners and SFTP, which open their own channels.
     let session = Arc::new(session);
     let mut tasks = JoinSet::new();
-    forward::start(&session, &params.forwards, &sink, &mut tasks).await;
+    forward::start(&session, &params.forwards, sink, &mut tasks).await;
 
     let channel = session.channel_open_session().await?;
     channel
@@ -152,6 +143,16 @@ pub(crate) async fn run(
         )
         .await?;
     channel.request_shell(false).await?;
+    Ok((session, channel, tasks))
+}
+
+pub(crate) async fn run(
+    params: ConnectParams,
+    mut commands: mpsc::UnboundedReceiver<SessionCommand>,
+    sink: EventSink,
+) -> anyhow::Result<()> {
+    // Up to the shell, within the connect time limit; prompts (host key, password) pause it.
+    let (session, channel, mut tasks) = sink.connecting(&params, open(&params, &sink)).await?;
     sink.send(SessionEvent::Connected);
 
     let (mut reader, writer) = channel.split();

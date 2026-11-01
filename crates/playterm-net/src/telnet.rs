@@ -4,7 +4,6 @@
 //! Negotiation is passive: we never start negotiating, so connecting to a raw TCP service
 //! that does not speak Telnet does not inject IAC bytes into its stream.
 
-use std::time::Duration;
 
 use anyhow::Context as _;
 use playterm_i18n::{t, tr};
@@ -15,7 +14,6 @@ use tokio::sync::mpsc;
 use crate::keepalive::{IdleTimer, sleep_until};
 use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 const SE: u8 = 240;
 const NOP: u8 = 241;
@@ -253,13 +251,13 @@ pub(crate) async fn run(
     mut commands: mpsc::UnboundedReceiver<SessionCommand>,
     sink: EventSink,
 ) -> anyhow::Result<()> {
-    let stream = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        TcpStream::connect((params.host.as_str(), params.port)),
-    )
-    .await
-    .context(t("연결 시간 초과", "Connection timed out"))?
-    .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
+    let stream = sink
+        .connecting(&params, async {
+            TcpStream::connect((params.host.as_str(), params.port)).await.with_context(|| {
+                tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port)
+            })
+        })
+        .await?;
     stream.set_nodelay(true)?;
     sink.send(SessionEvent::Connected);
 
@@ -416,6 +414,7 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 known_hosts: Default::default(),
+                connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
             };
             let (handle, commands, sink) = SessionHandle::new(Arc::new(|| {}));
             let task = tokio::spawn(run(params, commands, sink));

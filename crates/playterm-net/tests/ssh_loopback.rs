@@ -233,6 +233,7 @@ impl Fixture {
             cols: 80,
             rows: 24,
             known_hosts: self.known_hosts.clone(),
+            connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
         }
     }
 
@@ -326,6 +327,38 @@ fn first_connect_asks_for_host_key_then_runs_shell() {
         known_hosts::check_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), &fx.known_hosts).unwrap()
     );
     let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+}
+
+#[test]
+fn silent_server_times_out() {
+    // Accepts TCP connections (the backlog) but never says a word of SSH.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let fx = Fixture::new("silent", &[]);
+    let params = ConnectParams {
+        port: silent.local_addr().unwrap().port(),
+        connect_timeout: Duration::from_secs(1),
+        ..fx.params()
+    };
+    let started = Instant::now();
+    let h = fx.connect(params);
+    let SessionEvent::Closed(Some(reason)) = skip_notices(&h) else { panic!("expected a timeout") };
+    assert!(reason.contains("1"), "{reason}");
+    let took = started.elapsed();
+    assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(5), "{took:?}");
+}
+
+#[test]
+fn time_spent_on_prompts_does_not_count() {
+    let fx = Fixture::new("slow-user", &[]);
+    let h = fx.connect(ConnectParams { connect_timeout: Duration::from_secs(1), ..fx.params() });
+    // The user takes longer than the whole limit over the host key and then the password.
+    let SessionEvent::HostKeyCheck(check) = skip_notices(&h) else { panic!("expected host key check") };
+    std::thread::sleep(Duration::from_millis(1500));
+    check.answer(true);
+    let prompt = expect_prompt(&h);
+    std::thread::sleep(Duration::from_millis(1500));
+    prompt.answer(Some(vec!["secret".into()]));
     expect_connected(&h);
 }
 
