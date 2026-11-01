@@ -176,6 +176,7 @@ pub(crate) async fn run(
                 Some(SessionCommand::Resize { cols, rows }) => {
                     writer.window_change(cols.into(), rows.into(), 0, 0).await?;
                 }
+                Some(SessionCommand::Rdp(_)) => {}
                 Some(SessionCommand::OpenSftp) => {
                     let (session, sink) = (session.clone(), sink.clone());
                     tasks.spawn(async move {

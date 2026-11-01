@@ -25,7 +25,7 @@ use crate::settings_dialog::{SettingsDialog, SettingsResult};
 use crate::sidebar::{self, Sidebar, SidebarAction, VaultState};
 use crate::site_manager::{SiteManager, SiteManagerResult};
 use crate::view::UserInput;
-use crate::{clipboard, fonts, status_bar, view};
+use crate::{clipboard, fonts, rdp_view, status_bar, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
 /// App shortcuts, consumed before the terminal sees the key events. Ctrl+Shift+Tab must come
@@ -168,6 +168,8 @@ pub struct PlaytermApp {
     sftp_panel: bool,
     /// Command input bar under the terminal (shown per `settings.compose_bar`).
     compose: ComposeBar,
+    /// Size of the terminal area in pixels: the size an RDP desktop opened now would get.
+    view_px: (u16, u16),
 }
 
 impl PlaytermApp {
@@ -225,6 +227,7 @@ impl PlaytermApp {
             screensaver_guard: ScreenSaverGuard::default(),
             sftp_panel: false,
             compose: ComposeBar::default(),
+            view_px: (1280, 800),
         };
         for profile in initial {
             // A saved site (opened in a new window) connects as one: with its vault password.
@@ -313,6 +316,8 @@ impl PlaytermApp {
             forwards: profile.forwards.clone(),
             serial: profile.serial.clone(),
             keepalive: profile.keepalive.clone(),
+            rdp: profile.rdp.clone(),
+            desktop: self.view_px,
             term_type: profile.term_type.clone(),
             cols: 80,
             rows: 24,
@@ -1517,9 +1522,18 @@ impl eframe::App for PlaytermApp {
         }
 
         let style = self.view_style();
+        let mut view_px = self.view_px;
         let output = egui::CentralPanel::no_frame()
-            .show(ui, |ui| self.sessions.get_mut(self.active).map(|s| view::show(ui, s, !modal_open, &style)))
+            .show(ui, |ui| {
+                let area = ui.available_rect_before_wrap();
+                let ppp = ui.ctx().pixels_per_point();
+                view_px = ((area.width() * ppp) as u16, (area.height() * ppp) as u16);
+                self.sessions.get_mut(self.active).map(|s| {
+                    if s.shows_rdp() { rdp_view::show(ui, s, !modal_open) } else { view::show(ui, s, !modal_open, &style) }
+                })
+            })
             .inner;
+        self.view_px = view_px;
         if let Some(output) = output {
             if output.zoom_steps != 0.0 {
                 self.zoom(output.zoom_steps);

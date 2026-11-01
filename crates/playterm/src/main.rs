@@ -18,6 +18,7 @@ mod mouse;
 mod power;
 mod profile_form;
 mod putty;
+mod rdp_view;
 mod search_bar;
 mod session;
 mod settings_dialog;
@@ -36,8 +37,8 @@ use playterm_net::{ForwardKind, ForwardRule};
 
 fn usage() -> &'static str {
     t(
-        "사용법: playterm [--cp949] [-i 키파일] [-L|-R 포트:호스트:포트] [-D 포트] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:속도]]...",
-        "Usage: playterm [--cp949] [-i keyfile] [-L|-R port:host:port] [-D port] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:speed]]...",
+        "사용법: playterm [--cp949] [-i 키파일] [-L|-R 포트:호스트:포트] [-D 포트] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:속도] | rdp://[user@]host[:port]]...",
+        "Usage: playterm [--cp949] [-i keyfile] [-L|-R port:host:port] [-D port] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:speed] | rdp://[user@]host[:port]]...",
     )
 }
 

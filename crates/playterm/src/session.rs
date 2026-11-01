@@ -11,6 +11,7 @@ use crate::autologin::{LoginAction, LoginRunner, LoginScript};
 use crate::console::{self, KeyResult, LineEditor, Parsed, Request};
 use crate::local_fs;
 use crate::logging::{self, LogPlan};
+use crate::rdp_view::RdpScreen;
 use crate::search_bar::SearchBar;
 use crate::sftp_view::SftpBrowser;
 
@@ -122,6 +123,8 @@ pub struct Session {
     pub in_broadcast: bool,
     /// Color of the tab in the tab bar.
     pub tab_color: Option<TabColor>,
+    /// The remote screen of an RDP connection.
+    pub rdp: RdpScreen,
     /// An SFTP channel was requested and has not answered yet.
     sftp_pending: bool,
     /// Open the window when the requested SFTP channel arrives (not just for the side panel).
@@ -194,6 +197,7 @@ impl Session {
             search: None,
             in_broadcast: true,
             tab_color: None,
+            rdp: RdpScreen::default(),
             sftp_pending: false,
             sftp_window: false,
             sftp_error: None,
@@ -242,6 +246,11 @@ impl Session {
         self.save_on_login = None;
         self.rx_bytes = 0;
         self.tx_bytes = 0;
+        // An RDP desktop that follows the tab starts at the tab's size (when it is known).
+        if self.rdp.view_px.0 > 0 {
+            params.desktop = self.rdp.view_px;
+        }
+        self.rdp.reset();
         let handle = net.connect(params.clone(), waker);
         self.remote = Some(Remote { params, handle });
         self.state = SessionState::Connecting;
@@ -287,6 +296,30 @@ impl Session {
         self.remote.as_ref().map(|r| r.params.protocol)
     }
 
+    pub fn is_rdp(&self) -> bool {
+        self.protocol() == Some(Protocol::Rdp)
+    }
+
+    /// The remote desktop is up and has a picture (before that, the terminal shows progress).
+    pub fn shows_rdp(&self) -> bool {
+        self.is_rdp() && self.state == SessionState::Connected && self.rdp.has_picture()
+    }
+
+    /// The RDP desktop follows the size of the tab.
+    pub fn rdp_fits_tab(&self) -> bool {
+        self.remote.as_ref().is_some_and(|r| r.params.rdp.fits_tab())
+    }
+
+    /// Keyboard and mouse for the remote desktop.
+    pub fn send_rdp(&mut self, inputs: Vec<playterm_net::RdpInput>) {
+        if !inputs.is_empty()
+            && self.state == SessionState::Connected
+            && let Some(remote) = &self.remote
+        {
+            remote.handle.send_rdp(inputs);
+        }
+    }
+
     pub fn can_break(&self) -> bool {
         self.state == SessionState::Connected && matches!(self.protocol(), Some(Protocol::Serial | Protocol::Telnet))
     }
@@ -310,6 +343,10 @@ impl Session {
         remote.handle.close();
         remote.params.cols = self.terminal.cols() as u16;
         remote.params.rows = self.terminal.rows() as u16;
+        if self.rdp.view_px.0 > 0 {
+            remote.params.desktop = self.rdp.view_px;
+        }
+        self.rdp.reset();
         remote.handle = net.connect(remote.params.clone(), waker);
         self.leave_prompt();
         let target = self.target();
@@ -391,6 +428,10 @@ impl Session {
     /// Processes pending network and terminal events. Returns `true` if anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        if let Some(frame) = self.remote.as_ref().and_then(|r| r.handle.take_frame()) {
+            self.rdp.pending = Some(frame);
+            changed = true;
+        }
         while let Some(event) = self.remote.as_ref().and_then(|r| r.handle.try_recv()) {
             changed = true;
             match event {
@@ -429,6 +470,7 @@ impl Session {
                 }
                 SessionEvent::Closed(reason) => {
                     self.state = SessionState::Closed;
+                    self.rdp.reset();
                     self.save_on_login = None;
                     self.host_key = None;
                     self.auth = None;

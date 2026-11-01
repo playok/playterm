@@ -43,6 +43,13 @@ pub enum UserInput {
 impl UserInput {
     /// Types this into `session`.
     pub fn send_to(&self, session: &mut Session) {
+        // A remote desktop takes typed text; terminal key sequences mean nothing there.
+        if session.is_rdp() {
+            if let UserInput::Text(text) | UserInput::Paste(text) = self {
+                session.send_text(text);
+            }
+            return;
+        }
         match self {
             UserInput::Text(text) => session.send_text(text),
             UserInput::Key { key, modifiers } => {

@@ -54,8 +54,10 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
             if s.has_target() {
                 ui.separator();
                 ui.label(RichText::new(s.target()).small());
-                ui.separator();
-                ui.label(RichText::new(s.charset_label()).small());
+                if !s.is_rdp() {
+                    ui.separator();
+                    ui.label(RichText::new(s.charset_label()).small());
+                }
             }
             if s.is_logging() {
                 ui.separator();
@@ -82,13 +84,22 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
             }
             let Some(s) = session else { return };
             ui.separator();
-            ui.label(RichText::new(format!("↑ {}", human_size(s.tx_bytes))).small().monospace())
-                .on_hover_text(t("이 연결에서 보낸 데이터 (입력, 응답)", "Data sent on this connection (input, replies)"));
-            ui.label(RichText::new(format!("↓ {}", human_size(s.rx_bytes))).small().monospace())
-                .on_hover_text(t("이 연결에서 받은 데이터 (화면 출력)", "Data received on this connection (screen output)"));
-            ui.separator();
-            ui.label(RichText::new(format!("{}×{}", s.terminal.cols(), s.terminal.rows())).small().monospace())
-                .on_hover_text(t("터미널 크기 (열×행)", "Terminal size (columns×rows)"));
+            // An RDP desktop is not counted (its traffic is the picture, not terminal data).
+            if !s.is_rdp() {
+                ui.label(RichText::new(format!("↑ {}", human_size(s.tx_bytes))).small().monospace())
+                    .on_hover_text(t("이 연결에서 보낸 데이터 (입력, 응답)", "Data sent on this connection (input, replies)"));
+                ui.label(RichText::new(format!("↓ {}", human_size(s.rx_bytes))).small().monospace())
+                    .on_hover_text(t("이 연결에서 받은 데이터 (화면 출력)", "Data received on this connection (screen output)"));
+                ui.separator();
+            }
+            if s.is_rdp() {
+                let (w, h) = s.rdp.size;
+                ui.label(RichText::new(format!("{w}×{h} px")).small().monospace())
+                    .on_hover_text(t("원격 데스크톱 해상도", "Remote desktop resolution"));
+            } else {
+                ui.label(RichText::new(format!("{}×{}", s.terminal.cols(), s.terminal.rows())).small().monospace())
+                    .on_hover_text(t("터미널 크기 (열×행)", "Terminal size (columns×rows)"));
+            }
         });
     });
 }

@@ -310,12 +310,21 @@ pub fn host_key(ctx: &egui::Context, session: &mut Session) {
         ui.set_width(460.0);
         ui.heading(t("알 수 없는 호스트", "Unknown host"));
         ui.add_space(6.0);
-        ui.label(tr!(
-            "{}:{} 의 호스트 키가 known_hosts에 없습니다.\n처음 접속하는 서버라면 지문이 맞는지 확인한 뒤 진행하세요.",
-            "The host key of {}:{} is not in known_hosts.\nIf this is your first connection to the server, check that the fingerprint is correct before continuing.",
-            check.host,
-            check.port
-        ));
+        if check.certificate {
+            ui.label(tr!(
+                "{}:{} 의 RDP 서버 인증서를 처음 봅니다 (known_rdp_hosts에 없음).\n처음 접속하는 서버라면 지문이 맞는지 확인한 뒤 진행하세요. 신뢰하면 기억해 두고, 나중에 인증서가 바뀌면 경고합니다.",
+                "The RDP server certificate of {}:{} is new (not in known_rdp_hosts).\nIf this is your first connection to the server, check the fingerprint before continuing. A trusted certificate is remembered, and a later change is reported.",
+                check.host,
+                check.port
+            ));
+        } else {
+            ui.label(tr!(
+                "{}:{} 의 호스트 키가 known_hosts에 없습니다.\n처음 접속하는 서버라면 지문이 맞는지 확인한 뒤 진행하세요.",
+                "The host key of {}:{} is not in known_hosts.\nIf this is your first connection to the server, check that the fingerprint is correct before continuing.",
+                check.host,
+                check.port
+            ));
+        }
         ui.add_space(6.0);
         egui::Grid::new("hk").num_columns(2).show(ui, |ui| {
             ui.label(t("키 종류", "Key type"));

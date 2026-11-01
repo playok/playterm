@@ -22,6 +22,7 @@ const HELP_KO: &str = "\
   ssh [-p 포트] [-l 사용자] [-i 키파일] [-L|-R 포트:호스트:포트] [-D 포트] [--cp949] [사용자@]호스트[:포트]
   telnet 호스트 [포트]              Telnet 접속 (--cp949: 한글 구형 장비)
   serial COM3 [속도]                시리얼 콘솔 (기본 9600 8N1)
+  rdp [사용자@]호스트[:포트]         원격 데스크톱 (Windows RDP)
   open                              사이트 관리 창 열기
   open 이름|번호                    저장된 사이트에 접속 (번호는 sites 의 번호)
   sites [검색어]                    저장된 사이트 목록
@@ -42,6 +43,7 @@ const HELP_EN: &str = "\
   ssh [-p port] [-l user] [-i keyfile] [-L|-R port:host:port] [-D port] [--cp949] [user@]host[:port]
   telnet host [port]                Telnet connection (--cp949: older Korean devices)
   serial COM3 [speed]               Serial console (default 9600 8N1)
+  rdp [user@]host[:port]            Remote desktop (Windows RDP)
   open                              Open the Site Manager
   open name|number                  Connect to a saved site (number as listed by sites)
   sites [filter]                    List saved sites
@@ -217,6 +219,10 @@ pub fn parse(line: &str) -> Parsed {
         "ssh" => connect(parse_ssh(rest)),
         "telnet" => connect(parse_telnet(rest)),
         "serial" | "com" => connect(parse_serial(rest)),
+        "rdp" | "mstsc" => connect(match rest {
+            [target] => parse_url(&format!("rdp://{target}")),
+            _ => Err(t("사용법: rdp [사용자@]호스트[:포트]", "Usage: rdp [user@]host[:port]").into()),
+        }),
         "open" | "connect" | "o" if text.is_empty() => Parsed::Request(Request::SiteManager),
         "open" | "connect" | "o" => Parsed::Request(Request::OpenSite(text)),
         "ls" => parse_ls(rest, false),

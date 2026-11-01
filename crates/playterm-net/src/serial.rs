@@ -234,7 +234,7 @@ where
                     stream.send_break().await.context(t("BREAK 신호를 보낼 수 없습니다", "Cannot send BREAK"))?;
                     sink.notice(t("BREAK 신호를 보냈습니다", "Sent BREAK"));
                 }
-                Some(SessionCommand::Resize { .. }) => {}
+                Some(SessionCommand::Resize { .. } | SessionCommand::Rdp(_)) => {}
                 Some(SessionCommand::OpenSftp) => {
                     sink.send(SessionEvent::Sftp(Err(t(
                         "시리얼 세션에서는 SFTP를 쓸 수 없습니다",

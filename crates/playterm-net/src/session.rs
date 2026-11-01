@@ -1,11 +1,12 @@
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc as std_mpsc};
+use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 
 use tokio::sync::{mpsc, oneshot};
 
 use crate::forward::ForwardRule;
 use crate::keepalive::KeepAlive;
+use crate::rdp::{RdpFrame, RdpInput, RdpSettings};
 use crate::serial::SerialSettings;
 use crate::sftp::SftpConnection;
 
@@ -20,16 +21,19 @@ pub enum Protocol {
     Telnet,
     /// Local COM port; `host`/`port` are unused, see [`ConnectParams::serial`].
     Serial,
+    /// Windows Remote Desktop; shown as a picture instead of a terminal.
+    Rdp,
 }
 
 impl Protocol {
-    pub const ALL: [Protocol; 3] = [Protocol::Ssh, Protocol::Telnet, Protocol::Serial];
+    pub const ALL: [Protocol; 4] = [Protocol::Ssh, Protocol::Telnet, Protocol::Serial, Protocol::Rdp];
 
     pub fn default_port(self) -> u16 {
         match self {
             Protocol::Ssh => 22,
             Protocol::Telnet => 23,
             Protocol::Serial => 0,
+            Protocol::Rdp => 3389,
         }
     }
 }
@@ -40,6 +44,7 @@ impl fmt::Display for Protocol {
             Protocol::Ssh => "SSH",
             Protocol::Telnet => "Telnet",
             Protocol::Serial => "Serial",
+            Protocol::Rdp => "RDP",
         })
     }
 }
@@ -67,6 +72,10 @@ pub struct ConnectParams {
     pub serial: SerialSettings,
     /// Keeps the connection from timing out while idle.
     pub keepalive: KeepAlive,
+    /// Options for [`Protocol::Rdp`].
+    pub rdp: RdpSettings,
+    /// Size of the tab in pixels: the RDP desktop size when it follows the tab.
+    pub desktop: (u16, u16),
     /// Value for the `TERM` variable / Telnet terminal type.
     pub term_type: String,
     pub cols: u16,
@@ -87,6 +96,7 @@ impl fmt::Debug for ConnectParams {
             .field("use_agent", &self.use_agent)
             .field("forwards", &self.forwards)
             .field("keepalive", &self.keepalive)
+            .field("rdp", &self.rdp)
             .field("term_type", &self.term_type)
             .finish_non_exhaustive()
     }
@@ -117,6 +127,8 @@ pub struct HostKeyCheck {
     pub port: u16,
     pub algorithm: String,
     pub fingerprint: String,
+    /// An RDP server's TLS certificate (kept in `known_rdp_hosts`) rather than an SSH host key.
+    pub certificate: bool,
     reply: oneshot::Sender<bool>,
 }
 
@@ -161,6 +173,8 @@ pub(crate) enum SessionCommand {
     OpenSftp,
     /// Serial BREAK / Telnet IAC BRK.
     SendBreak,
+    /// Keyboard and mouse for an RDP desktop.
+    Rdp(Vec<RdpInput>),
     Close,
 }
 
@@ -168,13 +182,29 @@ pub(crate) enum SessionCommand {
 pub struct SessionHandle {
     commands: mpsc::UnboundedSender<SessionCommand>,
     events: std_mpsc::Receiver<SessionEvent>,
+    /// Latest RDP screen not yet taken by the UI.
+    frame: Arc<Mutex<Option<RdpFrame>>>,
 }
 
 impl SessionHandle {
     pub(crate) fn new(waker: Waker) -> (Self, mpsc::UnboundedReceiver<SessionCommand>, EventSink) {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = std_mpsc::channel();
-        (Self { commands: cmd_tx, events: ev_rx }, cmd_rx, EventSink { tx: ev_tx, waker })
+        let frame = Arc::new(Mutex::new(None));
+        let sink = EventSink { tx: ev_tx, waker, frame: frame.clone() };
+        (Self { commands: cmd_tx, events: ev_rx, frame }, cmd_rx, sink)
+    }
+
+    /// Keyboard and mouse input for an RDP session.
+    pub fn send_rdp(&self, inputs: Vec<RdpInput>) {
+        if !inputs.is_empty() {
+            let _ = self.commands.send(SessionCommand::Rdp(inputs));
+        }
+    }
+
+    /// The newest RDP screen since the last call (older ones are skipped).
+    pub fn take_frame(&self) -> Option<RdpFrame> {
+        self.frame.lock().ok()?.take()
     }
 
     pub fn send(&self, data: Vec<u8>) {
@@ -210,6 +240,7 @@ impl SessionHandle {
 pub(crate) struct EventSink {
     tx: std_mpsc::Sender<SessionEvent>,
     waker: Waker,
+    frame: Arc<Mutex<Option<RdpFrame>>>,
 }
 
 impl EventSink {
@@ -220,6 +251,14 @@ impl EventSink {
 
     pub fn waker(&self) -> Waker {
         self.waker.clone()
+    }
+
+    /// Replaces the screen waiting for the UI.
+    pub fn set_frame(&self, frame: RdpFrame) {
+        if let Ok(mut slot) = self.frame.lock() {
+            *slot = Some(frame);
+        }
+        (self.waker)();
     }
 
     pub fn notice(&self, text: impl Into<String>) {
@@ -240,6 +279,21 @@ impl EventSink {
             port,
             algorithm,
             fingerprint,
+            certificate: false,
+            reply,
+        }));
+        rx.await.unwrap_or(false)
+    }
+
+    /// Asks the user whether to trust an RDP server certificate seen for the first time.
+    pub async fn confirm_certificate(&self, host: &str, port: u16, fingerprint: String) -> bool {
+        let (reply, rx) = oneshot::channel();
+        self.send(SessionEvent::HostKeyCheck(HostKeyCheck {
+            host: host.to_owned(),
+            port,
+            algorithm: "X.509 (TLS)".into(),
+            fingerprint,
+            certificate: true,
             reply,
         }));
         rx.await.unwrap_or(false)

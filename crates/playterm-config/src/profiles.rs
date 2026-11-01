@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use playterm_net::{ForwardRule, KeepAlive, Protocol, SerialSettings};
+use playterm_net::{ForwardRule, KeepAlive, Protocol, RdpSettings, SerialSettings};
 use playterm_term::Charset;
 use serde::{Deserialize, Serialize};
 
@@ -144,6 +144,8 @@ pub struct SessionProfile {
     pub keepalive: KeepAlive,
     /// Color of the site's tabs; `None` for the usual look.
     pub tab_color: Option<TabColor>,
+    /// Options for RDP sites.
+    pub rdp: RdpSettings,
 }
 
 impl Default for SessionProfile {
@@ -167,6 +169,7 @@ impl Default for SessionProfile {
             auto_login: AutoLogin::default(),
             keepalive: KeepAlive::default(),
             tab_color: None,
+            rdp: RdpSettings::default(),
         }
     }
 }

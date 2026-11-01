@@ -21,6 +21,7 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
             "ssh" => (Protocol::Ssh, rest),
             "telnet" => (Protocol::Telnet, rest),
             "serial" | "com" => (Protocol::Serial, rest),
+            "rdp" => (Protocol::Rdp, rest),
             other => return Err(tr!("지원하지 않는 프로토콜: {other}", "Unsupported protocol: {other}")),
         },
         None => (Protocol::Ssh, url),
@@ -202,6 +203,32 @@ fn log_ui(ui: &mut egui::Ui, log: &mut playterm_config::LogSettings) {
             }
         });
     });
+}
+
+fn size_label(size: (u16, u16)) -> String {
+    if size.0 == 0 || size.1 == 0 {
+        t("탭 크기에 맞춤 (창 크기를 바꾸면 따라감)", "Fit the tab (follows the window size)").into()
+    } else {
+        format!("{} × {}", size.0, size.1)
+    }
+}
+
+/// Desktop size and clipboard of an RDP site.
+fn rdp_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
+    ui.label(t("화면 크기", "Screen size"));
+    let current = (rdp.width, rdp.height);
+    egui::ComboBox::from_id_salt("rdp-size").width(260.0).selected_text(size_label(current)).show_ui(ui, |ui| {
+        for size in playterm_net::RdpSettings::SIZES {
+            if ui.selectable_label(current == size, size_label(size)).clicked() {
+                (rdp.width, rdp.height) = size;
+            }
+        }
+    });
+    ui.end_row();
+
+    ui.label("");
+    ui.checkbox(&mut rdp.clipboard, t("클립보드 공유 (복사·붙여넣기)", "Share the clipboard (copy and paste)"));
+    ui.end_row();
 }
 
 /// Swatches to pick the site's tab color, "none" first.
@@ -482,9 +509,16 @@ impl ProfileForm {
             // Telnet and serial consoles log in at a prompt: the site manager keeps a user name
             // and password for the automatic login.
             let ssh = p.protocol == Protocol::Ssh;
-            if ssh || opts.meta {
+            let rdp = p.protocol == Protocol::Rdp;
+            if ssh || rdp || opts.meta {
                 ui.label(t("사용자", "User"));
-                let hint = if ssh { "" } else { t("자동 로그인의 {user}", "{user} in the automatic login") };
+                let hint = if ssh {
+                    ""
+                } else if rdp {
+                    t(r"사용자 또는 DOMAIN\사용자", r"user or DOMAIN\user")
+                } else {
+                    t("자동 로그인의 {user}", "{user} in the automatic login")
+                };
                 let user = ui.add(egui::TextEdit::singleline(&mut p.username).hint_text(hint));
                 submit |= enter(ui, &user);
                 ui.end_row();
@@ -492,7 +526,7 @@ impl ProfileForm {
                 ui.label(t("비밀번호", "Password"));
                 let hint = if self.has_saved_password && p.save_password {
                     t("저장된 비밀번호 유지 (바꾸려면 입력)", "Saved password kept (type to change)")
-                } else if ssh {
+                } else if ssh || rdp {
                     t("비워두면 접속 시 물어봅니다", "Asked on connect if empty")
                 } else {
                     t("자동 로그인의 {password}", "{password} in the automatic login")
@@ -536,24 +570,29 @@ impl ProfileForm {
                 ui.end_row();
             }
 
-            ui.label(t("인코딩", "Encoding"));
-            egui::ComboBox::from_id_salt("charset").selected_text(p.charset.to_string()).show_ui(ui, |ui| {
-                for c in Charset::ALL {
-                    ui.selectable_value(&mut p.charset, c, c.to_string());
-                }
-            });
-            ui.end_row();
+            if rdp {
+                rdp_rows(ui, &mut p.rdp);
+            } else {
+                ui.label(t("인코딩", "Encoding"));
+                egui::ComboBox::from_id_salt("charset").selected_text(p.charset.to_string()).show_ui(ui, |ui| {
+                    for c in Charset::ALL {
+                        ui.selectable_value(&mut p.charset, c, c.to_string());
+                    }
+                });
+                ui.end_row();
 
-            ui.label(t("터미널 타입", "Terminal type"));
-            ui.text_edit_singleline(&mut p.term_type);
-            ui.end_row();
+                ui.label(t("터미널 타입", "Terminal type"));
+                ui.text_edit_singleline(&mut p.term_type);
+                ui.end_row();
+            }
         });
 
         if self.profile.protocol == Protocol::Ssh {
             ui.add_space(4.0);
             self.forwards_ui(ui);
         }
-        if opts.meta {
+        // A remote desktop has no text to log or prompts to answer.
+        if opts.meta && self.profile.protocol != Protocol::Rdp {
             self.auto_login_ui(ui);
             keepalive_ui(ui, &mut self.profile.keepalive, self.profile.protocol);
             log_ui(ui, &mut self.profile.log);
@@ -749,6 +788,10 @@ impl ProfileForm {
                     self.forwards.iter().enumerate().map(|(i, r)| r.to_rule(i + 1)).collect::<Result<_, _>>()?;
             }
             Protocol::Serial => unreachable!("handled above"),
+            Protocol::Rdp => {
+                p.identity_file.clear();
+                p.forwards.clear();
+            }
             Protocol::Telnet => {
                 // The user name and password are for the automatic login at the remote prompt.
                 p.identity_file.clear();
@@ -798,6 +841,9 @@ mod tests {
 
         let r = parse_url("serial://COM3:115200").unwrap();
         assert_eq!((r.protocol, r.serial.port.as_str(), r.serial.baud), (Protocol::Serial, "COM3", 115200));
+        let r = parse_url("rdp://admin@win01").unwrap();
+        assert_eq!((r.protocol, r.host.as_str(), r.port, r.username.as_str()), (Protocol::Rdp, "win01", 3389, "admin"));
+        assert_eq!(parse_url("rdp://10.0.0.9:3390").unwrap().port, 3390);
         assert_eq!(parse_url("serial://COM1").unwrap().serial.baud, 9600);
         assert!(parse_url("serial://COM1:fast").is_err());
 

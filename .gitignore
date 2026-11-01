@@ -1,3 +1,4 @@
 /target
 /dist
-/tools
+/tools/upx
+/tools/dev-rdpd/target

@@ -297,6 +297,7 @@ pub(crate) async fn run(
                     writer.write_all(&[IAC, BRK]).await?;
                     sink.notice(t("BREAK 신호를 보냈습니다", "Sent BREAK"));
                 }
+                Some(SessionCommand::Rdp(_)) => {}
                 Some(SessionCommand::OpenSftp) => {
                     sink.send(SessionEvent::Sftp(Err(t(
                         "Telnet 세션에서는 SFTP를 쓸 수 없습니다",
@@ -409,6 +410,8 @@ mod tests {
                 forwards: Vec::new(),
                 serial: Default::default(),
                 keepalive: KeepAlive { mode, interval: 1, text: "\\r".into() },
+                rdp: Default::default(),
+                desktop: (1024, 768),
                 term_type: "xterm".into(),
                 cols: 80,
                 rows: 24,
