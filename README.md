@@ -49,6 +49,18 @@ cargo build --release
 두 스크립트 모두 LLVM(clang) 경로를 알아서 PATH 에 넣고, `--locked` 로 빌드해 `Cargo.lock` 에 적힌 의존성 버전만 씁니다.
 `release.cmd` 는 커밋하지 않은 변경이 있으면 멈춥니다(시험용 패키지는 `release.cmd dirty`).
 
+### GitHub 릴리스 (자동 빌드)
+
+`v` 로 시작하는 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 clippy 검사 → 테스트 → x64·ARM64 패키지(UPX 압축)를 만들어
+그 태그의 릴리스에 zip 두 개와 `SHA256SUMS.txt` 를 올립니다. 태그는 `Cargo.toml` 의 버전과 같아야 합니다.
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Actions 탭에서 **Release → Run workflow** 로 직접 실행하면 릴리스는 만들지 않고, 같은 빌드 결과를 워크플로 아티팩트로 남깁니다(빌드 시험용).
+
 ### 릴리스 패키지
 
 ```powershell

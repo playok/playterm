@@ -49,6 +49,18 @@ cargo build --release
 Both scripts put LLVM (clang) on PATH by themselves and build with `--locked`, so only the dependency versions in `Cargo.lock` are used.
 `release.cmd` stops when there are uncommitted changes (`release.cmd dirty` makes a test package anyway).
 
+### GitHub releases (automatic build)
+
+Pushing a tag that starts with `v` runs GitHub Actions (`.github/workflows/release.yml`): clippy → tests → x64 and ARM64 packages (UPX-compressed),
+uploaded with `SHA256SUMS.txt` to that tag's release. The tag must match the version in `Cargo.toml`.
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Running it by hand from the Actions tab (**Release → Run workflow**) makes no release; the same build is kept as a workflow artifact (to try the build).
+
 ### Release packages
 
 ```powershell
