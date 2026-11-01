@@ -1,14 +1,32 @@
 # playterm
 
-Windows용 Telnet/SSH 터미널. Rust(egui + alacritty_terminal + russh)로 작성.
+[English](README.en.md) | **한국어**
+
+**관리하는 모든 장비를 한 창에서 — SSH, Telnet, 시리얼 콘솔, Windows 원격 데스크톱을 탭으로.**
+
+playterm은 Rust(egui + alacritty_terminal + russh + IronRDP)로 만든 Windows 터미널입니다.
+x64·ARM64용 실행 파일 하나로 동작하며, 설치나 런타임 설치가 필요 없습니다.
+
+## 주요 기능
+
+- **SSH · Telnet · 시리얼 · RDP** 를 한 창에서 함께 사용
+- **화면 분할**: 탭을 가장자리로 끌어 여러 세션을 동시에 보기
+- **여러 사이트 한 번에 연결**: Ctrl/Shift+클릭으로 골라 한꺼번에 열거나, **템플릿**(탭·좌우·위아래·격자)으로 저장해 더블클릭으로 열기
+- **SSH**: 키 인증(OpenSSH / PuTTY `.ppk`, Pageant, Windows OpenSSH 에이전트), `-L` / `-R` / `-D` 포트 포워딩, 터미널 옆 SFTP 탐색기
+- **원격 데스크톱**: 탭 크기에 맞춘 해상도 자동 조절, 클립보드 공유, 한글 IME 입력, 서버 인증서 고정
+- **비밀번호 볼트**: 저장한 비밀번호를 마스터 비밀번호로 암호화 (Argon2id + XChaCha20-Poly1305)
+- **네트워크 장비 작업에 편리**: 자동 로그인, 여러 탭 동시 입력, 세션 로그, 접속 유지, CP949(EUC-KR) 및 인코딩 자동 감지
+- **사이트 관리**: 폴더, 사이트별 탭 색상, PuTTY 세션 가져오기, 연결 전 탭의 `playterm>` 명령 프롬프트
+- 한국어 / English UI, 다크 / 라이트 테마
 
 ## 구조
 
 | 크레이트 | 역할 |
 |---|---|
 | `crates/playterm-term` | 터미널 에뮬레이션(alacritty_terminal), UTF-8/CP949 변환, 색상 팔레트 |
-| `crates/playterm-net` | SSH(russh) / Telnet 전송, 세션 이벤트·명령 채널 |
+| `crates/playterm-net` | SSH(russh) / Telnet / 시리얼 / RDP(IronRDP) 전송, 세션 이벤트·명령 채널 |
 | `crates/playterm-config` | 세션 목록(`sessions.toml`), 비밀번호 볼트(`vault.toml`), 설정(`settings.toml`) |
+| `crates/playterm-i18n` | 한국어 / 영어 UI 문구 |
 | `crates/playterm` | GUI 앱(eframe/egui): 렌더링, 키보드/IME 입력, 대화상자 |
 
 ## 빌드
@@ -55,6 +73,7 @@ playterm --cp949 telnet://192.168.0.1     # CP949(EUC-KR) 구형 장비
 playterm -i ~/.ssh/id_ed25519 ssh://user@host   # 키 파일 지정
 playterm -L 8080:db:5432 -D 1080 ssh://user@host   # 포트 포워딩 (OpenSSH 와 같은 형식, -R 도 지원)
 playterm serial://COM3:115200             # 시리얼 콘솔 (8N1)
+playterm rdp://user@host                  # Windows 원격 데스크톱
 ```
 
 ## 로컬 명령 프롬프트
@@ -67,6 +86,7 @@ playterm serial://COM3:115200             # 시리얼 콘솔 (8N1)
 | `ssh [-p 포트] [-l 사용자] [-i 키] [-L/-R/-D ...] [--cp949] [사용자@]호스트[:포트]` | SSH 접속 (사용자 생략 시 Windows 사용자 이름) |
 | `telnet 호스트 [포트]` | Telnet 접속 |
 | `serial COM3 [속도]` | 시리얼 콘솔 |
+| `rdp [사용자@]호스트[:포트]` | 원격 데스크톱 |
 | `open` | 사이트 관리 창 |
 | `open 이름\|번호` | 저장된 사이트 접속 (번호는 `sites` 의 번호, 이름 일부만 써도 됨) |
 | `sites [검색어]` | 저장된 사이트 목록 |
@@ -229,7 +249,7 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 
 | 파일 | 내용 |
 |---|---|
-| `sessions.toml` | 저장된 세션 (비밀번호 없음) |
+| `sessions.toml` | 저장된 세션과 템플릿 (비밀번호 없음) |
 | `settings.toml` | 언어, 화면 테마, 글꼴, 크기, 색 테마, 스크롤백, 상태 표시줄, 명령 입력창, 절전 방지, 화면보호기 진입 방지 |
 | `vault.toml` | 저장된 비밀번호. 마스터 비밀번호 → Argon2id → XChaCha20-Poly1305 로 암호화 |
 | `known_hosts` | SSH 호스트 키. 알려진 호스트의 키가 바뀌면 접속을 거부합니다(중간자 공격 방지) |
@@ -276,3 +296,8 @@ cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 4. ~~SSH 키 인증 · Pageant / Windows OpenSSH 에이전트~~
 5. ~~SFTP · 포트 포워딩~~
 6. ~~시리얼(COM) · 세션 로깅~~
+7. ~~원격 데스크톱(RDP) · 탭 도킹 · 템플릿~~
+
+## 라이선스
+
+[MIT](LICENSE)

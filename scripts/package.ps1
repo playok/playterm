@@ -95,7 +95,9 @@ foreach ($arch in $Targets) {
     $stage = Join-Path $dist "playterm-$version-windows-$arch"
     Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
     New-Item -ItemType Directory $stage | Out-Null
-    Copy-Item "target\$triple\release\playterm.exe", "README.md" $stage
+    $docs = @("README.md", "README.en.md", "LICENSE")
+    Copy-Item "target\$triple\release\playterm.exe" $stage
+    Copy-Item $docs $stage
 
     if ($upxExe) {
         $exe = Join-Path $stage "playterm.exe"
@@ -106,7 +108,7 @@ foreach ($arch in $Targets) {
         if ($LASTEXITCODE -ne 0) { throw "UPX test failed for $arch" }
         Write-Host ("   UPX: {0:N1} MB -> {1:N1} MB" -f ($before / 1MB), ((Get-Item $exe).Length / 1MB))
     }
-    $extra = @(Get-ChildItem $stage | Where-Object { $_.Name -notin @("playterm.exe", "README.md") })
+    $extra = @(Get-ChildItem $stage | Where-Object { $_.Name -notin (@("playterm.exe") + $docs) })
     if ($extra) { throw "unexpected files in the package: $($extra.Name -join ', ')" }
 
     $zip = "$stage.zip"
