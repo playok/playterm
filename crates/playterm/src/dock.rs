@@ -300,9 +300,10 @@ impl Behavior<u64> for DockView<'_> {
             .into_iter()
             .map(|(text, font)| WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font))
             .collect();
-        let close_size = font.size + 2.0;
+        // No close button: it was easy to hit by mistake. Tabs close from their context menu,
+        // with a middle click or with Ctrl+Shift+W.
         let margin = 8.0;
-        let width = galleys.iter().map(|g| g.size().x).sum::<f32>() + 4.0 + close_size + 2.0 * margin;
+        let width = galleys.iter().map(|g| g.size().x).sum::<f32>() + 2.0 * margin;
         let (_, rect) = ui.allocate_space(egui::vec2(width, ui.available_height()));
         let response = ui.interact(rect, id, Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Grab);
 
@@ -335,25 +336,7 @@ impl Behavior<u64> for DockView<'_> {
             }
         }
 
-        // The close button, over the right end of the tab.
-        let close_rect = Rect::from_center_size(
-            egui::pos2(rect.right() - margin - close_size / 2.0, rect.center().y),
-            egui::vec2(close_size, close_size),
-        );
-        let close = ui
-            .interact(close_rect, id.with("close"), Sense::click())
-            .on_hover_text(t("탭 닫기 (Ctrl+Shift+W)", "Close tab (Ctrl+Shift+W)"));
-        if ui.is_rect_visible(rect) && !state.is_being_dragged {
-            let visuals = ui.style().interact(&close);
-            if close.hovered() {
-                ui.painter().rect_filled(close_rect, 3.0, visuals.weak_bg_fill);
-            }
-            let r = close_rect.shrink(close_size * 0.3);
-            let stroke = Stroke::new(1.5, visuals.fg_stroke.color);
-            ui.painter().line_segment([r.left_top(), r.right_bottom()], stroke);
-            ui.painter().line_segment([r.right_top(), r.left_bottom()], stroke);
-        }
-        if close.clicked() || response.middle_clicked() {
+        if response.middle_clicked() {
             self.out.command = Some(Command::Close(i));
         }
         if response.clicked() {
