@@ -5,10 +5,12 @@
 use eframe::egui::{self, RichText};
 use playterm_i18n::{t, tr};
 
-/// An open-source crate built into the program.
+/// An open-source crate built into the program. Crates linked in several versions (each used
+/// by different crates) are one component with all of them.
 pub struct Component {
     pub name: &'static str,
-    pub version: &'static str,
+    /// Oldest first.
+    pub versions: &'static [&'static str],
     /// SPDX license expression, e.g. "MIT OR Apache-2.0".
     pub license: &'static str,
     pub url: &'static str,
@@ -83,8 +85,8 @@ impl LicensesDialog {
                 ui.add_space(4.0);
                 egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, false]).show(ui, |ui| {
                     for c in COMPONENTS.iter().filter(|c| matches(c, &self.filter)) {
-                        let title = format!("{} {}  —  {}", c.name, c.version, shorten(c.license, 48));
-                        egui::CollapsingHeader::new(title).id_salt(("component", c.name, c.version)).show(ui, |ui| {
+                        let title = format!("{} {}  —  {}", c.name, c.versions.join(" · "), shorten(c.license, 48));
+                        egui::CollapsingHeader::new(title).id_salt(("component", c.name)).show(ui, |ui| {
                             ui.add(egui::Label::new(tr!("라이선스: {}", "License: {}", c.license)).wrap());
                             ui.hyperlink(c.url);
                             if c.texts.is_empty() {
@@ -121,6 +123,15 @@ mod tests {
             assert!(COMPONENTS.iter().any(|c| c.name == name), "{name} is listed");
         }
         assert!(!COMPONENTS.iter().any(|c| c.name.starts_with("playterm")), "our own crates are not listed");
+        // Procedural macros run in the compiler only.
+        for name in ["syn", "serde_derive", "thiserror-impl"] {
+            assert!(!COMPONENTS.iter().any(|c| c.name == name), "{name} is not listed");
+        }
+        // A crate linked in two versions is listed once, with both.
+        let names: std::collections::BTreeSet<&str> = COMPONENTS.iter().map(|c| c.name).collect();
+        assert_eq!(names.len(), COMPONENTS.len(), "each name once");
+        let base64 = COMPONENTS.iter().find(|c| c.name == "base64").unwrap();
+        assert!(base64.versions.len() >= 2, "{:?}", base64.versions);
         for c in COMPONENTS {
             assert!(!c.license.is_empty(), "{} has a license", c.name);
             assert!(c.texts.iter().all(|&i| i < LICENSE_TEXTS.len()));
@@ -133,7 +144,7 @@ mod tests {
 
     #[test]
     fn searching() {
-        let c = Component { name: "serialport", version: "4", license: "MPL-2.0", url: "", texts: &[] };
+        let c = Component { name: "serialport", versions: &["4"], license: "MPL-2.0", url: "", texts: &[] };
         assert!(matches(&c, ""));
         assert!(matches(&c, "Serial"));
         assert!(matches(&c, "mpl"));
