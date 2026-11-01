@@ -1,18 +1,228 @@
-//! Embeds the application icon and version information into the Windows executable.
+//! Embeds the application icon and version information into the Windows executable, and
+//! collects the licenses of the open-source crates built into it for Help → Open-source licenses.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use serde_json::Value;
 
 fn main() {
     println!("cargo:rerun-if-changed=../../assets/playterm.ico");
+    println!("cargo:rerun-if-changed=../../Cargo.lock");
+    println!("cargo:rerun-if-changed=build.rs");
+    licenses();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../assets/playterm.ico")
         .set("ProductName", "playterm")
-        .set("FileDescription", "playterm - Telnet/SSH/Serial terminal")
+        .set("FileDescription", "playterm - SSH/Telnet/Serial/RDP terminal")
         .set("OriginalFilename", "playterm.exe")
         .set("LegalCopyright", "MIT License");
     if let Err(e) = res.compile() {
         // A missing resource compiler only costs the exe icon; do not fail the build.
         println!("cargo:warning=Windows resources not embedded: {e}");
     }
+}
+
+/// The MIT license text, for crates that state MIT but ship no license file.
+const MIT_BODY: &str = "Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the \"Software\"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.";
+
+/// One crate built into the program.
+struct Crate {
+    name: String,
+    version: String,
+    license: String,
+    url: String,
+    /// Indexes into the license texts.
+    texts: Vec<usize>,
+}
+
+/// Writes `$OUT_DIR/licenses.rs`: every crate the program is built from (normal dependencies of
+/// this package for the target platform, not build or dev tools) with its license and the
+/// license files it ships.
+fn licenses() {
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let target = std::env::var("TARGET").unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(cargo)
+        .args(["metadata", "--format-version", "1", "--locked", "--filter-platform", &target, "--manifest-path"])
+        .arg(manifest_dir.join("Cargo.toml"))
+        .output()
+        .expect("run cargo metadata");
+    if !output.status.success() {
+        panic!("cargo metadata failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    let meta: Value = serde_json::from_slice(&output.stdout).expect("cargo metadata JSON");
+
+    let packages: HashMap<&str, &Value> =
+        meta["packages"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap(), p)).collect();
+    let workspace: BTreeSet<&str> =
+        meta["workspace_members"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let nodes: HashMap<&str, &Value> =
+        meta["resolve"]["nodes"].as_array().unwrap().iter().map(|n| (n["id"].as_str().unwrap(), n)).collect();
+    let root = workspace
+        .iter()
+        .copied()
+        .find(|id| packages[id]["name"] == env!("CARGO_PKG_NAME"))
+        .expect("this package in the workspace");
+
+    // Everything reachable through normal (not build or dev) dependencies.
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        for dep in nodes[id]["deps"].as_array().unwrap() {
+            let normal = dep["dep_kinds"].as_array().unwrap().iter().any(|k| k["kind"].is_null());
+            if normal {
+                stack.push(dep["pkg"].as_str().unwrap());
+            }
+        }
+    }
+
+    let mut texts: Vec<String> = Vec::new();
+    let mut text_index: HashMap<String, usize> = HashMap::new();
+    let mut add_text = |text: String| -> usize {
+        *text_index.entry(text.clone()).or_insert_with(|| {
+            texts.push(text);
+            texts.len() - 1
+        })
+    };
+    let mut crates = Vec::new();
+    let mut missing = Vec::new();
+    let mut apache_files: BTreeMap<String, usize> = BTreeMap::new();
+    for id in seen.iter().filter(|id| !workspace.contains(*id)) {
+        let p = packages[id];
+        let name = p["name"].as_str().unwrap().to_owned();
+        let dir = Path::new(p["manifest_path"].as_str().unwrap()).parent().unwrap().to_owned();
+        let files = license_files(&dir, p["license_file"].as_str());
+        let mut indexes = Vec::new();
+        for (file, text) in &files {
+            if file.to_uppercase().contains("APACHE") {
+                *apache_files.entry(text.clone()).or_default() += 1;
+            }
+            indexes.push(add_text(text.clone()));
+        }
+        let license = p["license"].as_str().unwrap_or("").to_owned();
+        let url = [&p["repository"], &p["homepage"]]
+            .iter()
+            .find_map(|v| v.as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("https://crates.io/crates/{name}"));
+        if !files.iter().any(|(file, _)| !file.starts_with("fonts/")) {
+            let authors: Vec<String> = p["authors"]
+                .as_array()
+                .map(|a| a.iter().filter_map(Value::as_str).map(strip_email).collect())
+                .unwrap_or_default();
+            missing.push((crates.len(), authors));
+        }
+        crates.push(Crate {
+            name,
+            version: p["version"].as_str().unwrap().to_owned(),
+            license: if license.is_empty() { "(see the license file)".into() } else { license },
+            url,
+            texts: indexes,
+        });
+    }
+
+    // Crates that state a license but ship no file of their own get the standard text.
+    let apache = apache_files.into_iter().max_by_key(|(_, n)| *n).map(|(text, _)| text);
+    for (i, authors) in missing {
+        let license = &crates[i].license;
+        let text = if license.contains("MIT") {
+            let holder =
+                if authors.is_empty() { format!("the {} developers", crates[i].name) } else { authors.join(", ") };
+            Some(format!("MIT License\n\nCopyright (c) {holder}\n\n{MIT_BODY}"))
+        } else if license.contains("Apache-2.0") {
+            apache.clone()
+        } else {
+            None
+        };
+        if let Some(text) = text {
+            let index = add_text(text);
+            crates[i].texts.insert(0, index);
+        }
+    }
+    crates.sort_by(|a, b| (a.name.to_lowercase(), &a.version).cmp(&(b.name.to_lowercase(), &b.version)));
+
+    let mut out = String::new();
+    out.push_str("// Generated by build.rs from `cargo metadata`.\n");
+    out.push_str("pub static LICENSE_TEXTS: &[&str] = &[\n");
+    for text in &texts {
+        writeln!(out, "    {text:?},").unwrap();
+    }
+    out.push_str("];\n\npub static COMPONENTS: &[Component] = &[\n");
+    for c in &crates {
+        writeln!(
+            out,
+            "    Component {{ name: {:?}, version: {:?}, license: {:?}, url: {:?}, texts: &{:?} }},",
+            c.name, c.version, c.license, c.url, c.texts
+        )
+        .unwrap();
+    }
+    out.push_str("];\n");
+    let path = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("licenses.rs");
+    std::fs::write(path, out).expect("write licenses.rs");
+}
+
+/// "Name <mail>" → "Name".
+fn strip_email(author: &str) -> String {
+    author.split('<').next().unwrap_or(author).trim().to_owned()
+}
+
+/// The license files of a crate, as (path relative to the crate, text): files at the top whose
+/// names start with LICENSE, COPYING, NOTICE and the like, the `license-file` from its manifest,
+/// and the license notes of bundled fonts (`fonts/*.txt`).
+fn license_files(dir: &Path, license_file: Option<&str>) -> Vec<(String, String)> {
+    const PREFIXES: [&str; 6] = ["LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "UNLICENSE"];
+    let mut names = BTreeSet::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.path().is_file() && PREFIXES.iter().any(|p| name.to_uppercase().starts_with(p)) {
+                names.insert(name);
+            }
+        }
+    }
+    if let Some(file) = license_file {
+        names.insert(file.replace('\\', "/"));
+    }
+    if let Ok(entries) = std::fs::read_dir(dir.join("fonts")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.to_lowercase().ends_with(".txt") {
+                names.insert(format!("fonts/{name}"));
+            }
+        }
+    }
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let bytes = std::fs::read(dir.join(&name)).ok()?;
+            let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
+            let text = text.trim_end().to_owned();
+            (!text.is_empty()).then_some((name, text))
+        })
+        .collect()
 }

@@ -4611,6 +4611,7 @@ dependencies = [
  "playterm-net",
  "playterm-term",
  "rfd",
+ "serde_json",
  "tempfile",
  "ttf-parser",
  "unicode-width",

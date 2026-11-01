@@ -101,6 +101,8 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 ## Menus and the site manager
 
 - Menu bar: **File · Edit · View · Tools · Tab · Window · Help**. Items with a shortcut show it in the menu.
+- **Help → Open-source licenses**: the licenses of playterm (MIT) and of every open-source component built into the executable (searchable, with each one's full license text and source repository).
+  The list is generated with `cargo metadata` at build time, so it follows dependency changes by itself.
 - **File → Site Manager** (Ctrl+Shift+S): sites by folder (searchable) on the left, the settings of the selected site on the right.
   - [New site] / [Duplicate] / [Delete]; [Connect] / [Save] / [Revert] at the bottom right
   - Moving to another site or closing the window with unsaved changes asks whether to save them.

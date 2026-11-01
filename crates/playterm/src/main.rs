@@ -12,6 +12,7 @@ mod file_icons;
 mod fonts;
 mod import_dialog;
 mod input;
+mod licenses;
 mod local_fs;
 mod logging;
 mod menu;

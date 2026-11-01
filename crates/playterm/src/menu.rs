@@ -71,6 +71,7 @@ pub enum Command {
 
     Shortcuts,
     About,
+    Licenses,
 }
 
 /// What the menus need to know to enable and check their items.
@@ -289,6 +290,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("단축키", "Keyboard shortcuts"), "", true, Command::Shortcuts);
             ui.separator();
             item(ui, out, t("playterm 정보", "About playterm"), "", true, Command::About);
+            item(ui, out, t("오픈소스 라이선스", "Open-source licenses"), "", true, Command::Licenses);
         });
     });
     out.take()

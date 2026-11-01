@@ -25,6 +25,7 @@ use crate::session::{Session, SessionSpec, SessionState, TermSetup};
 use crate::settings_dialog::{SettingsDialog, SettingsResult};
 use crate::sidebar::{self, Sidebar, SidebarAction, VaultState};
 use crate::site_manager::{SiteManager, SiteManagerResult};
+use crate::licenses::LicensesDialog;
 use crate::template_dialog::{TemplateDialog, TemplateResult};
 use crate::view::UserInput;
 use crate::{clipboard, fonts, status_bar, view};
@@ -100,6 +101,7 @@ enum Modal {
     ConfirmDeleteTemplate(String),
     Shortcuts,
     About,
+    Licenses(Box<LicensesDialog>),
     Settings(Box<SettingsDialog>),
     Import(Box<ImportDialog>),
 }
@@ -1038,6 +1040,7 @@ impl PlaytermApp {
             Command::Settings => self.modal = Some(Modal::Settings(Box::new(SettingsDialog::new(&self.settings)))),
             Command::Shortcuts => self.modal = Some(Modal::Shortcuts),
             Command::About => self.modal = Some(Modal::About),
+            Command::Licenses => self.modal = Some(Modal::Licenses(Box::default())),
         }
     }
 
@@ -1068,6 +1071,11 @@ impl PlaytermApp {
             Modal::About => {
                 if !dialogs::about(ctx) {
                     self.modal = Some(Modal::About);
+                }
+            }
+            Modal::Licenses(mut dialog) => {
+                if !dialog.show(ctx) {
+                    self.modal = Some(Modal::Licenses(dialog));
                 }
             }
             Modal::Settings(mut dialog) => match dialog.show(ctx) {

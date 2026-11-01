@@ -288,10 +288,18 @@ pub fn about(ctx: &egui::Context) -> bool {
             ui.heading("playterm");
             ui.label(tr!("버전 {}", "Version {}", env!("CARGO_PKG_VERSION")));
             ui.add_space(6.0);
-            ui.label(t("Windows용 SSH · Telnet · 시리얼 터미널", "SSH · Telnet · serial terminal for Windows"));
+            ui.label(t(
+                "Windows용 SSH · Telnet · 시리얼 · 원격 데스크톱 터미널",
+                "SSH · Telnet · serial · Remote Desktop terminal for Windows",
+            ));
             ui.weak(t(
                 "SFTP, 포트 포워딩, 세션 로그, 한글(CP949) 지원",
                 "SFTP, port forwarding, session logs, Korean (CP949) support",
+            ));
+            ui.add_space(4.0);
+            ui.weak(t(
+                "MIT 라이선스 · 사용한 오픈소스는 도움말 → 오픈소스 라이선스",
+                "MIT License · open-source components: Help → Open-source licenses",
             ));
             ui.add_space(8.0);
             done = ui.button(t("확인", "OK")).clicked();
