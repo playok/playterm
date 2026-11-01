@@ -353,7 +353,8 @@ pub struct Relogin {
 
 /// The credentials dialog. For a login (password, keyboard-interactive) the user name can be
 /// corrected too; that answers with a [`Relogin`] instead of the server's questions.
-/// `saved_site`: the tab was opened from a saved site, whose user name could be updated.
+/// `saved_site`: the tab was opened from a saved site, whose user name could be updated and
+/// whose password can be saved ("save password", stored once the login succeeds).
 pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Option<Relogin> {
     let mut submit = None;
     egui::Modal::new(egui::Id::unique(("auth", session.id))).show(ctx, |ui| {
@@ -391,6 +392,13 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
                 pending.focus_requested = true;
             }
         }
+        if saved_site && pending.is_password() {
+            ui.add_space(4.0);
+            ui.checkbox(&mut pending.save_password, t("비밀번호 저장", "Save password")).on_hover_text(t(
+                "로그인에 성공하면 마스터 비밀번호로 암호화한 볼트에 저장합니다. 다음부터는 묻지 않습니다.",
+                "Once the login succeeds, it is saved in the vault (encrypted with the master password) and not asked again.",
+            ));
+        }
         ui.add_space(10.0);
         let user_ok = original_user.is_none() || !pending.user.trim().is_empty();
         ui.horizontal(|ui| {
@@ -404,6 +412,11 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
     });
     let ok = submit?;
     let pending = session.auth.take()?;
+    // Saved only after a successful login; a later prompt (wrong password) replaces it.
+    let save = (ok && saved_site && pending.save_password && pending.is_password())
+        .then(|| pending.answers.first().cloned().filter(|p| !p.is_empty()).map(Zeroizing::new))
+        .flatten();
+    session.save_password_on_login(save);
     let user = pending.user.trim().to_owned();
     if ok && let Some(original) = &pending.prompt.user && &user != original {
         // A password prompt's answer is that user's password; other questions start over.

@@ -84,6 +84,8 @@ enum Pending {
     Connect(String, Option<u64>),
     /// Store a password typed in the site manager (and connect, in the given tab if any).
     StoreSecret { id: String, password: Zeroizing<String>, connect: bool, target: Option<u64> },
+    /// Store the password of a successful login ("save password" in the login dialog).
+    SaveLogin { id: String, password: Zeroizing<String> },
 }
 
 enum Modal {
@@ -394,6 +396,40 @@ impl PlaytermApp {
         }
     }
 
+    /// Saves the password typed at a successful login for site `id`, unlocking (or creating)
+    /// the vault first if needed. The site is marked as saving its password only once it is
+    /// stored, so a cancelled vault dialog changes nothing.
+    fn save_site_password(&mut self, id: String, password: Zeroizing<String>) {
+        if self.store.get(&id).is_none() {
+            return;
+        }
+        if self.vault.is_unlocked() {
+            self.finish_save_login(&id, &password);
+            return;
+        }
+        let (mode, reason) = if self.vault.exists() {
+            (VaultMode::Unlock, t("비밀번호를 저장하려면 볼트를 잠금 해제하세요.", "Unlock the password vault to save the password."))
+        } else {
+            (VaultMode::Create, t("처음으로 비밀번호를 저장합니다.", "Saving a password for the first time."))
+        };
+        self.modal = Some(Modal::Vault(VaultDialog::new(mode, reason), Pending::SaveLogin { id, password }));
+    }
+
+    /// Stores a login password in the (unlocked) vault and marks the site as saving it.
+    fn finish_save_login(&mut self, id: &str, password: &str) {
+        if let Err(e) = self.vault.set(id, password) {
+            self.status = Some(format!("{}: {e}", t("비밀번호 저장 실패", "Could not save the password")));
+            return;
+        }
+        let Some(mut profile) = self.store.get(id).cloned() else { return };
+        if !profile.save_password {
+            profile.save_password = true;
+            let r = self.store.upsert(profile.clone());
+            self.report(t("사이트 저장 실패", "Could not save the site"), r);
+        }
+        self.info = Some(tr!("'{}' 의 비밀번호를 저장했습니다", "Saved the password of '{}'", profile.display_name()));
+    }
+
     fn store_secret(&mut self, id: String, password: Zeroizing<String>, connect: bool) {
         if self.vault.is_unlocked() {
             let r = self.vault.set(&id, &password);
@@ -429,6 +465,7 @@ impl PlaytermApp {
                     self.connect_in(target, |app| app.connect_saved(&id));
                 }
             }
+            Pending::SaveLogin { id, password } => self.finish_save_login(&id, &password),
         }
     }
 
@@ -440,6 +477,9 @@ impl PlaytermApp {
                 if let Some(p) = self.store.get(&id).cloned() {
                     self.connect_in(target, |app| app.open_session(&p, None, Some(p.display_name())));
                 }
+            }
+            Pending::SaveLogin { .. } => {
+                self.status = Some(t("비밀번호는 저장되지 않았습니다", "The password was not saved").into());
             }
             Pending::StoreSecret { id, password, connect, target } => {
                 self.status = Some(t("비밀번호는 저장되지 않았습니다", "The password was not saved").into());
@@ -1392,6 +1432,13 @@ impl eframe::App for PlaytermApp {
             if let Some(text) = session.clipboard_store.take() {
                 ctx.copy_text(text);
             }
+        }
+        // "Save password" from a login dialog, once that login has succeeded. Waits while another
+        // dialog is open if the vault still has to be unlocked (that needs a dialog of its own).
+        if (self.modal.is_none() || self.vault.is_unlocked())
+            && let Some((id, password)) = self.sessions.iter_mut().find_map(Session::take_password_to_save)
+        {
+            self.save_site_password(id, password);
         }
         self.console_requests();
         // A window without tabs still has a prompt to type at.

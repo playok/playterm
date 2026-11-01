@@ -5,6 +5,7 @@ use playterm_config::{SessionProfile, TabColor};
 use playterm_i18n::{t, tr};
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
 use playterm_term::{Charset, LogMode, Palette, Point, Terminal, TerminalEvent};
+use zeroize::Zeroizing;
 
 use crate::autologin::{LoginAction, LoginRunner, LoginScript};
 use crate::console::{self, KeyResult, LineEditor, Parsed, Request};
@@ -38,6 +39,15 @@ pub struct PendingAuth {
     pub user: String,
     /// Also store an edited user name in the saved site.
     pub save_user: bool,
+    /// Save the typed password in the vault once the login succeeds.
+    pub save_password: bool,
+}
+
+impl PendingAuth {
+    /// A login prompt asking for exactly a password (not a passphrase, not a one-time code).
+    pub fn is_password(&self) -> bool {
+        self.prompt.user.is_some() && matches!(self.prompt.fields.as_slice(), [only] if !only.echo)
+    }
 }
 
 /// What a tab was opened with; enough to duplicate it.
@@ -126,6 +136,9 @@ pub struct Session {
     site: Option<String>,
     /// Profile the connection was opened from.
     profile: Option<Box<SessionProfile>>,
+    /// Password typed in the login dialog with "save password" on; stored in the vault for the
+    /// site once the connection is up (so a wrong one is never saved).
+    save_on_login: Option<Zeroizing<String>>,
     /// Automatic login in progress on the current connection.
     login: Option<LoginRunner>,
     remote: Option<Remote>,
@@ -188,6 +201,7 @@ impl Session {
             login_script: None,
             site: None,
             profile: None,
+            save_on_login: None,
             login: None,
             remote: None,
             console: LineEditor::default(),
@@ -225,6 +239,7 @@ impl Session {
         self.site = site;
         self.tab_color = tab_color;
         self.profile = profile;
+        self.save_on_login = None;
         self.rx_bytes = 0;
         self.tx_bytes = 0;
         let handle = net.connect(params.clone(), waker);
@@ -335,6 +350,20 @@ impl Session {
         self.site.as_deref()
     }
 
+    /// Remembers (or forgets, with `None`) a password to save once the login succeeds.
+    pub fn save_password_on_login(&mut self, password: Option<Zeroizing<String>>) {
+        self.save_on_login = password;
+    }
+
+    /// The site and password to save, once the connection is up.
+    pub fn take_password_to_save(&mut self) -> Option<(String, Zeroizing<String>)> {
+        if self.state != SessionState::Connected {
+            return None;
+        }
+        let password = self.save_on_login.take()?;
+        Some((self.site.clone()?, password))
+    }
+
     /// Connects again as another user (the user name was mistyped), with `password` if one was
     /// typed for them.
     pub fn relogin(&mut self, user: String, password: Option<String>, net: &NetRuntime, waker: Waker) {
@@ -376,7 +405,12 @@ impl Session {
                 SessionEvent::AuthPrompt(prompt) => {
                     let answers = vec![String::new(); prompt.fields.len()];
                     let user = prompt.user.clone().unwrap_or_default();
-                    self.auth = Some(PendingAuth { prompt, answers, focus_requested: false, user, save_user: false });
+                    // Ticked already when it was ticked at the last (wrong) try, or when the site
+                    // saves its password (then the saved one was wrong).
+                    let save_password =
+                        self.save_on_login.is_some() || self.profile.as_ref().is_some_and(|p| p.save_password);
+                    self.auth =
+                        Some(PendingAuth { prompt, answers, focus_requested: false, user, save_user: false, save_password });
                 }
                 SessionEvent::Sftp(result) => {
                     self.sftp_pending = false;
@@ -395,6 +429,7 @@ impl Session {
                 }
                 SessionEvent::Closed(reason) => {
                     self.state = SessionState::Closed;
+                    self.save_on_login = None;
                     self.host_key = None;
                     self.auth = None;
                     self.sftp = None;
