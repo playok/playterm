@@ -26,7 +26,7 @@ cargo build --release
 | 명령 | 하는 일 |
 |---|---|
 | `build.cmd` | 릴리스 빌드 → `target\release\playterm.exe` (`build.cmd debug` 는 디버그 빌드) |
-| `release.cmd` | clippy 검사 → 테스트 → ARM64·x64 패키지 → `dist\` 에 zip 과 `SHA256SUMS.txt` (`release.cmd x64` 처럼 하나만도 가능) |
+| `release.cmd` | clippy 검사 → 테스트 → ARM64·x64 패키지 → `dist\` 에 zip 과 `SHA256SUMS.txt` (`release.cmd x64` 처럼 하나만도 가능). exe 는 UPX 로 압축 (`noupx` 로 끔) |
 
 두 스크립트 모두 LLVM(clang) 경로를 알아서 PATH 에 넣습니다. `release.cmd` 는 커밋하지 않은 변경이 있으면 경고합니다.
 
@@ -34,9 +34,13 @@ cargo build --release
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc     # 최초 1회
-release.cmd                                  # 또는: pwsh scripts\package.ps1 (검사·테스트 없이 패키지만)
+release.cmd                                  # 또는: pwsh scripts\package.ps1 -Upx (검사·테스트 없이 패키지만, -Upx 를 빼면 압축 안 함)
 ```
 
+- zip 안의 exe 는 **UPX** 로 압축됩니다(약 21 MB → 7 MB). UPX 는 환경변수 `UPX_EXE` 로 경로나 명령 이름을 지정하거나, 없으면 고정 버전(5.3.0)을
+  공식 GitHub 릴리스에서 `tools\upx` 로 한 번 받아 씁니다. 받은 zip 과 그 안의 `upx.exe` 는 SHA-256 을 확인하고, `upx.exe` 는 실행할 때마다 다시 확인합니다
+  (ARM64 exe 는 UPX 5.3.0 이상 필요). 압축된 exe 는 창(프로세스)마다 메모리에서 풀리므로 창을 여러 개 띄우면 메모리를 조금 더 씁니다.
+  UPX 압축 exe 는 백신이 오탐하는 경우가 있으니, 필요하면 `release.cmd noupx` 로 압축 없이 만드세요.
 - C 런타임을 정적으로 링크하므로(`.cargo/config.toml`) VC++ 재배포 패키지 없이 실행됩니다.
 - 화면은 OpenGL(glow)로 그리고, OpenGL 을 쓸 수 없는 환경(GPU 없는 VM 등)에서는 자동으로 wgpu(DX12)로 전환합니다.
   환경변수 `PLAYTERM_RENDERER=wgpu` 또는 `glow` 로 강제할 수 있습니다.
