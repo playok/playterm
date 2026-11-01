@@ -1534,6 +1534,12 @@ impl eframe::App for PlaytermApp {
             })
             .inner;
         self.view_px = view_px;
+        // RDP tabs not on screen (another tab, a shortcut switched away) hold no keys or buttons.
+        for (i, s) in self.sessions.iter_mut().enumerate() {
+            if (i != self.active || !s.shows_rdp()) && s.is_rdp() {
+                s.release_rdp_input();
+            }
+        }
         if let Some(output) = output {
             if output.zoom_steps != 0.0 {
                 self.zoom(output.zoom_steps);

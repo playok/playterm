@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::forward::ForwardRule;
 use crate::keepalive::KeepAlive;
-use crate::rdp::{RdpFrame, RdpInput, RdpSettings};
+use crate::rdp::{RdpFrame, RdpInput, RdpSettings, SharedScreen};
 use crate::serial::SerialSettings;
 use crate::sftp::SftpConnection;
 
@@ -182,17 +182,17 @@ pub(crate) enum SessionCommand {
 pub struct SessionHandle {
     commands: mpsc::UnboundedSender<SessionCommand>,
     events: std_mpsc::Receiver<SessionEvent>,
-    /// Latest RDP screen not yet taken by the UI.
-    frame: Arc<Mutex<Option<RdpFrame>>>,
+    /// The RDP screen and what changed since the UI last looked.
+    screen: Arc<Mutex<SharedScreen>>,
 }
 
 impl SessionHandle {
     pub(crate) fn new(waker: Waker) -> (Self, mpsc::UnboundedReceiver<SessionCommand>, EventSink) {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = std_mpsc::channel();
-        let frame = Arc::new(Mutex::new(None));
-        let sink = EventSink { tx: ev_tx, waker, frame: frame.clone() };
-        (Self { commands: cmd_tx, events: ev_rx, frame }, cmd_rx, sink)
+        let screen = Arc::new(Mutex::new(SharedScreen::default()));
+        let sink = EventSink { tx: ev_tx, waker, screen: screen.clone() };
+        (Self { commands: cmd_tx, events: ev_rx, screen }, cmd_rx, sink)
     }
 
     /// Keyboard and mouse input for an RDP session.
@@ -202,9 +202,9 @@ impl SessionHandle {
         }
     }
 
-    /// The newest RDP screen since the last call (older ones are skipped).
+    /// The part of the RDP screen that changed since the last call.
     pub fn take_frame(&self) -> Option<RdpFrame> {
-        self.frame.lock().ok()?.take()
+        self.screen.lock().ok()?.take()
     }
 
     pub fn send(&self, data: Vec<u8>) {
@@ -240,7 +240,7 @@ impl SessionHandle {
 pub(crate) struct EventSink {
     tx: std_mpsc::Sender<SessionEvent>,
     waker: Waker,
-    frame: Arc<Mutex<Option<RdpFrame>>>,
+    screen: Arc<Mutex<SharedScreen>>,
 }
 
 impl EventSink {
@@ -253,10 +253,11 @@ impl EventSink {
         self.waker.clone()
     }
 
-    /// Replaces the screen waiting for the UI.
-    pub fn set_frame(&self, frame: RdpFrame) {
-        if let Ok(mut slot) = self.frame.lock() {
-            *slot = Some(frame);
+    /// Copies the changed `rect` (left, top, right, bottom exclusive) of the decoded RDP image
+    /// for the UI.
+    pub fn update_screen(&self, width: u16, height: u16, image: &[u8], rect: [u16; 4]) {
+        if let Ok(mut screen) = self.screen.lock() {
+            screen.update(width, height, image, rect);
         }
         (self.waker)();
     }

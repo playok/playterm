@@ -310,6 +310,17 @@ impl Session {
         self.remote.as_ref().is_some_and(|r| r.params.rdp.fits_tab())
     }
 
+    /// The part of the remote desktop that changed since the last call.
+    pub fn take_rdp_frame(&self) -> Option<playterm_net::RdpFrame> {
+        self.remote.as_ref()?.handle.take_frame()
+    }
+
+    /// Releases keys and buttons held on the remote desktop (the tab is not shown).
+    pub fn release_rdp_input(&mut self) {
+        let inputs = self.rdp.release_all();
+        self.send_rdp(inputs);
+    }
+
     /// Keyboard and mouse for the remote desktop.
     pub fn send_rdp(&mut self, inputs: Vec<playterm_net::RdpInput>) {
         if !inputs.is_empty()
@@ -428,7 +439,11 @@ impl Session {
     /// Processes pending network and terminal events. Returns `true` if anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
-        if let Some(frame) = self.remote.as_ref().and_then(|r| r.handle.take_frame()) {
+        // The first picture of an RDP connection (the view takes later changes itself).
+        if self.rdp.pending.is_none()
+            && !self.rdp.has_picture()
+            && let Some(frame) = self.remote.as_ref().and_then(|r| r.handle.take_frame())
+        {
             self.rdp.pending = Some(frame);
             changed = true;
         }

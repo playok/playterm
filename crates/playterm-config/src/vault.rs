@@ -328,10 +328,11 @@ mod tests {
     fn wrong_password_and_no_plaintext_on_disk() {
         let (_dir, mut v) = vault();
         v.create("master").unwrap();
-        v.set("p1", "very-secret-value").unwrap();
+        // A long id: random ciphertext text could contain a short one like "p1" by chance.
+        v.set("site-id-for-plaintext-check", "very-secret-value").unwrap();
         let raw = std::fs::read_to_string(&v.path).unwrap();
         assert!(!raw.contains("very-secret-value"));
-        assert!(!raw.contains("p1"), "secret ids are encrypted too");
+        assert!(!raw.contains("site-id-for-plaintext-check"), "secret ids are encrypted too");
 
         v.lock();
         assert!(matches!(v.unlock("nope"), Err(VaultError::WrongPassword)));
