@@ -179,6 +179,7 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> Option<Private
                 path.display().to_string(),
                 vec![PromptField { label: t("암호 (passphrase)", "Passphrase").into(), echo: false }],
                 None,
+                false,
             )
             .await?;
         let passphrase = Zeroizing::new(answers.into_iter().next().unwrap_or_default());
@@ -272,17 +273,24 @@ async fn passwords(
     mut methods: MethodSet,
 ) -> anyhow::Result<()> {
     let user = params.username.as_str();
+    // Once a method was accepted but the server wants more (`partial success`), what follows
+    // is a second factor such as a one-time code: the stored password must not be spent on it,
+    // and what the user types there must not replace the saved password.
+    let mut second_factor = false;
     if let Some(password) = &params.password
         && allows(&methods, MethodKind::Password)
     {
         match session.authenticate_password(user, password).await? {
             AuthResult::Success => return Ok(()),
-            AuthResult::Failure { remaining_methods, .. } => methods = remaining_methods,
+            AuthResult::Failure { remaining_methods, partial_success } => {
+                methods = remaining_methods;
+                second_factor |= partial_success;
+            }
         }
     }
     // A stored password may also answer a single keyboard-interactive password prompt
     // (servers with `PasswordAuthentication no` but PAM keyboard-interactive).
-    let mut autofill = params.password.clone();
+    let mut autofill = if second_factor { None } else { params.password.clone() };
 
     let target = format!("{user}@{}", params.host);
     // Some servers advertise keyboard-interactive but reject it without asking anything;
@@ -291,7 +299,7 @@ async fn passwords(
     let mut attempts = 0;
     while attempts < MAX_AUTH_ROUNDS {
         let outcome = if keyboard_interactive_usable && allows(&methods, MethodKind::KeyboardInteractive) {
-            match keyboard_interactive(session, user, &target, &mut autofill, sink).await? {
+            match keyboard_interactive(session, user, &target, &mut autofill, second_factor, sink).await? {
                 Outcome::Unavailable(remaining) => {
                     keyboard_interactive_usable = false;
                     methods = remaining;
@@ -306,6 +314,7 @@ async fn passwords(
                     String::new(),
                     vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
                     Some(user),
+                    true,
                 )
                 .await
             else {
@@ -314,7 +323,9 @@ async fn passwords(
             let password = answers.into_iter().next().unwrap_or_default();
             match session.authenticate_password(user, password).await? {
                 AuthResult::Success => Outcome::Success,
-                AuthResult::Failure { remaining_methods, .. } => Outcome::Failure(remaining_methods),
+                AuthResult::Failure { remaining_methods, partial_success } => {
+                    Outcome::Failure(remaining_methods, partial_success)
+                }
             }
         } else {
             let names: Vec<&str> = methods.iter().map(<&str>::from).collect();
@@ -329,7 +340,13 @@ async fn passwords(
         match outcome {
             Outcome::Success => return Ok(()),
             Outcome::Cancelled => bail!(t("인증이 취소되었습니다", "Authentication cancelled")),
-            Outcome::Unavailable(remaining) | Outcome::Failure(remaining) => {
+            Outcome::Failure(remaining, true) => {
+                sink.notice(t("추가 인증이 필요합니다.", "Further authentication is required."));
+                second_factor = true;
+                autofill = None;
+                methods = remaining;
+            }
+            Outcome::Unavailable(remaining) | Outcome::Failure(remaining, false) => {
                 sink.notice(t("인증 실패, 다시 시도하세요.", "Authentication failed, try again."));
                 methods = remaining;
             }
@@ -340,7 +357,8 @@ async fn passwords(
 
 enum Outcome {
     Success,
-    Failure(MethodSet),
+    /// Not (yet) logged in; `true` when the answer was accepted but more is required.
+    Failure(MethodSet, bool),
     /// Rejected before any question was asked: the method is not really available.
     Unavailable(MethodSet),
     Cancelled,
@@ -351,6 +369,7 @@ async fn keyboard_interactive(
     user: &str,
     target: &str,
     autofill: &mut Option<String>,
+    second_factor: bool,
     sink: &EventSink,
 ) -> anyhow::Result<Outcome> {
     let mut response = session.authenticate_keyboard_interactive_start(user, None::<String>).await?;
@@ -358,9 +377,9 @@ async fn keyboard_interactive(
     loop {
         response = match response {
             KeyboardInteractiveAuthResponse::Success => return Ok(Outcome::Success),
-            KeyboardInteractiveAuthResponse::Failure { remaining_methods, .. } => {
+            KeyboardInteractiveAuthResponse::Failure { remaining_methods, partial_success } => {
                 return Ok(if asked {
-                    Outcome::Failure(remaining_methods)
+                    Outcome::Failure(remaining_methods, partial_success)
                 } else {
                     Outcome::Unavailable(remaining_methods)
                 });
@@ -376,11 +395,13 @@ async fn keyboard_interactive(
                     vec![password]
                 } else {
                     let title = if name.is_empty() { tr!("{target} 인증", "Authentication for {target}") } else { name };
-                    let fields = prompts
+                    let fields: Vec<PromptField> = prompts
                         .into_iter()
                         .map(|p| PromptField { label: p.prompt.trim().to_owned(), echo: p.echo })
                         .collect();
-                    match sink.prompt(title, instructions, fields, Some(user)).await {
+                    // A lone hidden question is the password, unless a factor was accepted.
+                    let account_password = !second_factor && matches!(fields.as_slice(), [only] if !only.echo);
+                    match sink.prompt(title, instructions, fields, Some(user), account_password).await {
                         Some(answers) => answers,
                         None => return Ok(Outcome::Cancelled),
                     }

@@ -12,7 +12,7 @@ use crate::clip_keys::{self, ClipAction};
 use crate::input::{key_bytes, paste_bytes};
 use crate::mouse::{self, MouseAction, MouseButton, MouseMods};
 use crate::search_bar::{self, BarAction};
-use crate::session::Session;
+use crate::session::{Session, SessionState};
 use crate::{boxdraw, clipboard, toast};
 
 /// How the terminal is drawn (from the app settings).
@@ -161,8 +161,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
         let ctrl = ui.input(|i| i.modifiers.ctrl);
         if clip_keys::paste_click(&response, &style.clipboard, ctrl) {
             if let Some(text) = clipboard::read_text() {
-                paste(session, &text);
-                output.inputs.push(UserInput::Paste(text));
+                request_paste(session, text, &mut output.inputs, &style.clipboard);
             }
         } else {
             response.context_menu(|ui| context_menu(ui, session, &style.clipboard));
@@ -218,8 +217,7 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session, keys: &ClipboardKeys, i
                     }
                     ClipAction::Paste => {
                         if let Some(text) = clipboard::read_text() {
-                            paste(session, &text);
-                            inputs.push(UserInput::Paste(text));
+                            request_paste(session, text, inputs, keys);
                         }
                     }
                 }
@@ -243,10 +241,7 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session, keys: &ClipboardKeys, i
                 session.send_bytes(vec![0x18]);
                 inputs.push(UserInput::Bytes(vec![0x18]));
             }
-            Event::Paste(text) => {
-                paste(session, &text);
-                inputs.push(UserInput::Paste(text));
-            }
+            Event::Paste(text) => request_paste(session, text, inputs, keys),
             Event::Ime(ImeEvent::Preedit { text, .. }) => session.preedit = text,
             Event::Ime(ImeEvent::Commit(text)) => {
                 session.preedit.clear();
@@ -271,6 +266,27 @@ pub fn copy_selection(ctx: &egui::Context, session: &mut Session) -> bool {
     }
 }
 
+/// Pastes `text` (recording it in `inputs` for simultaneous input), or holds it in
+/// [`Session::pending_paste`] for the user to confirm first (see [`needs_paste_confirm`]).
+pub fn request_paste(session: &mut Session, text: String, inputs: &mut Vec<UserInput>, keys: &ClipboardKeys) {
+    if keys.confirm_multiline_paste && needs_paste_confirm(session, &text) {
+        session.pending_paste = Some(text);
+    } else {
+        paste(session, &text);
+        inputs.push(UserInput::Paste(text));
+    }
+}
+
+/// Whether pasting `text` would run several commands: more than one line (a single trailing
+/// line break aside) into a connected tab whose program did not ask for bracketed paste, so
+/// every line ends with Enter.
+pub fn needs_paste_confirm(session: &Session, text: &str) -> bool {
+    let body = text.strip_suffix("\r\n").or_else(|| text.strip_suffix('\n')).unwrap_or(text);
+    session.state == SessionState::Connected
+        && !session.terminal.term().mode().contains(TermMode::BRACKETED_PASTE)
+        && body.contains(['\n', '\r'])
+}
+
 pub fn paste(session: &mut Session, text: &str) {
     let bracketed = session.terminal.term().mode().contains(TermMode::BRACKETED_PASTE);
     session.send_text(&paste_bytes(text, bracketed));
@@ -284,7 +300,7 @@ fn context_menu(ui: &mut egui::Ui, session: &mut Session, keys: &ClipboardKeys) 
     }
     if ui.add(egui::Button::new(t("붙여넣기", "Paste")).shortcut_text(clip_keys::paste_hint(keys))).clicked() {
         if let Some(text) = clipboard::read_text() {
-            paste(session, &text);
+            request_paste(session, text, &mut Vec::new(), keys);
         }
         ui.close();
     }

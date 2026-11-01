@@ -28,8 +28,14 @@ impl FsHandler {
         Self { root: root.into(), handles: HashMap::new(), next: 0 }
     }
 
+    /// The local path for an SFTP path, always inside the root: on Windows a part like
+    /// `..\..\x` or `C:\x` would otherwise leave it, so `\` and `:` cannot be part of a name.
     fn real(&self, path: &str) -> PathBuf {
-        normalize(path).split('/').filter(|p| !p.is_empty()).fold(self.root.clone(), |acc, part| acc.join(part))
+        normalize(path)
+            .split('/')
+            .filter(|p| !p.is_empty())
+            .map(|p| p.replace(['\\', ':'], "_"))
+            .fold(self.root.clone(), |acc, part| acc.join(part))
     }
 
     fn insert(&mut self, open: Open) -> String {

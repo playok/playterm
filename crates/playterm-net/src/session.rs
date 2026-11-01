@@ -167,6 +167,9 @@ pub struct AuthPrompt {
     /// offer to log in as someone else, which takes a new connection: servers do not allow
     /// changing the user in the middle of authentication.
     pub user: Option<String>,
+    /// The (single, hidden) answer is the account password: it may be saved for the site. Not
+    /// for passphrases or for a second factor (a one-time code after the password).
+    pub account_password: bool,
     reply: oneshot::Sender<Option<Vec<String>>>,
 }
 
@@ -325,18 +328,19 @@ impl EventSink {
         rx.await.unwrap_or(false)
     }
 
-    /// Asks the user for credentials (of `user`, see [`AuthPrompt::user`]). `None` means
-    /// cancelled.
+    /// Asks the user for credentials (of `user`, see [`AuthPrompt::user`]; `account_password`
+    /// see [`AuthPrompt::account_password`]). `None` means cancelled.
     pub async fn prompt(
         &self,
         title: String,
         instructions: String,
         fields: Vec<PromptField>,
         user: Option<&str>,
+        account_password: bool,
     ) -> Option<Vec<String>> {
         let (reply, rx) = oneshot::channel();
         let user = user.map(str::to_owned);
-        self.send(SessionEvent::AuthPrompt(AuthPrompt { title, instructions, fields, user, reply }));
+        self.send(SessionEvent::AuthPrompt(AuthPrompt { title, instructions, fields, user, account_password, reply }));
         let _waiting_on_user = self.deadline.pause();
         rx.await.ok().flatten()
     }

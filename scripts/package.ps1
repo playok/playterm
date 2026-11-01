@@ -8,9 +8,11 @@
 # hosts, LLVM/clang (winget install LLVM.LLVM) for the crypto library.
 #
 # -Upx uses $env:UPX_EXE (a path to upx.exe or a command on PATH; not $env:UPX, which UPX
-# reads as default options), otherwise the pinned UPX release in tools\upx: downloaded from
-# GitHub on first use, the zip and the upx.exe in it checked against their SHA-256 (the exe on
-# every run). ARM64 executables need UPX 5.3.0 or later.
+# reads as default options) together with $env:UPX_SHA256, its expected SHA-256, otherwise the
+# pinned UPX release in tools\upx: downloaded from GitHub on first use, the zip and the upx.exe
+# in it checked against their SHA-256. Each run copies upx.exe to a new temporary folder and
+# checks that copy right before running it (the builds in between run every dependency's build
+# script, which could otherwise swap the file). ARM64 executables need UPX 5.3.0 or later.
 param(
     [ValidateSet("arm64", "x64")]
     [string[]]$Targets = @("arm64", "x64"),
@@ -31,20 +33,28 @@ function Test-Sha256([string]$Path, [string]$Expected) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower() -eq $Expected
 }
 
-# Path of upx.exe: $env:UPX_EXE, or the pinned release in tools\upx.
+# Path and expected SHA-256 of upx.exe: $env:UPX_EXE with $env:UPX_SHA256, or the pinned
+# release in tools\upx.
 function Get-Upx {
     if ($env:UPX_EXE) {
-        if (Test-Path -LiteralPath $env:UPX_EXE -PathType Leaf) { return (Resolve-Path -LiteralPath $env:UPX_EXE).Path }
-        $cmd = Get-Command $env:UPX_EXE -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($cmd) { return $cmd.Source }
-        throw "UPX_EXE=$env:UPX_EXE is neither a file nor a command on PATH"
+        $path = $null
+        if (Test-Path -LiteralPath $env:UPX_EXE -PathType Leaf) { $path = (Resolve-Path -LiteralPath $env:UPX_EXE).Path }
+        else {
+            $cmd = Get-Command $env:UPX_EXE -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd) { $path = $cmd.Source }
+        }
+        if (-not $path) { throw "UPX_EXE=$env:UPX_EXE is neither a file nor a command on PATH" }
+        $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()
+        if (-not $env:UPX_SHA256) { throw "UPX_EXE=${path}: set UPX_SHA256 to its expected SHA-256 (this file's is $actual)" }
+        if ($actual -ne $env:UPX_SHA256.ToLower()) { throw "UPX_EXE=$path does not match UPX_SHA256 (it is $actual)" }
+        return @{ Path = $path; Sha256 = $actual }
     }
     $dir = Join-Path $root "tools\upx"
     $exe = Join-Path $dir "upx-$UpxVersion-win64\upx.exe"
     if (Test-Path -LiteralPath $exe -PathType Leaf) {
         # Checked on every run: tools\ is not tracked, and a broken or replaced packer would end
         # up in the release.
-        if (Test-Sha256 $exe $UpxExeSha256) { return $exe }
+        if (Test-Sha256 $exe $UpxExeSha256) { return @{ Path = $exe; Sha256 = $UpxExeSha256 } }
         Write-Host "   $exe does not match its SHA-256; downloading UPX again"
         Remove-Item -Recurse -Force (Split-Path $exe -Parent)
     }
@@ -72,7 +82,22 @@ function Get-Upx {
         Remove-Item -Recurse -Force (Split-Path $exe -Parent)
         throw "the unpacked upx.exe does not match its SHA-256; not using it"
     }
-    return $exe
+    return @{ Path = $exe; Sha256 = $UpxExeSha256 }
+}
+
+# Runs UPX from a fresh copy that is checked right before it runs.
+function Invoke-Upx([hashtable]$Upx, [string[]]$Arguments) {
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("playterm-upx-" + [guid]::NewGuid())
+    New-Item -ItemType Directory $tmp | Out-Null
+    try {
+        $copy = Join-Path $tmp "upx.exe"
+        Copy-Item -LiteralPath $Upx.Path $copy
+        if (-not (Test-Sha256 $copy $Upx.Sha256)) { throw "upx.exe changed since it was checked; not running it" }
+        & $copy @Arguments | Out-Null
+        return $LASTEXITCODE
+    } finally {
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    }
 }
 
 $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
@@ -89,7 +114,7 @@ $sums = @()
 foreach ($arch in $Targets) {
     $triple = $triples[$arch]
     Write-Host "== $arch ($triple)"
-    cargo build --release -p playterm --target $triple
+    cargo build --release --locked -p playterm --target $triple
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed for $triple" }
 
     $stage = Join-Path $dist "playterm-$version-windows-$arch"
@@ -102,10 +127,8 @@ foreach ($arch in $Targets) {
     if ($upxExe) {
         $exe = Join-Path $stage "playterm.exe"
         $before = (Get-Item $exe).Length
-        & $upxExe --best -q $exe | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "UPX failed for $arch" }
-        & $upxExe -t -q $exe | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "UPX test failed for $arch" }
+        if ((Invoke-Upx $upxExe @("--best", "-q", $exe)) -ne 0) { throw "UPX failed for $arch" }
+        if ((Invoke-Upx $upxExe @("-t", "-q", $exe)) -ne 0) { throw "UPX test failed for $arch" }
         Write-Host ("   UPX: {0:N1} MB -> {1:N1} MB" -f ($before / 1MB), ((Get-Item $exe).Length / 1MB))
     }
     $extra = @(Get-ChildItem $stage | Where-Object { $_.Name -notin (@("playterm.exe") + $docs) })

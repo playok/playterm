@@ -136,6 +136,7 @@ impl VaultDialog {
             let mut enter = false;
             ui.label(t("마스터 비밀번호", "Master password"));
             let first = ui.add(egui::TextEdit::singleline(&mut *self.master).password(true));
+            forget_history(ui, first.id);
             enter |= first.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if !self.focus_requested {
                 first.request_focus();
@@ -144,6 +145,7 @@ impl VaultDialog {
             if self.mode == VaultMode::Create {
                 ui.label(t("마스터 비밀번호 확인", "Confirm master password"));
                 let second = ui.add(egui::TextEdit::singleline(&mut *self.confirm).password(true));
+                forget_history(ui, second.id);
                 enter |= second.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             }
 
@@ -177,8 +179,8 @@ impl VaultDialog {
                     ui.colored_label(
                         ui.visuals().warn_fg_color,
                         t(
-                            "볼트를 초기화하면 저장된 모든 비밀번호가 삭제됩니다.\n세션 목록은 유지됩니다.",
-                            "Resetting the password vault deletes every saved password.\nThe site list is kept.",
+                            "볼트를 초기화하면 저장된 비밀번호 없이 새로 시작합니다. 세션 목록은 유지됩니다.\n기존 볼트 파일은 vault.toml.bak 으로 남겨 둡니다.",
+                            "Resetting the password vault starts over without the saved passwords. The site list is kept.\nThe old vault file is kept as vault.toml.bak.",
                         ),
                     );
                     ui.horizontal(|ui| {
@@ -224,6 +226,56 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
 
 // ---------------------------------------------------------------------------------------------
 // Help
+
+/// Asks before pasting several lines that would each run as a command. `Some(true)`: paste.
+pub fn confirm_paste(ctx: &egui::Context, text: &str) -> Option<bool> {
+    const SHOWN_LINES: usize = 8;
+    const SHOWN_CHARS: usize = 100;
+    let lines: Vec<&str> = text.lines().collect();
+    let mut preview: Vec<String> = lines
+        .iter()
+        .take(SHOWN_LINES)
+        .map(|l| {
+            let l = crate::session::printable(l);
+            if l.chars().count() > SHOWN_CHARS { format!("{}…", l.chars().take(SHOWN_CHARS).collect::<String>()) } else { l }
+        })
+        .collect();
+    if lines.len() > SHOWN_LINES {
+        preview.push(tr!("… ({}줄 더)", "… ({} more lines)", lines.len() - SHOWN_LINES));
+    }
+    let mut answer = None;
+    let close = modal("confirm-paste", ctx, |ui| {
+        ui.set_width(520.0);
+        ui.heading(t("여러 줄 붙여넣기", "Paste several lines"));
+        ui.label(tr!(
+            "{}줄을 붙여넣습니다. 줄마다 Enter 가 입력되어 각 줄이 명령으로 바로 실행될 수 있습니다.",
+            "This pastes {} lines. Each ends with Enter, so every line may run as a command right away.",
+            lines.len()
+        ));
+        ui.add_space(6.0);
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(egui::RichText::new(preview.join("\n")).monospace()).wrap());
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(t("붙여넣기", "Paste")).clicked() {
+                answer = Some(true);
+            }
+            if ui.button(t("취소", "Cancel")).clicked() {
+                answer = Some(false);
+            }
+        });
+        ui.weak(t(
+            "도구 → 설정의 '붙여넣기 확인' 에서 끌 수 있습니다.",
+            "Can be turned off with 'Confirm paste' in Tools → Settings.",
+        ));
+    });
+    if close && answer.is_none() {
+        answer = Some(false);
+    }
+    answer
+}
 
 /// Keys and what they do, in the current language.
 fn shortcut_list(keys: &ClipboardKeys) -> Vec<(String, &'static str)> {
@@ -435,7 +487,10 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
         }
         for (i, field) in pending.prompt.fields.iter().enumerate() {
             ui.label(&field.label);
-            let edit = ui.add(egui::TextEdit::singleline(&mut pending.answers[i]).password(!field.echo));
+            let edit = ui.add(egui::TextEdit::singleline(&mut *pending.answers[i]).password(!field.echo));
+            if !field.echo {
+                forget_history(ui, edit.id);
+            }
             // Check before (re)focusing: Enter makes the field surrender focus this frame.
             enter |= edit.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter));
             if i == 0 && !pending.focus_requested {
@@ -465,19 +520,31 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
     let pending = session.auth.take()?;
     // Saved only after a successful login; a later prompt (wrong password) replaces it.
     let save = (ok && saved_site && pending.save_password && pending.is_password())
-        .then(|| pending.answers.first().cloned().filter(|p| !p.is_empty()).map(Zeroizing::new))
+        .then(|| pending.answers.first().cloned().filter(|p| !p.is_empty()))
         .flatten();
     session.save_password_on_login(save);
     let user = pending.user.trim().to_owned();
     if ok && let Some(original) = &pending.prompt.user && &user != original {
         // A password prompt's answer is that user's password; other questions start over.
         let password = match pending.prompt.fields.as_slice() {
-            [only] if !only.echo => pending.answers.into_iter().next().filter(|p| !p.is_empty()),
+            [only] if !only.echo => pending.answers.first().map(|p| p.to_string()).filter(|p| !p.is_empty()),
             _ => None,
         };
         pending.prompt.answer(None);
         return Some(Relogin { user, password, save: pending.save_user });
     }
-    pending.prompt.answer(ok.then_some(pending.answers));
+    // The answers move to the network task; what stays here is zeroed when dropped.
+    let answers = ok.then(|| pending.answers.iter().map(|a| a.to_string()).collect());
+    pending.prompt.answer(answers);
     None
+}
+
+/// egui keeps an undo history for every text field, password fields too: copies of what was
+/// typed (the master password included) that stay in memory after the dialog is closed.
+/// Called each frame after a password field, so no copy outlives the frame.
+fn forget_history(ui: &egui::Ui, id: egui::Id) {
+    if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
+        state.clear_undoer();
+        state.store(ui.ctx(), id);
+    }
 }

@@ -329,10 +329,14 @@ impl Vault {
         Ok(())
     }
 
-    /// Deletes the vault file and every stored secret. Used when the master password is lost.
+    /// Starts over without the stored secrets (the master password is lost). The old file is
+    /// kept as `vault.toml.bak` (replacing an older one), not deleted: a file that only looked
+    /// like a wrong password (damaged by a crash, say) can still be recovered.
     pub fn reset(&mut self) -> Result<(), VaultError> {
         self.lock();
-        match std::fs::remove_file(&self.path) {
+        let mut backup = self.path.as_os_str().to_owned();
+        backup.push(".bak");
+        match std::fs::rename(&self.path, PathBuf::from(backup)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
@@ -454,7 +458,14 @@ mod tests {
         assert!(matches!(v.create("b"), Err(VaultError::AlreadyExists)));
         v.reset().unwrap();
         assert!(!v.exists() && !v.is_unlocked());
+        assert!(v.path.with_file_name("vault.toml.bak").exists(), "the old vault is kept");
         v.create("b").unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(v.path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     #[test]

@@ -34,7 +34,8 @@ pub enum SessionState {
 /// An authentication prompt waiting for the user, with the answers typed so far.
 pub struct PendingAuth {
     pub prompt: AuthPrompt,
-    pub answers: Vec<String>,
+    /// Zeroed when dropped.
+    pub answers: Vec<Zeroizing<String>>,
     pub focus_requested: bool,
     /// User name as edited in the dialog (see [`AuthPrompt::user`]).
     pub user: String,
@@ -45,10 +46,22 @@ pub struct PendingAuth {
 }
 
 impl PendingAuth {
-    /// A login prompt asking for exactly a password (not a passphrase, not a one-time code).
+    /// A login prompt asking for exactly the account password (not a passphrase, not a
+    /// one-time code after the password).
     pub fn is_password(&self) -> bool {
-        self.prompt.user.is_some() && matches!(self.prompt.fields.as_slice(), [only] if !only.echo)
+        self.prompt.account_password
+            && self.prompt.user.is_some()
+            && matches!(self.prompt.fields.as_slice(), [only] if !only.echo)
     }
+}
+
+/// `text` with control characters (escape sequences, carriage returns, ...) made harmless for
+/// the terminal: line breaks and tabs stay, anything else becomes `?`.
+pub fn printable(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .chars()
+        .map(|c| if c.is_control() && c != '\n' && c != '\t' { '?' } else { c })
+        .collect()
 }
 
 /// What a tab was opened with; enough to duplicate it.
@@ -114,6 +127,8 @@ pub struct Session {
     pub scroll_accum: f32,
     /// Clipboard text the remote side asked us to store (OSC 52).
     pub clipboard_store: Option<String>,
+    /// Several lines waiting for the user to confirm the paste (see `view::request_paste`).
+    pub pending_paste: Option<String>,
     pub click: ClickState,
     pub mouse: MouseReport,
     pub sftp: Option<SftpBrowser>,
@@ -191,6 +206,7 @@ impl Session {
             preedit: String::new(),
             scroll_accum: 0.0,
             clipboard_store: None,
+            pending_paste: None,
             click: ClickState::default(),
             mouse: MouseReport::default(),
             sftp: None,
@@ -267,7 +283,7 @@ impl Session {
         let Some(Remote { params: p, .. }) = &self.remote else { return t("로컬", "Local").into() };
         match p.protocol {
             Protocol::Serial => format!("Serial {} ({})", p.serial.port, p.serial.line_summary()),
-            proto => format!("{proto} {}:{}", p.host, p.port),
+            proto => format!("{proto} {}:{}", printable(&p.host), p.port),
         }
     }
 
@@ -374,6 +390,38 @@ impl Session {
         self.tx_bytes = 0;
     }
 
+    /// Forgets the password this tab connects with (the vault was locked): a reconnect asks
+    /// again, or for the vault to be unlocked.
+    pub fn forget_password(&mut self) {
+        use zeroize::Zeroize as _;
+        if let Some(remote) = &mut self.remote
+            && let Some(mut password) = remote.params.password.take()
+        {
+            password.zeroize();
+        }
+        if let Some(script) = &mut self.login_script {
+            script.password = None;
+        }
+        self.login = None;
+        self.save_on_login = None;
+    }
+
+    /// Whether this tab's site saves its password but the tab has none (the vault was locked).
+    pub fn lacks_saved_password(&self) -> bool {
+        self.profile.as_ref().is_some_and(|p| p.save_password)
+            && self.remote.as_ref().is_some_and(|r| r.params.password.is_none())
+    }
+
+    /// Gives the tab its saved password again (the vault was unlocked to reconnect).
+    pub fn restore_password(&mut self, password: String) {
+        if let Some(script) = &mut self.login_script {
+            script.password = Some(Zeroizing::new(password.clone()));
+        }
+        if let Some(remote) = &mut self.remote {
+            remote.params.password = Some(password);
+        }
+    }
+
     /// What this tab is connected with; `None` for a tab that never connected.
     pub fn spec(&self) -> Option<SessionSpec> {
         Some(SessionSpec {
@@ -458,7 +506,7 @@ impl Session {
                 SessionEvent::Notice(text) => self.notice(&text, "33"),
                 SessionEvent::HostKeyCheck(check) => self.host_key = Some(check),
                 SessionEvent::AuthPrompt(prompt) => {
-                    let answers = vec![String::new(); prompt.fields.len()];
+                    let answers = (0..prompt.fields.len()).map(|_| Zeroizing::new(String::new())).collect();
                     let user = prompt.user.clone().unwrap_or_default();
                     // Ticked already when it was ticked at the last (wrong) try, or when the site
                     // saves its password (then the saved one was wrong).
@@ -529,7 +577,7 @@ impl Session {
     /// Answers the prompt the output now ends at, if it is the next login step.
     fn auto_login(&mut self, newline: bool) {
         let Some(runner) = &mut self.login else { return };
-        let action = runner.on_output(newline, &self.terminal.cursor_line_text());
+        let action = runner.on_output(newline, &self.terminal.cursor_line_text(), std::time::Instant::now());
         if runner.done() {
             self.login = None;
         }
@@ -546,9 +594,11 @@ impl Session {
         }
     }
 
-    /// Writes a local status line into the terminal, in the given SGR color.
+    /// Writes a local status line into the terminal, in the given SGR color. The text can come
+    /// from a server (an SSH banner, an error message): its control characters are shown, not
+    /// run, so it cannot set the clipboard or title or draw fake status lines.
     fn notice(&mut self, text: &str, sgr: &str) {
-        let body = text.trim_end().replace("\r\n", "\n").replace('\n', "\r\n");
+        let body = printable(text.trim_end()).replace('\n', "\r\n");
         self.terminal.feed_local(&format!("\r\n\x1b[{sgr}m[{body}]\x1b[0m\r\n"));
     }
 
@@ -561,6 +611,15 @@ impl Session {
     pub fn send_bytes(&mut self, bytes: Vec<u8>) {
         if bytes.is_empty() {
             return;
+        }
+        // Any input of the user's own ends a pending automatic login, except Enter, which
+        // wakes up consoles that only show their prompt then.
+        if bytes == b"\r" {
+            if let Some(login) = &mut self.login {
+                login.extend(std::time::Instant::now());
+            }
+        } else {
+            self.login = None;
         }
         if self.in_console() {
             self.console_key(&bytes);
@@ -764,5 +823,18 @@ impl Session {
         if let Some(remote) = &self.remote {
             remote.handle.close();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_text_cannot_run_escape_sequences() {
+        let banner = "Welcome\r\n\x1b]52;c;ZXZpbA==\x07\x1b[2J[verified]\rfake\tok";
+        let shown = printable(banner);
+        assert!(!shown.contains('\x1b') && !shown.contains('\x07') && !shown.contains('\r'), "{shown:?}");
+        assert_eq!(shown, "Welcome\n?]52;c;ZXZpbA==??[2J[verified]?fake\tok");
     }
 }

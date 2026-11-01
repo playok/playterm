@@ -17,9 +17,9 @@ call :tools || exit /b 1
 
 echo == Building playterm (%PROFILE%)
 if /i "%PROFILE%"=="release" (
-    cargo build --release -p playterm
+    cargo build --release --locked -p playterm
 ) else (
-    cargo build -p playterm
+    cargo build --locked -p playterm
 )
 if errorlevel 1 (
     echo.

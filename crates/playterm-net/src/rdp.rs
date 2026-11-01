@@ -498,6 +498,7 @@ async fn run(
                         String::new(),
                         vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
                         Some(&params.username),
+                        true,
                     )
                     .await
                     .ok_or_else(|| anyhow!(t("인증이 취소되었습니다", "Authentication cancelled")))?;

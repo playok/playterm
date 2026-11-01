@@ -21,7 +21,7 @@ use crate::menu::{self, Command, MenuState};
 use crate::power::{ScreenSaverGuard, SleepGuard};
 use crate::profile_form::expand_home;
 use crate::search_bar::SearchBar;
-use crate::session::{Session, SessionSpec, SessionState, TermSetup};
+use crate::session::{Session, SessionSpec, SessionState, TermSetup, printable};
 use crate::settings_dialog::{SettingsDialog, SettingsResult};
 use crate::sidebar::{self, Sidebar, SidebarAction, VaultState};
 use crate::site_manager::{SiteManager, SiteManagerResult};
@@ -87,6 +87,8 @@ enum Pending {
     Unlock,
     /// Connect a saved profile, using its stored password, in the given tab if any.
     Connect(String, Option<u64>),
+    /// Reconnect the tab with this id, with its site's stored password.
+    Reconnect(u64),
     /// Connect several saved profiles, laid out this way.
     ConnectMany(Vec<String>, TemplateLayout),
     /// Store a password typed in the site manager (and connect, in the given tab if any).
@@ -426,6 +428,40 @@ impl PlaytermApp {
         self.vault.set(id, &target, password)
     }
 
+    /// Locks the vault and takes the passwords it gave out back from the open tabs, so a
+    /// locked vault really means no saved password is at hand.
+    fn lock_vault(&mut self) {
+        self.vault.lock();
+        for session in &mut self.sessions {
+            session.forget_password();
+        }
+    }
+
+    /// Reconnects tab `i`, unlocking the vault first if its site's password was taken back.
+    fn reconnect(&mut self, i: usize) {
+        let session = &self.sessions[i];
+        if session.lacks_saved_password() && !self.vault.is_unlocked() && self.vault.exists() {
+            let name = session.profile().map(|p| p.display_name()).unwrap_or_default();
+            let reason = tr!("'{name}' 의 저장된 비밀번호를 사용합니다.", "Uses the saved password of '{name}'.");
+            self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, reason), Pending::Reconnect(session.id)));
+            return;
+        }
+        self.restore_and_reconnect(i);
+    }
+
+    /// Reconnects tab `i` with its site's saved password if the vault is open.
+    fn restore_and_reconnect(&mut self, i: usize) {
+        if self.sessions[i].lacks_saved_password()
+            && self.vault.is_unlocked()
+            && let Some(profile) = self.sessions[i].profile().cloned()
+            && let Some(password) = self.saved_password(&profile)
+        {
+            self.sessions[i].restore_password(password);
+        }
+        let waker = self.waker.clone();
+        self.sessions[i].reconnect(&self.net, waker);
+    }
+
     /// Forgets the password of `id` now, or on the next unlock if the vault is locked.
     fn forget_secret(&mut self, id: &str) {
         if self.vault.is_unlocked() {
@@ -604,6 +640,11 @@ impl PlaytermApp {
             Pending::Unlock => {}
             Pending::Connect(id, target) => self.connect_in(target, |app| app.connect_saved(&id)),
             Pending::ConnectMany(ids, layout) => self.open_many(&ids, layout, true),
+            Pending::Reconnect(id) => {
+                if let Some(i) = self.index_of(id) {
+                    self.restore_and_reconnect(i);
+                }
+            }
             Pending::StoreSecret { id, password, connect, target } => {
                 let r = self.set_secret(&id, &password);
                 self.report(t("비밀번호 저장 실패", "Could not save the password"), r);
@@ -626,6 +667,12 @@ impl PlaytermApp {
             }
             // Each site asks for its password.
             Pending::ConnectMany(ids, layout) => self.open_many(&ids, layout, false),
+            Pending::Reconnect(id) => {
+                if let Some(i) = self.index_of(id) {
+                    let waker = self.waker.clone();
+                    self.sessions[i].reconnect(&self.net, waker);
+                }
+            }
             Pending::SaveLogin { .. } => {
                 self.status = Some(t("비밀번호는 저장되지 않았습니다", "The password was not saved").into());
             }
@@ -690,7 +737,7 @@ impl PlaytermApp {
                 self.duplicate_profile(&id);
             }
             SidebarAction::Delete(id) => self.modal = Some(Modal::ConfirmDelete(id)),
-            SidebarAction::LockVault => self.vault.lock(),
+            SidebarAction::LockVault => self.lock_vault(),
             SidebarAction::UnlockVault => self.unlock_vault(),
         }
     }
@@ -771,8 +818,7 @@ impl PlaytermApp {
             Request::NewSite => self.open_site_manager(None, true, Some(id)),
             Request::QuickConnect => self.open_quick_connect(Some(id)),
             Request::Reconnect if self.sessions[i].has_target() => {
-                let waker = self.waker.clone();
-                self.sessions[i].reconnect(&self.net, waker);
+                self.reconnect(i);
                 return;
             }
             Request::Reconnect => output = Some(t("다시 연결할 대상이 없습니다", "Nothing to reconnect to").into()),
@@ -818,13 +864,13 @@ impl PlaytermApp {
             out.push_str(&format!(
                 "{:>4}  {}  {}  {}\n",
                 n + 1,
-                pad(&p.display_name(), 20),
-                pad(&sidebar::summary(p), 34),
-                p.folder
+                pad(&printable(&p.display_name()), 20),
+                pad(&printable(&sidebar::summary(p)), 34),
+                printable(&p.folder)
             ));
         }
         if shown == 0 {
-            out.push_str(&tr!("'{}' 와 일치하는 사이트가 없습니다\n", "No sites match '{}'\n", filter.trim()));
+            out.push_str(&tr!("'{}' 와 일치하는 사이트가 없습니다\n", "No sites match '{}'\n", printable(filter.trim())));
         }
         out.push_str(t("\x1b[90mopen 번호|이름 으로 접속\x1b[0m", "\x1b[90mopen <number|name> to connect\x1b[0m"));
         out
@@ -834,7 +880,10 @@ impl PlaytermApp {
 
     /// The connected tabs, other than the active one, that receive simultaneous input.
     fn broadcast_targets(&self) -> Vec<usize> {
-        if !self.broadcast {
+        // Only what is typed into a connected tab is repeated: text typed at a local prompt
+        // (`exit`, `ssh root@db`) must not run in every connected shell.
+        let active_connected = self.sessions.get(self.active).is_some_and(|s| s.state == SessionState::Connected);
+        if !self.broadcast || !active_connected {
             return Vec::new();
         }
         (0..self.sessions.len())
@@ -964,11 +1013,13 @@ impl PlaytermApp {
                 }
             }
             Command::Paste => {
+                let keys = self.settings.clipboard;
                 if let Some(s) = self.sessions.get_mut(self.active)
                     && let Some(text) = clipboard::read_text()
                 {
-                    view::paste(s, &text);
-                    self.broadcast_input(&[UserInput::Paste(text)]);
+                    let mut inputs = Vec::new();
+                    view::request_paste(s, text, &mut inputs, &keys);
+                    self.broadcast_input(&inputs);
                 }
             }
             Command::SelectAll => {
@@ -1047,7 +1098,7 @@ impl PlaytermApp {
                 }
             }
             Command::OpenLogFolder => logging::reveal(&logging::default_log_dir()),
-            Command::LockVault => self.vault.lock(),
+            Command::LockVault => self.lock_vault(),
             Command::UnlockVault => self.unlock_vault(),
 
             Command::Activate(i) if i < n => self.active = i,
@@ -1071,8 +1122,7 @@ impl PlaytermApp {
                 None => {}
             },
             Command::Reconnect(i) if i < n => {
-                let waker = self.waker.clone();
-                self.sessions[i].reconnect(&self.net, waker);
+                self.reconnect(i);
                 self.active = i;
             }
             Command::Close(i) if i < n => self.close_session(i),
@@ -1285,6 +1335,20 @@ impl PlaytermApp {
                 }
                 let waker = self.waker.clone();
                 self.sessions[index].relogin(relogin.user, relogin.password, &self.net, waker);
+            }
+            return true;
+        }
+        if let Some(index) = self.sessions.iter().position(|s| s.pending_paste.is_some()) {
+            self.active = index;
+            let text = self.sessions[index].pending_paste.clone().unwrap_or_default();
+            match dialogs::confirm_paste(ctx, &text) {
+                None => {}
+                Some(false) => self.sessions[index].pending_paste = None,
+                Some(true) => {
+                    self.sessions[index].pending_paste = None;
+                    view::paste(&mut self.sessions[index], &text);
+                    self.broadcast_input(&[UserInput::Paste(text)]);
+                }
             }
             return true;
         }

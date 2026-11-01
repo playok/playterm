@@ -123,6 +123,8 @@ mod tests {
             assert!(COMPONENTS.iter().any(|c| c.name == name), "{name} is listed");
         }
         assert!(!COMPONENTS.iter().any(|c| c.name.starts_with("playterm")), "our own crates are not listed");
+        let without: Vec<&str> = COMPONENTS.iter().filter(|c| c.texts.is_empty()).map(|c| c.name).collect();
+        assert!(without.is_empty(), "every component has its license text: {without:?}");
         // Procedural macros run in the compiler only.
         for name in ["syn", "serde_derive", "thiserror-impl"] {
             assert!(!COMPONENTS.iter().any(|c| c.name == name), "{name} is not listed");

@@ -46,7 +46,8 @@ cargo build --release
 | `build.cmd` | Release build → `target\release\playterm.exe` (`build.cmd debug` for a debug build) |
 | `release.cmd` | clippy → tests → ARM64 and x64 packages → zips and `SHA256SUMS.txt` in `dist\` (`release.cmd x64` builds just one). The exe is compressed with UPX (`noupx` turns it off) |
 
-Both scripts put LLVM (clang) on PATH by themselves. `release.cmd` warns about uncommitted changes.
+Both scripts put LLVM (clang) on PATH by themselves and build with `--locked`, so only the dependency versions in `Cargo.lock` are used.
+`release.cmd` stops when there are uncommitted changes (`release.cmd dirty` makes a test package anyway).
 
 ### Release packages
 
@@ -55,9 +56,9 @@ rustup target add x86_64-pc-windows-msvc     # once
 release.cmd                                  # or: pwsh scripts\package.ps1 -Upx (package only, no checks or tests; without -Upx nothing is compressed)
 ```
 
-- The exe in the zip is compressed with **UPX** (about 21 MB → 7 MB). Set `UPX_EXE` to a path or command name, or the script downloads a pinned
-  version (5.3.0) once from the official GitHub release into `tools\upx`. The zip and the `upx.exe` in it are checked against SHA-256, and `upx.exe`
-  is checked again every time it runs (ARM64 exes need UPX 5.3.0 or newer). A compressed exe is unpacked in memory by each window (process),
+- The exe in the zip is compressed with **UPX** (about 21 MB → 7 MB). Set `UPX_EXE` (a path or command name) with `UPX_SHA256`, its SHA-256, or the
+  script downloads a pinned version (5.3.0) once from the official GitHub release into `tools\upx`. The zip and the `upx.exe` in it are checked
+  against SHA-256, and each run copies `upx.exe` to a new temporary folder and checks that copy right before running it (ARM64 exes need UPX 5.3.0 or newer). A compressed exe is unpacked in memory by each window (process),
   so several windows use a little more memory. Some antivirus products flag UPX-compressed exes; build with `release.cmd noupx` if that matters.
 - The C runtime is linked statically (`.cargo/config.toml`), so no VC++ redistributable is needed.
 - DLLs are loaded from System32 only (the `/DEPENDENTLOADFLAG` link option and `SetDefaultDllDirectories` at start): a DLL of the same name
@@ -147,6 +148,8 @@ Connection commands connect in that tab, and the prompt comes back when the conn
     - Remote copy (OSC 52, on by default): remote programs such as tmux or vim can put text on this PC's clipboard, only from the tab on screen,
       up to 1 MB, with a notice each time. Reading the clipboard from the remote side is always refused.
     - Programs that use bracketed paste get pasted text without any ESC in it, so a paste cannot end early and run as typed commands.
+    - Confirm paste (on by default): pasting several lines where there is no bracketed paste would run each line as a command, so the text is shown first
+      for confirmation.
     - Copying in the terminal slides up a short notice at the bottom, like `Copied · 104 chars · 3 lines “pla…~>”`: the size and the first
       and last 3 characters (line breaks shown as ⏎, tabs as →), so copying the wrong range is noticed right away.
 - **Status bar** (bottom of the window, View → Status bar): connection state, target, encoding, logging indicator,
@@ -167,7 +170,8 @@ Use it for logins on Telnet devices and serial consoles, or for commands after a
 
 - When a line on the screen **ends with** the text to wait for, the input is typed followed by Enter (case is ignored). Lines like "Last login: ..." do not match.
 - `{user}` becomes the site's user name and `{password}` the password saved in the vault (Telnet and serial sites can store a user name and password too).
-- Steps run once each, in order; the next step is checked after a new line arrives. Typing yourself stops the automatic login.
+- Steps run once each, in order; the next step is checked after a new line arrives. Typing yourself (other than just Enter) stops the automatic login.
+- It stops when the next prompt does not come within a minute, so a `Password:` showing up much later (another program's output) never gets the password.
 - If no password is saved, it stops at that step and tells you.
 
 ## Typing into all tabs
@@ -277,6 +281,10 @@ so playterm reconnects and logs in as that user; for a saved site, check **Save 
 
 Check **Save password** in the password dialog (for a saved site) to store the password in the vault after a successful login and switch the site to
 'Save password'. A wrong password is never stored; if the vault is locked you are asked to unlock it (or create it the first time). Cancelling that dialog changes nothing.
+A further factor asked after the password (a one-time code, say) never gets the saved password and is never saved as the password.
+
+**Locking** the vault also takes the passwords back from the open tabs; reconnecting such a tab asks to unlock the vault first. Resetting the vault
+with 'Forgot the master password?' keeps the old file as `vault.toml.bak`.
 
 ## Configuration files
 

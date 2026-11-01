@@ -48,7 +48,36 @@ impl server::Handler for TestServer {
     type Error = russh::Error;
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
-        Ok(if user == "tester" && password == "secret" { Auth::Accept } else { reject() })
+        Ok(match (user, password) {
+            ("tester", "secret") => Auth::Accept,
+            // Password, then a one-time code (keyboard-interactive).
+            ("otp", "secret") => Auth::Reject {
+                proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])),
+                partial_success: true,
+            },
+            _ => reject(),
+        })
+    }
+
+    async fn auth_keyboard_interactive<'a>(
+        &'a mut self,
+        user: &str,
+        _submethods: &str,
+        response: Option<server::Response<'a>>,
+    ) -> Result<Auth, Self::Error> {
+        if user != "otp" {
+            return Ok(reject());
+        }
+        Ok(match response {
+            None => Auth::Partial {
+                name: "".into(),
+                instructions: "".into(),
+                prompts: vec![("Verification code: ".into(), false)].into(),
+            },
+            Some(mut answers) => {
+                if answers.next().as_deref() == Some(b"123456".as_slice()) { Auth::Accept } else { reject() }
+            }
+        })
     }
 
     async fn auth_publickey(&mut self, user: &str, key: VerifiedPublicKey<'_>) -> Result<Auth, Self::Error> {
@@ -377,6 +406,21 @@ fn host_key_of_another_type_is_a_changed_key() {
 }
 
 #[test]
+fn second_factor_is_not_the_password() {
+    // Password accepted, then a one-time code: the saved password must not be sent as the
+    // code, and the code prompt is not offered for saving as the password.
+    let fx = Fixture::new("otp", &[]);
+    fx.trust_host();
+    let h = fx.connect(ConnectParams { username: "otp".into(), password: Some("secret".into()), ..fx.params() });
+    let prompt = expect_prompt(&h);
+    assert_eq!(prompt.fields.len(), 1);
+    assert!(prompt.fields[0].label.contains("Verification code"), "{:?}", prompt.fields);
+    assert!(!prompt.account_password, "a one-time code is not the account password");
+    prompt.answer(Some(vec!["123456".into()]));
+    expect_connected(&h);
+}
+
+#[test]
 fn wrong_password_falls_back_to_prompt() {
     let fx = Fixture::new("prompt", &[]);
     fx.trust_host();
@@ -388,6 +432,7 @@ fn wrong_password_falls_back_to_prompt() {
     assert_eq!(prompt.fields.len(), 1);
     assert!(!prompt.fields[0].echo);
     assert_eq!(prompt.user.as_deref(), Some("tester"), "a login prompt says whose password it wants");
+    assert!(prompt.account_password, "the password itself may be saved");
     prompt.answer(Some(vec!["secret".into()]));
     expect_connected(&h);
 }

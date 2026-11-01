@@ -80,6 +80,9 @@ pub struct ClipboardKeys {
     /// Programs on the remote side may put text on the clipboard (OSC 52, e.g. tmux or vim
     /// yanks). Only the current tab, with a notice each time; never read.
     pub remote_copy: bool,
+    /// Ask before pasting several lines where each line would run as a command (no bracketed
+    /// paste).
+    pub confirm_multiline_paste: bool,
 }
 
 impl Default for ClipboardKeys {
@@ -95,6 +98,7 @@ impl Default for ClipboardKeys {
             right_click_paste: false,
             middle_click_paste: false,
             remote_copy: true,
+            confirm_multiline_paste: true,
         }
     }
 }

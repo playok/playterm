@@ -5,6 +5,10 @@ rem
 rem   release.cmd              ARM64 and x64, executables compressed with UPX
 rem   release.cmd x64          one architecture (arm64 or x64)
 rem   release.cmd noupx        without UPX compression (also: release.cmd x64 noupx)
+rem   release.cmd dirty        package even with uncommitted changes (not for a real release)
+rem
+rem Builds use --locked: Cargo.lock must already match the manifests, so no dependency
+rem version changes quietly during a release.
 rem
 rem The x64 build needs its Rust target once: rustup target add x86_64-pc-windows-msvc
 rem UPX: %UPX_EXE% (a path or a command on PATH) if set, else the pinned release in tools\upx
@@ -14,6 +18,7 @@ cd /d "%~dp0"
 
 set "ARCH="
 set "UPX_FLAG=-Upx"
+set "ALLOW_DIRTY="
 :args
 if "%~1"=="" goto :args_done
 if /i "%~1"=="arm64" (
@@ -24,6 +29,8 @@ if /i "%~1"=="arm64" (
     set "ARCH=x64"
 ) else if /i "%~1"=="noupx" (
     set "UPX_FLAG="
+) else if /i "%~1"=="dirty" (
+    set "ALLOW_DIRTY=1"
 ) else (
     goto :usage
 )
@@ -33,17 +40,21 @@ goto :args
 
 call :tools || exit /b 1
 
-rem A release should be built from committed code.
+rem A release is built from committed code (the zip name says nothing about local changes).
 set "DIRTY="
 for /f %%i in ('git status --porcelain 2^>nul') do set "DIRTY=1"
+if defined DIRTY if not defined ALLOW_DIRTY (
+    echo There are uncommitted changes. Commit them, or run "release.cmd dirty" for a test package.
+    exit /b 1
+)
 if defined DIRTY echo warning: there are uncommitted changes; the packages will include them.
 for /f %%i in ('git rev-parse --short HEAD 2^>nul') do echo == Commit %%i
 
 echo == Checking (clippy)
-cargo clippy --workspace --all-targets -- -D warnings || goto :failed
+cargo clippy --locked --workspace --all-targets -- -D warnings || goto :failed
 
 echo == Testing
-cargo test --workspace || goto :failed
+cargo test --locked --workspace || goto :failed
 
 echo == Packaging
 set "PS=powershell"
@@ -63,7 +74,7 @@ type dist\SHA256SUMS.txt
 exit /b 0
 
 :usage
-echo Usage: release.cmd [arm64^|x64] [noupx]
+echo Usage: release.cmd [arm64^|x64] [noupx] [dirty]
 echo   One architecture, or none for both.
 exit /b 2
 

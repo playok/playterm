@@ -279,6 +279,14 @@ impl SettingsDialog {
         });
         ui.end_row();
 
+        ui.label(t("붙여넣기 확인", "Confirm paste"));
+        ui.checkbox(&mut keys.confirm_multiline_paste, t("여러 줄을 붙여넣기 전에 확인", "Ask before pasting several lines"))
+            .on_hover_text(t(
+                "붙여넣을 내용이 여러 줄이면 줄마다 Enter 가 입력되어 명령으로 바로 실행될 수 있어, 미리 보여 주고 확인을 받습니다.\n원격 프로그램이 붙여넣기 보호(bracketed paste)를 켠 경우에는 묻지 않습니다.",
+                "Several lines each end with Enter and may run as commands right away, so they are shown first for confirmation.\nNot asked when the remote program turned on bracketed paste.",
+            ));
+        ui.end_row();
+
         ui.label(t("원격 복사", "Remote copy"));
         ui.checkbox(&mut keys.remote_copy, t("원격 프로그램이 클립보드에 쓰기 허용 (OSC 52)", "Let remote programs set the clipboard (OSC 52)"))
             .on_hover_text(t(
