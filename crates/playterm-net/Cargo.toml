@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-base64 = "0.22"
+base64 = "0.23.1"
 ironrdp-cliprdr = "0.9"
 ironrdp-cliprdr-native = "0.9"
 ironrdp-connector = "0.12"
