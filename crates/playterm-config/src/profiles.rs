@@ -249,8 +249,37 @@ impl Default for SiteTemplate {
     }
 }
 
+/// `" a / b//c "` -> `"a/b/c"`: a folder path, with `/` between the levels ("" = top level).
+pub fn normalize_folder(path: &str) -> String {
+    path.split('/').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/")
+}
+
+/// The folder that contains folder `path` ("" for a folder at the top level).
+pub fn parent_folder(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(parent, _)| parent)
+}
+
+/// The last level of folder `path`: its name.
+pub fn folder_name(path: &str) -> &str {
+    path.rsplit_once('/').map_or(path, |(_, name)| name)
+}
+
+/// Whether folder `path` is `folder` or inside it.
+fn in_folder(path: &str, folder: &str) -> bool {
+    path == folder || path.strip_prefix(folder).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// `path` with its part `from` (a folder it is in) replaced by `to`.
+fn moved(path: &str, from: &str, to: &str) -> String {
+    let rest = path.strip_prefix(from).unwrap_or(path).trim_start_matches('/');
+    normalize_folder(&format!("{to}/{rest}"))
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct ProfileFile {
+    /// Folders that exist on their own (also empty ones); folders of sites exist anyway.
+    #[serde(default, rename = "folders", skip_serializing_if = "Vec::is_empty")]
+    folders: Vec<String>,
     #[serde(default, rename = "session")]
     sessions: Vec<SessionProfile>,
     #[serde(default, rename = "template", skip_serializing_if = "Vec::is_empty")]
@@ -262,6 +291,8 @@ pub struct ProfileStore {
     path: PathBuf,
     profiles: Vec<SessionProfile>,
     templates: Vec<SiteTemplate>,
+    /// Folders made with "New folder" (see [`ProfileStore::folders`]).
+    folders: Vec<String>,
 }
 
 impl ProfileStore {
@@ -274,12 +305,17 @@ impl ProfileStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => ProfileFile::default(),
             Err(e) => return Err(e),
         };
-        Ok(Self { path, profiles: file.sessions, templates: file.templates })
+        let folders = file.folders.iter().map(|f| normalize_folder(f)).filter(|f| !f.is_empty()).collect();
+        let mut profiles = file.sessions;
+        for p in &mut profiles {
+            p.folder = normalize_folder(&p.folder);
+        }
+        Ok(Self { path, profiles, templates: file.templates, folders })
     }
 
     /// An empty store that will be written to `path` on the first change.
     pub fn empty(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into(), profiles: Vec::new(), templates: Vec::new() }
+        Self { path: path.into(), profiles: Vec::new(), templates: Vec::new(), folders: Vec::new() }
     }
 
     pub fn path(&self) -> &Path {
@@ -295,7 +331,8 @@ impl ProfileStore {
     }
 
     /// Inserts or replaces (by id) and saves.
-    pub fn upsert(&mut self, profile: SessionProfile) -> io::Result<()> {
+    pub fn upsert(&mut self, mut profile: SessionProfile) -> io::Result<()> {
+        profile.folder = normalize_folder(&profile.folder);
         match self.profiles.iter_mut().find(|p| p.id == profile.id) {
             Some(existing) => *existing = profile,
             None => self.profiles.push(profile),
@@ -334,16 +371,104 @@ impl ProfileStore {
         self.save()
     }
 
-    /// Sorted folder names (empty string = top level first).
+    /// Every folder path, sorted, the top level ("") first: folders made on their own, folders
+    /// of sites, and the folders above them (`a/b` makes `a` too).
     pub fn folders(&self) -> Vec<String> {
-        let mut folders: Vec<String> = self.profiles.iter().map(|p| p.folder.trim().to_owned()).collect();
+        let mut all: std::collections::BTreeSet<String> = std::collections::BTreeSet::from([String::new()]);
+        for path in self.folders.iter().chain(self.profiles.iter().map(|p| &p.folder)) {
+            let mut path = normalize_folder(path);
+            while !path.is_empty() {
+                let parent = parent_folder(&path).to_owned();
+                all.insert(path);
+                path = parent;
+            }
+        }
+        let mut folders: Vec<String> = all.into_iter().collect();
         folders.sort_by_key(|f| f.to_lowercase());
-        folders.dedup();
         folders
     }
 
+    /// Makes folder `path` (inside its parent folder, made too if needed) and saves.
+    pub fn create_folder(&mut self, path: &str) -> io::Result<()> {
+        let path = normalize_folder(path);
+        if path.is_empty() || self.folders().contains(&path) {
+            return Ok(());
+        }
+        self.folders.push(path);
+        self.save()
+    }
+
+    /// Renames or moves folder `from` to `to`: its sites and the folders inside it go along.
+    /// Into an existing folder, the contents are merged.
+    pub fn rename_folder(&mut self, from: &str, to: &str) -> io::Result<()> {
+        let (from, to) = (normalize_folder(from), normalize_folder(to));
+        if from.is_empty() || to.is_empty() || from == to || in_folder(&to, &from) {
+            return Ok(());
+        }
+        for p in &mut self.profiles {
+            if in_folder(&p.folder, &from) {
+                p.folder = moved(&p.folder, &from, &to);
+            }
+        }
+        for f in &mut self.folders {
+            if in_folder(f, &from) {
+                *f = moved(f, &from, &to);
+            }
+        }
+        self.folders.sort();
+        self.folders.dedup();
+        self.save()
+    }
+
+    /// Removes folder `path`; nothing in it is deleted: its sites and the folders inside it move
+    /// up to its parent folder.
+    pub fn delete_folder(&mut self, path: &str) -> io::Result<()> {
+        let path = normalize_folder(path);
+        if path.is_empty() {
+            return Ok(());
+        }
+        let parent = parent_folder(&path).to_owned();
+        for p in &mut self.profiles {
+            if in_folder(&p.folder, &path) {
+                p.folder = moved(&p.folder, &path, &parent);
+            }
+        }
+        self.folders.retain(|f| f != &path);
+        for f in &mut self.folders {
+            if in_folder(f, &path) {
+                *f = moved(f, &path, &parent);
+            }
+        }
+        self.folders.retain(|f| !f.is_empty());
+        self.folders.sort();
+        self.folders.dedup();
+        self.save()
+    }
+
+    /// The sites in folder `path` and the folders inside it.
+    pub fn sites_in_folder(&self, path: &str) -> usize {
+        let path = normalize_folder(path);
+        self.profiles.iter().filter(|p| in_folder(&p.folder, &path)).count()
+    }
+
+    /// Moves site `id` into `folder` and saves.
+    pub fn move_site(&mut self, id: &str, folder: &str) -> io::Result<()> {
+        let folder = normalize_folder(folder);
+        match self.profiles.iter_mut().find(|p| p.id == id) {
+            Some(p) if p.folder != folder => {
+                p.folder = folder;
+                self.save()
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn save(&self) -> io::Result<()> {
-        let file = ProfileFile { sessions: self.profiles.clone(), templates: self.templates.clone() };
+        let file = ProfileFile {
+            folders: self.folders.clone(),
+            sessions: self.profiles.clone(),
+            templates: self.templates.clone(),
+        };
         let text = toml::to_string_pretty(&file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         write_atomic(&self.path, text.as_bytes())
     }
@@ -352,6 +477,58 @@ impl ProfileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folders_nest_and_survive_renames_and_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        let mut store = ProfileStore::load(&path).unwrap();
+        let site = |name: &str, folder: &str| SessionProfile { name: name.into(), folder: folder.into(), ..Default::default() };
+        store.upsert(site("web1", " 운영 / 웹 ")).unwrap();
+        store.upsert(site("db1", "운영/DB")).unwrap();
+        store.upsert(site("lab", "")).unwrap();
+        store.create_folder("개발/빈 폴더").unwrap();
+        assert_eq!(store.folders(), ["", "개발", "개발/빈 폴더", "운영", "운영/DB", "운영/웹"]);
+        assert_eq!(store.sites_in_folder("운영"), 2);
+
+        // Empty folders are kept in the file.
+        let reloaded = ProfileStore::load(&path).unwrap();
+        assert_eq!(reloaded.folders(), store.folders());
+
+        // A rename moves what is inside.
+        store.rename_folder("운영", "prod").unwrap();
+        let folder_of = |s: &ProfileStore, name: &str| s.profiles().iter().find(|p| p.name == name).unwrap().folder.clone();
+        assert_eq!(folder_of(&store, "web1"), "prod/웹");
+        assert_eq!(folder_of(&store, "db1"), "prod/DB");
+        assert!(!store.folders().contains(&"운영".to_owned()));
+        // Not into itself.
+        store.rename_folder("prod", "prod/x").unwrap();
+        assert_eq!(folder_of(&store, "web1"), "prod/웹");
+
+        // A delete moves the contents up; no site is lost.
+        store.delete_folder("prod").unwrap();
+        assert_eq!(folder_of(&store, "web1"), "웹");
+        assert_eq!(folder_of(&store, "db1"), "DB");
+        store.delete_folder("개발").unwrap();
+        assert_eq!(store.folders(), ["", "DB", "빈 폴더", "웹"]);
+        assert_eq!(store.profiles().len(), 3);
+
+        let id = store.profiles().iter().find(|p| p.name == "lab").unwrap().id.clone();
+        store.move_site(&id, "빈 폴더").unwrap();
+        assert_eq!(folder_of(&store, "lab"), "빈 폴더");
+        assert_eq!(ProfileStore::load(&path).unwrap().folders(), store.folders());
+    }
+
+    #[test]
+    fn folder_paths() {
+        assert_eq!(normalize_folder(" a / b//c "), "a/b/c");
+        assert_eq!(parent_folder("a/b/c"), "a/b");
+        assert_eq!(parent_folder("a"), "");
+        assert_eq!(folder_name("a/b/c"), "c");
+        assert!(in_folder("a/b", "a") && in_folder("a", "a") && !in_folder("ab", "a"));
+        assert_eq!(moved("a/b/c", "a/b", "x"), "x/c");
+        assert_eq!(moved("a/b", "a/b", ""), "");
+    }
 
     #[test]
     fn templates_are_saved_and_follow_site_removal() {

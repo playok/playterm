@@ -119,7 +119,12 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 - **Help → Open-source licenses**: the licenses of playterm (MIT) and of every open-source component built into the executable (searchable, with each one's full license text and source repository).
   The list is generated with `cargo metadata` at build time, so it follows dependency changes by itself.
 - **File → Site Manager** (Ctrl+Shift+S): sites by folder (searchable) on the left, the settings of the selected site on the right.
-  - [New site] / [Duplicate] / [Delete]; [Connect] / [Save] / [Revert] at the bottom right
+  - [New site] / [New folder] / [Duplicate] / [Delete]; [Connect] / [Save] / [Revert] at the bottom right
+  - **Folders** can be nested (`prod/web`). Right-click a folder for New site here, New folder inside, Rename and Delete; right-click a site for
+    Connect, Duplicate, Move to folder and Delete; right-click the empty space for New site and New folder.
+    Renaming a folder takes its sites and subfolders along; deleting a folder deletes no site: what is inside moves up to the parent folder.
+  - Folders have a yellow folder icon, sites a badge with the connection type (SSH green, TEL orange, COM (serial) purple, RDP blue), also in the site list.
+  - **[Tree] / [Grid]** switches the view. The grid has one row per site (type, name, target, user, folder); the chosen view is remembered.
   - Moving to another site or closing the window with unsaved changes asks whether to save them.
   - Double-clicking a site connects it and closes the window.
 - The site list on the left of the main window (Ctrl+Shift+B) is for quick access. [Manage] or right-click → Edit opens the Site Manager.
