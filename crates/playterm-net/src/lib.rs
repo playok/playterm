@@ -7,6 +7,7 @@
 mod deadline;
 mod forward;
 mod keepalive;
+pub mod ping;
 mod rdp;
 mod serial;
 mod session;

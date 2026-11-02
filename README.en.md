@@ -102,6 +102,7 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 | `telnet host [port]` | Telnet |
 | `serial COM3 [speed]` | Serial console |
 | `rdp [user@]host[:port]` | Remote Desktop |
+| `ping [-t] [-n count] [-w ms] [-l size] [-4\|-6] host` | Check that a host answers (the options of Windows' `ping`: 4 times by default, `-t` until Ctrl+C, `-c count` works too). Sent through the Windows ICMP API without administrator rights; at the end it shows the loss and round-trip statistics |
 | `open` | Site Manager |
 | `open name\|number` | Connect a saved site (the number from `sites`, or part of the name) |
 | `sites [search]` | List saved sites |
