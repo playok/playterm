@@ -532,6 +532,7 @@ impl ProfileForm {
                     t("자동 로그인의 {password}", "{password} in the automatic login")
                 };
                 let pw = ui.add(egui::TextEdit::singleline(&mut *self.password).password(true).hint_text(hint));
+                crate::dialogs::secret_field(ui, &pw);
                 submit |= enter(ui, &pw);
                 ui.end_row();
 
