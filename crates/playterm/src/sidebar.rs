@@ -8,6 +8,8 @@ use eframe::egui::{self, RichText};
 use playterm_config::{ProfileStore, SessionProfile, SiteTemplate, TemplateLayout};
 use playterm_i18n::{t, tr};
 
+use crate::site_tree;
+
 pub enum SidebarAction {
     Connect(String),
     /// Connect these sites, laid out this way.
@@ -265,16 +267,8 @@ impl Sidebar {
                     });
             }
             self.order.clear();
-            for (folder, items) in grouped(store, &self.filter) {
-                if folder.is_empty() {
-                    self.items(ui, &items, &mut action);
-                } else {
-                    egui::CollapsingHeader::new(RichText::new(&folder).strong())
-                        .id_salt(("folder", &folder))
-                        .default_open(true)
-                        .show(ui, |ui| self.items(ui, &items, &mut action));
-                }
-            }
+            let tree = site_tree::build(store, &self.filter);
+            self.folder_items(ui, &tree, &mut action);
             ui.add_space(6.0);
             ui.weak(RichText::new(t(
                 "Ctrl·Shift+클릭으로 여러 개를 골라 한 번에 연결하거나 템플릿으로 저장합니다.",
@@ -317,6 +311,14 @@ impl Sidebar {
         });
     }
 
+    /// The folders inside `folder` (as tree rows), then its sites.
+    fn folder_items(&mut self, ui: &mut egui::Ui, folder: &site_tree::Folder, action: &mut Option<SidebarAction>) {
+        for sub in &folder.folders {
+            site_tree::folder(ui, sub, "site-list-folder", |ui| self.folder_items(ui, sub, action));
+        }
+        self.items(ui, &folder.sites, action);
+    }
+
     fn items(&mut self, ui: &mut egui::Ui, items: &[&SessionProfile], action: &mut Option<SidebarAction>) {
         for p in items {
             self.order.push(p.id.clone());
@@ -331,6 +333,7 @@ impl Sidebar {
                             let (rect, _) = ui.allocate_exact_size(egui::vec2(4.0, 16.0), egui::Sense::hover());
                             ui.painter().rect_filled(rect, 1.0, color);
                         }
+                        site_tree::badge(ui, p.protocol);
                         ui.selectable_label(selected, p.display_name())
                     })
                     .inner

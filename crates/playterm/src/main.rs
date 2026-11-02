@@ -28,6 +28,7 @@ mod settings_dialog;
 mod sftp_view;
 mod sidebar;
 mod site_manager;
+mod site_tree;
 mod status_bar;
 mod template_dialog;
 mod toast;

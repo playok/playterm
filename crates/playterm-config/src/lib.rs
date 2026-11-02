@@ -6,6 +6,9 @@ mod profiles;
 mod settings;
 mod vault;
 
-pub use profiles::{AutoLogin, LogSettings, LoginStep, ProfileStore, SessionProfile, SiteTemplate, TabColor, TemplateLayout};
-pub use settings::{AppSettings, ClipboardKeys, Language, PreventSleep, UiTheme};
+pub use profiles::{
+    AutoLogin, LogSettings, LoginStep, ProfileStore, SessionProfile, SiteTemplate, TabColor, TemplateLayout, folder_name,
+    normalize_folder, parent_folder,
+};
+pub use settings::{AppSettings, ClipboardKeys, Language, PreventSleep, SiteView, UiTheme};
 pub use vault::{Vault, VaultError};

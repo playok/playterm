@@ -704,6 +704,7 @@ impl PlaytermApp {
     /// prompt tab it was opened from, if any.
     fn open_site_manager(&mut self, select: Option<&str>, new_site: bool, target: Option<u64>) {
         let mut manager = SiteManager::default();
+        manager.view = self.settings.site_view;
         if new_site {
             manager.new_site();
         } else if let Some(p) = select.and_then(|id| self.store.get(id)) {
@@ -772,6 +773,36 @@ impl PlaytermApp {
                 self.site_manager = Some(manager);
                 self.modal = Some(Modal::ConfirmDelete(id));
             }
+            SiteManagerResult::CreateFolder(path) => {
+                let r = self.store.create_folder(&path);
+                self.report(t("폴더를 만들 수 없습니다", "Could not create the folder"), r);
+                self.site_manager = Some(manager);
+            }
+            SiteManagerResult::RenameFolder { from, to } => {
+                let r = self.store.rename_folder(&from, &to);
+                self.report(t("폴더 이름을 바꿀 수 없습니다", "Could not rename the folder"), r);
+                manager.refresh(&self.store, &|p| has_secret(&self.vault, p));
+                self.site_manager = Some(manager);
+            }
+            SiteManagerResult::DeleteFolder(path) => {
+                let r = self.store.delete_folder(&path);
+                self.report(t("폴더를 삭제할 수 없습니다", "Could not delete the folder"), r);
+                manager.refresh(&self.store, &|p| has_secret(&self.vault, p));
+                self.site_manager = Some(manager);
+            }
+            SiteManagerResult::MoveSite { id, folder } => {
+                let r = self.store.move_site(&id, &folder);
+                self.report(t("사이트를 옮길 수 없습니다", "Could not move the site"), r);
+                manager.refresh(&self.store, &|p| has_secret(&self.vault, p));
+                self.site_manager = Some(manager);
+            }
+        }
+        // Tree or grid, remembered for the next time.
+        if let Some(manager) = &self.site_manager
+            && manager.view != self.settings.site_view
+        {
+            self.settings.site_view = manager.view;
+            self.settings_unsaved = Some(Instant::now());
         }
         if self.site_manager.is_none() {
             self.dialog_target = None;

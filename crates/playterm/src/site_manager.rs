@@ -2,15 +2,18 @@
 //! right. Saving, deleting and connecting are carried out by the app.
 
 use eframe::egui::{self, Button, Key, Modifiers, RichText};
-use playterm_config::{ProfileStore, SessionProfile};
+use playterm_config::{ProfileStore, SessionProfile, SiteView, folder_name, normalize_folder, parent_folder};
 use playterm_i18n::{t, tr};
 use zeroize::Zeroizing;
 
 use crate::profile_form::{FormOptions, ProfileForm};
-use crate::sidebar;
+use crate::{sidebar, site_tree};
 
-const LIST_WIDTH: f32 = 240.0;
+const LIST_WIDTH: f32 = 260.0;
 const FORM_WIDTH: f32 = 540.0;
+/// The grid needs room for its columns; the form gives some up.
+const GRID_LIST_WIDTH: f32 = 460.0;
+const GRID_FORM_WIDTH: f32 = 470.0;
 const BODY_HEIGHT: f32 = 440.0;
 
 pub enum SiteManagerResult {
@@ -25,6 +28,78 @@ pub enum SiteManagerResult {
     Duplicate(String),
     /// Ask to delete a saved site.
     Delete(String),
+    CreateFolder(String),
+    /// Rename (or move) a folder with everything in it.
+    RenameFolder { from: String, to: String },
+    /// Remove a folder; what is in it moves up a level.
+    DeleteFolder(String),
+    MoveSite { id: String, folder: String },
+}
+
+/// The folder dialogs.
+enum FolderPrompt {
+    New { parent: String, name: String, error: Option<String> },
+    Rename { path: String, parent: String, name: String, error: Option<String> },
+    Delete { path: String },
+}
+
+impl FolderPrompt {
+    fn new_in(parent: String) -> Self {
+        FolderPrompt::New { parent, name: String::new(), error: None }
+    }
+
+    fn rename(path: &str) -> Self {
+        FolderPrompt::Rename {
+            path: path.to_owned(),
+            parent: parent_folder(path).to_owned(),
+            name: folder_name(path).to_owned(),
+            error: None,
+        }
+    }
+
+    fn set_error(&mut self, e: String) {
+        if let FolderPrompt::New { error, .. } | FolderPrompt::Rename { error, .. } = self {
+            *error = Some(e);
+        }
+    }
+
+    /// The change asked for, or why it cannot be made.
+    fn result(&self, store: &ProfileStore) -> Result<SiteManagerResult, String> {
+        match self {
+            FolderPrompt::Delete { path } => Ok(SiteManagerResult::DeleteFolder(path.clone())),
+            FolderPrompt::New { parent, name, .. } | FolderPrompt::Rename { parent, name, .. } => {
+                let name = name.trim();
+                if name.is_empty() {
+                    return Err(t("폴더 이름을 입력하세요", "Enter a folder name").into());
+                }
+                if name.contains('/') {
+                    return Err(t("폴더 이름에 / 는 쓸 수 없습니다 (폴더 단계 구분 기호)", "A folder name cannot contain / (it separates levels)").into());
+                }
+                let path = normalize_folder(&format!("{parent}/{name}"));
+                if let FolderPrompt::Rename { path: from, .. } = self
+                    && from == &path
+                {
+                    return Ok(SiteManagerResult::Open);
+                }
+                if store.folders().contains(&path) {
+                    return Err(t("같은 이름의 폴더가 있습니다", "A folder with this name exists").into());
+                }
+                Ok(match self {
+                    FolderPrompt::Rename { path: from, .. } => SiteManagerResult::RenameFolder { from: from.clone(), to: path },
+                    _ => SiteManagerResult::CreateFolder(path),
+                })
+            }
+        }
+    }
+}
+
+/// Where a site connects, for the grid: `host:port`, or the serial port.
+fn target(p: &SessionProfile) -> String {
+    match p.protocol {
+        playterm_net::Protocol::Serial => format!("{} {}", p.serial.port, p.serial.baud),
+        _ if p.host.contains(':') => format!("[{}]:{}", p.host, p.port),
+        _ => format!("{}:{}", p.host, p.port),
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -48,6 +123,11 @@ pub struct SiteManager {
     form: Option<ProfileForm>,
     /// Asking whether to save the changes before going to `Next`.
     unsaved: Option<Next>,
+    /// Tree or grid (kept in the settings by the app).
+    pub view: SiteView,
+    /// The folder last clicked: where a new site or folder goes.
+    focus_folder: Option<String>,
+    folder_prompt: Option<FolderPrompt>,
 }
 
 /// Whether the vault (probably) holds a password for a site.
@@ -59,6 +139,17 @@ impl SiteManager {
         self.selected = Some(Selection::Site(profile.id.clone()));
         self.form = Some(ProfileForm::new(profile.clone(), has_secret));
         self.unsaved = None;
+    }
+
+    /// Shows the saved state of the selected site again after the app changed it (moved it,
+    /// renamed its folder), unless it is being edited.
+    pub fn refresh(&mut self, store: &ProfileStore, has_secret: SecretCheck<'_>) {
+        if !self.is_dirty()
+            && let Some(id) = self.selected_site().map(str::to_owned)
+            && let Some(p) = store.get(&id)
+        {
+            self.select(p, has_secret(p));
+        }
     }
 
     /// Starts a new, unsaved site.
@@ -140,16 +231,20 @@ impl SiteManager {
             ui.add_space(6.0);
             // A modal has no natural height limit: give the body a fixed size, or the vertical
             // separator and scroll areas would stretch to the whole screen.
-            let body = egui::vec2(LIST_WIDTH + FORM_WIDTH + 2.0 * ui.spacing().item_spacing.x + 6.0, BODY_HEIGHT);
+            let (list_width, form_width) = match self.view {
+                SiteView::Tree => (LIST_WIDTH, FORM_WIDTH),
+                SiteView::Grid => (GRID_LIST_WIDTH, GRID_FORM_WIDTH),
+            };
+            let body = egui::vec2(list_width + form_width + 2.0 * ui.spacing().item_spacing.x + 6.0, BODY_HEIGHT);
             ui.allocate_ui_with_layout(body, egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 ui.set_min_size(body);
                 ui.vertical(|ui| {
-                    ui.set_width(LIST_WIDTH);
+                    ui.set_width(list_width);
                     self.tree(ui, store, &mut next, &mut result);
                 });
                 ui.separator();
                 ui.vertical(|ui| {
-                    ui.set_width(FORM_WIDTH);
+                    ui.set_width(form_width);
                     self.details(ui, &folders, &mut result, has_secret);
                 });
             });
@@ -164,7 +259,8 @@ impl SiteManager {
             });
         });
         // Escape closes; a click outside does not (too easy to lose edits).
-        if modal.is_top_modal
+        if self.folder_prompt.is_none()
+            && modal.is_top_modal
             && !modal.any_popup_open
             && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
         {
@@ -174,6 +270,9 @@ impl SiteManager {
             result = self.go(next, store, has_secret);
         }
         if let Some(r) = self.unsaved_prompt(ctx, store, has_secret) {
+            result = r;
+        }
+        if let Some(r) = self.folder_dialog(ctx, store) {
             result = r;
         }
         result
@@ -186,12 +285,15 @@ impl SiteManager {
         next: &mut Option<Next>,
         result: &mut SiteManagerResult,
     ) {
-        ui.horizontal(|ui| {
+        let site = self.selected_site().map(str::to_owned);
+        let dirty = self.is_dirty();
+        ui.horizontal_wrapped(|ui| {
             if ui.button(t("새 사이트", "New site")).clicked() {
-                *next = Some(Next::Select(Some(Selection::New(self.current_folder()))));
+                *next = Some(Next::Select(Some(Selection::New(self.target_folder()))));
             }
-            let site = self.selected_site().map(str::to_owned);
-            let dirty = self.is_dirty();
+            if ui.button(t("새 폴더", "New folder")).clicked() {
+                self.folder_prompt = Some(FolderPrompt::new_in(self.target_folder()));
+            }
             if ui
                 .add_enabled(site.is_some() && !dirty, Button::new(t("복제", "Duplicate")))
                 .on_disabled_hover_text(t(
@@ -211,49 +313,266 @@ impl SiteManager {
                 }
             }
         });
-        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t("검색", "Search")).desired_width(f32::INFINITY));
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.view, SiteView::Tree, t("트리", "Tree")).on_hover_text(t("폴더별로 보기", "By folder"));
+            ui.selectable_value(&mut self.view, SiteView::Grid, t("그리드", "Grid"))
+                .on_hover_text(t("사이트마다 한 줄: 종류, 접속 대상, 폴더", "One row per site: type, target, folder"));
+            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t("검색", "Search")).desired_width(f32::INFINITY));
+        });
         ui.add_space(2.0);
 
-        egui::ScrollArea::vertical().id_salt("site-tree").auto_shrink([false, false]).show(ui, |ui| {
+        let folders = store.folders();
+        egui::ScrollArea::both().id_salt("site-tree").auto_shrink([false, false]).show(ui, |ui| {
             if matches!(self.selected, Some(Selection::New(_))) {
                 let _ = ui.selectable_label(true, RichText::new(t("새 사이트", "New site")).italics());
             }
-            if store.profiles().is_empty() {
+            if store.profiles().is_empty() && folders.len() <= 1 {
                 ui.weak(t("저장된 사이트가 없습니다.\n[새 사이트] 로 추가하세요.", "No saved sites.\nAdd one with [New site]."));
             }
-            for (folder, items) in sidebar::grouped(store, &self.filter) {
-                if folder.is_empty() {
-                    self.items(ui, &items, next, result);
-                } else {
-                    egui::CollapsingHeader::new(RichText::new(&folder).strong())
-                        .id_salt(("site-folder", &folder))
-                        .default_open(true)
-                        .show(ui, |ui| self.items(ui, &items, next, result));
+            let tree = site_tree::build(store, &self.filter);
+            match self.view {
+                SiteView::Tree => self.folder_items(ui, &tree, &folders, next, result),
+                SiteView::Grid => self.grid(ui, &tree, &folders, next, result),
+            }
+            // The empty space below: new site or folder at the top level.
+            let rest = ui.allocate_response(ui.available_size().max(egui::vec2(0.0, 24.0)), egui::Sense::click());
+            rest.context_menu(|ui| {
+                if ui.button(t("새 사이트", "New site")).clicked() {
+                    *next = Some(Next::Select(Some(Selection::New(String::new()))));
+                    ui.close();
                 }
+                if ui.button(t("새 폴더…", "New folder…")).clicked() {
+                    self.folder_prompt = Some(FolderPrompt::new_in(String::new()));
+                    ui.close();
+                }
+            });
+        });
+    }
+
+    /// The folders inside `folder` (as tree rows with their menus), then its sites.
+    fn folder_items(
+        &mut self,
+        ui: &mut egui::Ui,
+        folder: &site_tree::Folder,
+        folders: &[String],
+        next: &mut Option<Next>,
+        result: &mut SiteManagerResult,
+    ) {
+        for sub in &folder.folders {
+            let response =
+                site_tree::folder(ui, sub, "site-manager-folder", |ui| self.folder_items(ui, sub, folders, next, result));
+            if response.clicked() {
+                self.focus_folder = Some(sub.path.clone());
+            }
+            response.context_menu(|ui| {
+                if ui.button(t("이 폴더에 새 사이트", "New site here")).clicked() {
+                    *next = Some(Next::Select(Some(Selection::New(sub.path.clone()))));
+                    ui.close();
+                }
+                if ui.button(t("새 하위 폴더…", "New folder inside…")).clicked() {
+                    self.folder_prompt = Some(FolderPrompt::new_in(sub.path.clone()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button(t("이름 바꾸기…", "Rename…")).clicked() {
+                    self.folder_prompt = Some(FolderPrompt::rename(&sub.path));
+                    ui.close();
+                }
+                if ui.button(t("삭제…", "Delete…")).clicked() {
+                    self.folder_prompt = Some(FolderPrompt::Delete { path: sub.path.clone() });
+                    ui.close();
+                }
+            });
+        }
+        for p in &folder.sites {
+            let selected = self.selected_site() == Some(p.id.as_str());
+            let response = ui
+                .push_id(("site", &p.id), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        site_tree::badge(ui, p.protocol);
+                        ui.selectable_label(selected, p.display_name())
+                    })
+                    .inner
+                })
+                .inner;
+            self.site_response(response, p, selected, folders, next, result);
+        }
+    }
+
+    /// One row per site (sorted by folder, then name): type, name, target, user, folder.
+    fn grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        tree: &site_tree::Folder,
+        folders: &[String],
+        next: &mut Option<Next>,
+        result: &mut SiteManagerResult,
+    ) {
+        fn collect<'a>(folder: &site_tree::Folder<'a>, out: &mut Vec<&'a SessionProfile>) {
+            out.extend(folder.sites.iter().copied());
+            for sub in &folder.folders {
+                collect(sub, out);
+            }
+        }
+        let mut sites = Vec::new();
+        collect(tree, &mut sites);
+        sites.sort_by_key(|p| (p.folder.to_lowercase(), p.display_name().to_lowercase()));
+        egui::Grid::new("site-grid").num_columns(5).striped(true).spacing([10.0, 4.0]).show(ui, |ui| {
+            ui.label("");
+            ui.strong(t("이름", "Name"));
+            ui.strong(t("접속 대상", "Target"));
+            ui.strong(t("사용자", "User"));
+            ui.strong(t("폴더", "Folder"));
+            ui.end_row();
+            for p in sites {
+                let selected = self.selected_site() == Some(p.id.as_str());
+                site_tree::badge(ui, p.protocol);
+                let response = ui.push_id(("grid-site", &p.id), |ui| ui.selectable_label(selected, p.display_name())).inner;
+                self.site_response(response, p, selected, folders, next, result);
+                ui.label(target(p));
+                ui.label(&p.username);
+                ui.weak(if p.folder.is_empty() { "—" } else { &p.folder });
+                ui.end_row();
             }
         });
     }
 
-    fn items(
-        &self,
-        ui: &mut egui::Ui,
-        items: &[&SessionProfile],
+    /// Selecting (click), connecting (double click) and the menu of a site's row.
+    fn site_response(
+        &mut self,
+        response: egui::Response,
+        p: &SessionProfile,
+        selected: bool,
+        folders: &[String],
         next: &mut Option<Next>,
         result: &mut SiteManagerResult,
     ) {
-        for p in items {
-            let selected = self.selected_site() == Some(p.id.as_str());
-            let response = ui
-                .push_id(("site", &p.id), |ui| ui.selectable_label(selected, p.display_name()))
-                .inner
-                .on_hover_text(tr!("{}  (더블클릭: 연결)", "{}  (double-click: connect)", sidebar::summary(p)));
-            if response.clicked() && !selected {
-                *next = Some(Next::Select(Some(Selection::Site(p.id.clone()))));
-            }
-            // The first click of the double click selected it; connect only if nothing is pending.
-            if response.double_clicked() && selected && !self.is_dirty() && self.unsaved.is_none() {
+        let response = response.on_hover_text(tr!("{}  (더블클릭: 연결)", "{}  (double-click: connect)", sidebar::summary(p)));
+        if response.clicked() && !selected {
+            *next = Some(Next::Select(Some(Selection::Site(p.id.clone()))));
+        }
+        let idle = !self.is_dirty() && self.unsaved.is_none();
+        // The first click of the double click selected it; connect only if nothing is pending.
+        if response.double_clicked() && selected && idle {
+            *result = SiteManagerResult::Connect(p.id.clone());
+        }
+        // Changing other sites is fine; the one being edited must be saved first.
+        let free = idle || !selected;
+        response.context_menu(|ui| {
+            if ui.add_enabled(idle, Button::new(t("연결", "Connect"))).clicked() {
                 *result = SiteManagerResult::Connect(p.id.clone());
+                ui.close();
             }
+            if ui.add_enabled(idle, Button::new(t("복제", "Duplicate"))).clicked() {
+                *result = SiteManagerResult::Duplicate(p.id.clone());
+                ui.close();
+            }
+            ui.add_enabled_ui(free, |ui| {
+                ui.menu_button(t("폴더로 이동", "Move to folder"), |ui| {
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for folder in folders {
+                            let label = if folder.is_empty() { t("(최상위)", "(top level)").to_owned() } else { folder.clone() };
+                            if ui.add_enabled(folder != &p.folder, Button::new(label)).clicked() {
+                                *result = SiteManagerResult::MoveSite { id: p.id.clone(), folder: folder.clone() };
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+            });
+            ui.separator();
+            if ui.add_enabled(free, Button::new(t("삭제", "Delete"))).clicked() {
+                *result = SiteManagerResult::Delete(p.id.clone());
+                ui.close();
+            }
+        });
+    }
+
+    /// Where a new site or folder goes: the folder last clicked, else the selected site's.
+    fn target_folder(&self) -> String {
+        self.focus_folder.clone().unwrap_or_else(|| self.current_folder())
+    }
+
+    /// The new-folder, rename and delete dialogs for folders. Returns the change to make.
+    fn folder_dialog(&mut self, ctx: &egui::Context, store: &ProfileStore) -> Option<SiteManagerResult> {
+        let prompt = self.folder_prompt.as_mut()?;
+        let renaming = matches!(prompt, FolderPrompt::Rename { .. });
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::unique("site-folder-dialog")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            match prompt {
+                FolderPrompt::New { parent, name, error } | FolderPrompt::Rename { parent, name, error, .. } => {
+                    ui.heading(if renaming { t("폴더 이름 바꾸기", "Rename folder") } else { t("새 폴더", "New folder") });
+                    if !parent.is_empty() {
+                        ui.weak(tr!("위치: {parent}", "In: {parent}"));
+                    }
+                    let field = ui.add(egui::TextEdit::singleline(name).hint_text(t("폴더 이름", "Folder name")));
+                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if !enter {
+                        field.request_focus();
+                    }
+                    if let Some(e) = error {
+                        ui.colored_label(ui.visuals().error_fg_color, e.as_str());
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button(t("확인", "OK")).clicked() || enter {
+                            answer = Some(true);
+                        }
+                        if ui.button(t("취소", "Cancel")).clicked() {
+                            answer = Some(false);
+                        }
+                    });
+                }
+                FolderPrompt::Delete { path } => {
+                    ui.heading(t("폴더 삭제", "Delete folder"));
+                    let parent = parent_folder(path);
+                    let up = if parent.is_empty() {
+                        t("최상위로", "the top level").to_owned()
+                    } else {
+                        tr!("'{}' 폴더로", "'{}'", parent)
+                    };
+                    ui.label(tr!("'{}' 폴더를 삭제할까요?", "Delete the folder '{}'?", folder_name(path)));
+                    ui.weak(tr!(
+                        "안의 사이트 {}개와 하위 폴더는 지워지지 않고 {up} 옮겨집니다.",
+                        "Its {} sites and the folders inside it are not deleted: they move to {up}.",
+                        store.sites_in_folder(path)
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.button(t("삭제", "Delete")).clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button(t("취소", "Cancel")).clicked() {
+                            answer = Some(false);
+                        }
+                    });
+                }
+            }
+        });
+        if answer.is_none() && modal.should_close() {
+            answer = Some(false);
+        }
+        match answer? {
+            false => {
+                self.folder_prompt = None;
+                None
+            }
+            true => match prompt.result(store) {
+                Ok(result) => {
+                    self.folder_prompt = None;
+                    if let SiteManagerResult::CreateFolder(path) | SiteManagerResult::RenameFolder { to: path, .. } = &result {
+                        self.focus_folder = Some(path.clone());
+                    }
+                    if matches!(result, SiteManagerResult::DeleteFolder(_)) {
+                        self.focus_folder = None;
+                    }
+                    Some(result)
+                }
+                Err(e) => {
+                    prompt.set_error(e);
+                    None
+                }
+            },
         }
     }
 

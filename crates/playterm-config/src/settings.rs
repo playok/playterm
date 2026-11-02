@@ -44,6 +44,17 @@ impl UiTheme {
     pub const ALL: [UiTheme; 3] = [UiTheme::Dark, UiTheme::Light, UiTheme::System];
 }
 
+/// How the site manager lists the sites.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SiteView {
+    /// Folders and the sites in them.
+    #[default]
+    Tree,
+    /// One row per site with its connection details.
+    Grid,
+}
+
 /// Keeping Windows awake while sessions are connected.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -127,6 +138,8 @@ pub struct AppSettings {
     pub connect_timeout: u32,
     /// Copy / paste keys of the terminal.
     pub clipboard: ClipboardKeys,
+    /// Tree or grid in the site manager.
+    pub site_view: SiteView,
 }
 
 impl AppSettings {
@@ -183,6 +196,7 @@ impl Default for AppSettings {
             prevent_screensaver: false,
             connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
             clipboard: ClipboardKeys::default(),
+            site_view: SiteView::Tree,
         }
     }
 }
@@ -210,6 +224,7 @@ mod tests {
             prevent_screensaver: true,
             connect_timeout: 60,
             clipboard: ClipboardKeys { copy_on_select: true, ctrl_v: false, right_click_paste: true, ..Default::default() },
+            site_view: SiteView::Grid,
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);
