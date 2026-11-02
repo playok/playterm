@@ -296,6 +296,7 @@ pub(crate) async fn run(
                     sink.notice(t("BREAK 신호를 보냈습니다", "Sent BREAK"));
                 }
                 Some(SessionCommand::Rdp(_)) => {}
+                Some(SessionCommand::ShellDir) => sink.send(SessionEvent::ShellDir(None)),
                 Some(SessionCommand::OpenSftp) => {
                     sink.send(SessionEvent::Sftp(Err(t(
                         "Telnet 세션에서는 SFTP를 쓸 수 없습니다",

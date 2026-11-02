@@ -1067,7 +1067,16 @@ impl PlaytermApp {
                     s.open_sftp();
                 }
             }
-            Command::ToggleSftpPanel => self.sftp_panel = !self.sftp_panel,
+            Command::ToggleSftpPanel => {
+                self.sftp_panel = !self.sftp_panel;
+                // Opening the panel goes to where the user is in the terminal.
+                if self.sftp_panel
+                    && let Some(s) = self.sessions.get_mut(self.active)
+                    && s.sftp.is_some()
+                {
+                    s.follow_shell_dir(false);
+                }
+            }
             Command::Break(i) => {
                 if let Some(s) = self.sessions.get_mut(i) {
                     s.send_break();

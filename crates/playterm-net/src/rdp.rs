@@ -768,6 +768,10 @@ async fn session(
                     sink.notice(t("RDP 세션에서는 BREAK 신호를 지원하지 않습니다", "RDP sessions do not support BREAK"));
                     Vec::new()
                 }
+                Some(SessionCommand::ShellDir) => {
+                    sink.send(SessionEvent::ShellDir(None));
+                    Vec::new()
+                }
                 Some(SessionCommand::OpenSftp) => {
                     sink.send(SessionEvent::Sftp(Err(t(
                         "RDP 세션에서는 SFTP를 쓸 수 없습니다",

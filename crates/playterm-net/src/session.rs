@@ -128,6 +128,9 @@ pub enum SessionEvent {
     AuthPrompt(AuthPrompt),
     /// Answer to [`SessionHandle::open_sftp`].
     Sftp(Result<SftpConnection, String>),
+    /// Answer to [`SessionHandle::query_shell_dir`]: the remote shell's current directory, if
+    /// it could be found.
+    ShellDir(Option<String>),
     /// Session ended. `Some` carries an error description.
     Closed(Option<String>),
 }
@@ -185,6 +188,8 @@ pub(crate) enum SessionCommand {
     Input(Vec<u8>),
     Resize { cols: u16, rows: u16 },
     OpenSftp,
+    /// Find the remote shell's current directory (SSH).
+    ShellDir,
     /// Serial BREAK / Telnet IAC BRK.
     SendBreak,
     /// Keyboard and mouse for an RDP desktop.
@@ -243,6 +248,12 @@ impl SessionHandle {
     /// Opens an SFTP channel on this SSH connection; answered with [`SessionEvent::Sftp`].
     pub fn open_sftp(&self) {
         let _ = self.commands.send(SessionCommand::OpenSftp);
+    }
+
+    /// Asks for the current directory of the remote shell (SSH on Linux servers); answered
+    /// with [`SessionEvent::ShellDir`].
+    pub fn query_shell_dir(&self) {
+        let _ = self.commands.send(SessionCommand::ShellDir);
     }
 
     pub fn try_recv(&self) -> Option<SessionEvent> {

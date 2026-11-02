@@ -29,7 +29,12 @@ struct TestServer {
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
     /// Channels running the echo "shell"; other channels (SFTP, forwards) carry raw streams.
     shells: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
+    /// Exec channels waiting for their script (see `exec_request`).
+    scripts: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
 }
+
+/// What the test server says the shell's current directory is.
+const SHELL_DIR_ANSWER: &str = "/docs";
 
 impl server::Server for TestServer {
     type Handler = Self;
@@ -161,6 +166,29 @@ impl server::Handler for TestServer {
         session.data(channel, format!("pty {term} {cols}x{rows}\r\n").into_bytes())
     }
 
+    /// playterm's question for the shell's directory (`sh -s` with a script on stdin): answered
+    /// with a fixed directory once the script has arrived.
+    async fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
+        self.channels.lock().unwrap().remove(&channel);
+        if data == b"sh -s" {
+            self.scripts.lock().unwrap().insert(channel);
+            session.channel_success(channel)?;
+        } else {
+            session.channel_failure(channel)?;
+        }
+        Ok(())
+    }
+
+    async fn channel_eof(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
+        if self.scripts.lock().unwrap().remove(&channel) {
+            session.data(channel, format!("{}\n", SHELL_DIR_ANSWER).into_bytes())?;
+            session.exit_status_request(channel, 0)?;
+            session.eof(channel)?;
+            session.close(channel)?;
+        }
+        Ok(())
+    }
+
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         // The shell is driven through the handler callbacks; release the channel object.
         self.channels.lock().unwrap().remove(&channel);
@@ -229,6 +257,7 @@ impl Fixture {
             sftp_root: dir.join("sftp"),
             channels: Arc::default(),
             shells: Arc::default(),
+            scripts: Arc::default(),
         };
         server_rt.spawn(async move {
             let _ = { server }.run_on_socket(config, &listener).await;
@@ -357,6 +386,28 @@ fn first_connect_asks_for_host_key_then_runs_shell() {
     );
     let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
     expect_connected(&h);
+}
+
+#[test]
+fn shell_directory_is_asked_on_a_second_channel() {
+    let fx = Fixture::new("shell-dir", &[]);
+    fx.trust_host();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    h.query_shell_dir();
+    loop {
+        match next_event(&h) {
+            SessionEvent::ShellDir(dir) => {
+                assert_eq!(dir.as_deref(), Some(SHELL_DIR_ANSWER));
+                break;
+            }
+            SessionEvent::Data(_) | SessionEvent::Notice(_) => {}
+            other => panic!("expected the shell directory, got {other:?}"),
+        }
+    }
+    // Nothing of it shows in the terminal: the shell still answers as before.
+    h.send(b"x".to_vec());
+    read_until(&h, "echo:x");
 }
 
 #[test]

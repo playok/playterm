@@ -6,6 +6,8 @@
 //! Options:
 //! - `--authorized-keys FILE`: also accept keys listed in FILE (OpenSSH `authorized_keys` format)
 //! - `--sftp-root DIR`: serve DIR over SFTP (default: current directory)
+//! - `--shell-dir DIR`: what the toy shell's "current directory" is, as playterm asks for it to
+//!   open SFTP there (an SFTP path, default `/`)
 //!
 //! Port forwarding requests (direct-tcpip, tcpip-forward on 127.0.0.1) are honoured.
 
@@ -31,6 +33,9 @@ struct DevServer {
     /// Session channels not yet claimed by a shell (an SFTP subsystem request takes them).
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
     shells: Arc<Mutex<HashSet<ChannelId>>>,
+    /// Exec channels waiting for their script (see `exec_request`).
+    scripts: Arc<Mutex<HashSet<ChannelId>>>,
+    shell_dir: String,
     line: Vec<u8>,
 }
 
@@ -40,6 +45,7 @@ impl server::Server for DevServer {
         Self {
             channels: Arc::default(),
             shells: Arc::default(),
+            scripts: Arc::default(),
             line: Vec::new(),
             ..self.clone()
         }
@@ -134,6 +140,29 @@ impl server::Handler for DevServer {
         Ok(true)
     }
 
+    /// playterm's question for the shell's directory (`sh -s` with a script on stdin): answered
+    /// with a fixed directory once the script has arrived.
+    async fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
+        self.channels.lock().unwrap().remove(&channel);
+        if data == b"sh -s" {
+            self.scripts.lock().unwrap().insert(channel);
+            session.channel_success(channel)?;
+        } else {
+            session.channel_failure(channel)?;
+        }
+        Ok(())
+    }
+
+    async fn channel_eof(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
+        if self.scripts.lock().unwrap().remove(&channel) {
+            session.data(channel, format!("{}\n", self.shell_dir).into_bytes())?;
+            session.exit_status_request(channel, 0)?;
+            session.eof(channel)?;
+            session.close(channel)?;
+        }
+        Ok(())
+    }
+
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         self.channels.lock().unwrap().remove(&channel);
         self.shells.lock().unwrap().insert(channel);
@@ -179,6 +208,7 @@ async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let authorized = arg_value(&args, "--authorized-keys").map(|p| load_authorized(&p)).unwrap_or_default();
     let sftp_root = arg_value(&args, "--sftp-root").map(PathBuf::from).unwrap_or(std::env::current_dir()?);
+    let shell_dir = arg_value(&args, "--shell-dir").unwrap_or_else(|| "/".into());
 
     let config = Arc::new(server::Config {
         // Fixed seed: the host key stays the same across runs, so known_hosts keeps matching.
@@ -197,6 +227,8 @@ async fn main() -> std::io::Result<()> {
         sftp_root,
         channels: Arc::default(),
         shells: Arc::default(),
+        scripts: Arc::default(),
+        shell_dir,
         line: Vec::new(),
     };
     { server }.run_on_socket(config, &listener).await
