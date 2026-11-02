@@ -1,8 +1,12 @@
 //! One open tab: a terminal screen, bound to a network session while connected and running
 //! the local command prompt ([`crate::console`]) while not.
 
+use std::path::Path;
+use std::time::{Duration, Instant};
+
 use playterm_config::{SessionProfile, TabColor};
 use playterm_i18n::{t, tr};
+use playterm_net::zmodem::{self, Outcome, Start};
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
 use playterm_term::{Charset, LogMode, Palette, Point, Terminal, TerminalEvent};
 use zeroize::Zeroizing;
@@ -13,7 +17,10 @@ use crate::local_fs;
 use crate::logging::{self, LogPlan};
 use crate::rdp_view::RdpScreen;
 use crate::search_bar::SearchBar;
-use crate::sftp_view::SftpBrowser;
+use crate::sftp_view::{SftpBrowser, human_size};
+
+/// How often the progress line of a ZMODEM download is redrawn.
+const ZMODEM_REDRAW: Duration = Duration::from_millis(200);
 
 /// How a new tab's terminal starts out (from the app settings).
 #[derive(Clone)]
@@ -111,6 +118,15 @@ struct Remote {
     handle: SessionHandle,
 }
 
+/// A ZMODEM download and what the screen shows of it.
+struct ZmodemRun {
+    download: zmodem::Download,
+    /// Saved files already listed on the screen.
+    listed: usize,
+    /// When the progress line was last drawn.
+    drawn: Option<Instant>,
+}
+
 pub struct Session {
     pub id: u64,
     charset: Charset,
@@ -172,6 +188,10 @@ pub struct Session {
     /// Bytes received from and sent to the remote side on the current connection.
     pub rx_bytes: u64,
     pub tx_bytes: u64,
+    /// Spots `sz` (the start of a ZMODEM download) in the output.
+    zmodem_detector: zmodem::Detector,
+    /// A ZMODEM download in progress: the output goes to it instead of the screen.
+    zmodem: Option<ZmodemRun>,
 }
 
 impl Session {
@@ -235,6 +255,8 @@ impl Session {
             requests: Vec::new(),
             rx_bytes: 0,
             tx_bytes: 0,
+            zmodem_detector: zmodem::Detector::default(),
+            zmodem: None,
         }
     }
 
@@ -245,6 +267,7 @@ impl Session {
             remote.handle.close();
         }
         self.leave_prompt();
+        self.end_zmodem();
         // A log belongs to one connection: the new one follows its own profile's setting.
         self.stop_log();
         params.cols = self.terminal.cols() as u16;
@@ -384,6 +407,7 @@ impl Session {
         self.rdp.reset();
         remote.handle = net.connect(remote.params.clone(), waker);
         self.leave_prompt();
+        self.end_zmodem();
         let target = self.target();
         self.terminal.feed_local(&tr!(
             "\x1b[90m{target} 에 다시 연결 중...\x1b[0m\r\n",
@@ -492,9 +516,17 @@ impl Session {
         }
     }
 
-    /// Processes pending network and terminal events. Returns `true` if anything changed.
-    pub fn poll(&mut self) -> bool {
+    /// Processes pending network and terminal events; a ZMODEM download saves into `downloads`.
+    /// Returns `true` if anything changed.
+    pub fn poll(&mut self, downloads: &Path) -> bool {
         let mut changed = false;
+        // A quiet ZMODEM sender is reminded, and given up after a while.
+        if let Some(run) = &mut self.zmodem {
+            let reply = run.download.tick(Instant::now());
+            changed |= !reply.is_empty() || run.download.outcome().is_some();
+            self.send_raw(reply);
+            self.zmodem_show();
+        }
         // The SFTP browser's "terminal's folder" button.
         if self.sftp.as_mut().is_some_and(|b| std::mem::take(&mut b.follow_requested)) {
             self.follow_shell_dir(true);
@@ -512,8 +544,7 @@ impl Session {
                 SessionEvent::Connected => self.state = SessionState::Connected,
                 SessionEvent::Data(bytes) => {
                     self.rx_bytes += bytes.len() as u64;
-                    self.terminal.feed(&bytes);
-                    self.auto_login(bytes.contains(&b'\n'));
+                    self.output(&bytes, downloads);
                 }
                 SessionEvent::Notice(text) => self.notice(&text, "33"),
                 SessionEvent::HostKeyCheck(check) => self.host_key = Some(check),
@@ -558,6 +589,9 @@ impl Session {
                     }
                 }
                 SessionEvent::Closed(reason) => {
+                    if self.end_zmodem() {
+                        self.notice(t("연결이 끊겨 ZMODEM 받기를 중단했습니다", "The connection closed; the ZMODEM download stopped"), "31");
+                    }
                     self.state = SessionState::Closed;
                     self.rdp.reset();
                     self.save_on_login = None;
@@ -603,6 +637,128 @@ impl Session {
         changed
     }
 
+    /// Output of the remote side: onto the screen, or into a ZMODEM download.
+    fn output(&mut self, bytes: &[u8], downloads: &Path) {
+        if let Some(run) = &mut self.zmodem {
+            let reply = run.download.feed(bytes, Instant::now());
+            self.send_raw(reply);
+            self.zmodem_show();
+            return;
+        }
+        match self.zmodem_detector.scan(bytes) {
+            None => {
+                self.terminal.feed(bytes);
+                self.auto_login(bytes.contains(&b'\n'));
+            }
+            Some(Start::Download { at, rest }) => {
+                self.terminal.feed(&bytes[..at]);
+                self.login = None;
+                self.terminal.feed_local(&format!(
+                    "\r\n\x1b[36m[{}]\x1b[0m\r\n",
+                    printable(&tr!(
+                        "ZMODEM 받기: {} 에 저장합니다 · Ctrl+C 로 취소",
+                        "ZMODEM download into {} · Ctrl+C cancels",
+                        downloads.display()
+                    ))
+                ));
+                let (download, reply) = zmodem::Download::begin(downloads.to_owned(), &bytes[rest..], Instant::now());
+                self.zmodem = Some(ZmodemRun { download, listed: 0, drawn: None });
+                self.send_raw(reply);
+                self.zmodem_show();
+            }
+            Some(Start::Upload { at, .. }) => {
+                // `rz` waits for files from us, which is not supported: stop it instead of
+                // leaving it waiting.
+                self.terminal.feed(&bytes[..at]);
+                self.send_raw(zmodem::CANCEL.to_vec());
+                self.notice(
+                    t(
+                        "서버의 rz (ZMODEM 보내기) 는 지원하지 않아 취소했습니다. 파일을 보내려면 SFTP 를 쓰세요.",
+                        "rz (ZMODEM upload) on the server is not supported and was cancelled. Use SFTP to send files.",
+                    ),
+                    "33",
+                );
+            }
+        }
+    }
+
+    /// Whether a ZMODEM download is running (it needs regular [`Session::poll`]s).
+    pub fn in_zmodem(&self) -> bool {
+        self.zmodem.is_some()
+    }
+
+    /// Shows how the ZMODEM download goes (each saved file, the file being received) and wraps
+    /// it up when it is over.
+    fn zmodem_show(&mut self) {
+        let Some(run) = &mut self.zmodem else { return };
+        let mut text = String::new();
+        for path in &run.download.saved()[run.listed..] {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            text += &format!("\r\x1b[K  \x1b[32m✓\x1b[0m {} ({})\r\n", printable(&name), human_size(size));
+            run.drawn = None;
+        }
+        run.listed = run.download.saved().len();
+        if let Some(outcome) = run.download.outcome().cloned() {
+            let saved = run.download.saved().len();
+            let dir = run.download.dir().display().to_string();
+            let rest = run.download.take_passthrough();
+            self.zmodem = None;
+            self.terminal.feed_local(&format!("{text}\r\x1b[K"));
+            match outcome {
+                Outcome::Finished => self.notice(&tr!("ZMODEM 받기 완료: 파일 {saved}개를 {dir} 에 저장했습니다", "ZMODEM download done: {saved} file(s) saved in {dir}"), "32"),
+                Outcome::Cancelled => self.notice(
+                    &tr!("ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {saved}개)", "ZMODEM download cancelled ({saved} file(s) received completely)"),
+                    "33",
+                ),
+                Outcome::Failed(e) => self.notice(&tr!("ZMODEM 받기 실패: {e}", "ZMODEM download failed: {e}"), "31"),
+            }
+            // What the server printed after the transfer (its prompt).
+            if !rest.is_empty() {
+                let dir = std::path::PathBuf::from(dir);
+                self.output(&rest, &dir);
+            }
+            return;
+        }
+        let now = Instant::now();
+        if let Some(p) = run.download.progress()
+            && run.drawn.is_none_or(|at| now.duration_since(at) >= ZMODEM_REDRAW)
+        {
+            run.drawn = Some(now);
+            let amount = match p.size {
+                Some(size) if size > 0 => format!(
+                    "{} / {} ({}%)",
+                    human_size(p.received),
+                    human_size(size),
+                    (p.received.min(size) * 100) / size
+                ),
+                _ => human_size(p.received),
+            };
+            text += &format!("\r\x1b[K  {}  {amount}", printable(p.name));
+        }
+        if !text.is_empty() {
+            self.terminal.feed_local(&text);
+        }
+    }
+
+    /// Stops a ZMODEM download without a word (the connection is going away); its unfinished
+    /// file is deleted. Returns whether one was running.
+    fn end_zmodem(&mut self) -> bool {
+        self.zmodem_detector = zmodem::Detector::default();
+        self.zmodem.take().is_some()
+    }
+
+    /// Protocol bytes (not typed input) for the remote side.
+    fn send_raw(&mut self, bytes: Vec<u8>) {
+        if bytes.is_empty() {
+            return;
+        }
+        if let Some(remote) = &self.remote {
+            self.tx_bytes += bytes.len() as u64;
+            remote.handle.send(bytes);
+        }
+    }
+
     /// Answers the prompt the output now ends at, if it is the next login step.
     fn auto_login(&mut self, newline: bool) {
         let Some(runner) = &mut self.login else { return };
@@ -639,6 +795,16 @@ impl Session {
     /// Key presses and other control input (already encoded).
     pub fn send_bytes(&mut self, bytes: Vec<u8>) {
         if bytes.is_empty() {
+            return;
+        }
+        // During a ZMODEM download typing does not reach the server; Ctrl+C, Ctrl+X or Esc
+        // cancel the download.
+        if let Some(run) = &mut self.zmodem {
+            if bytes.contains(&0x03) || bytes.contains(&0x18) || bytes == [0x1b] {
+                let reply = run.download.cancel();
+                self.send_raw(reply);
+                self.zmodem_show();
+            }
             return;
         }
         // Any input of the user's own ends a pending automatic login, except Enter, which

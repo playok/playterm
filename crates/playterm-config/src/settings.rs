@@ -140,6 +140,8 @@ pub struct AppSettings {
     pub clipboard: ClipboardKeys,
     /// Tree or grid in the site manager.
     pub site_view: SiteView,
+    /// Folder ZMODEM downloads (`sz` on the server) are saved in; empty = the Downloads folder.
+    pub zmodem_dir: String,
 }
 
 impl AppSettings {
@@ -197,6 +199,7 @@ impl Default for AppSettings {
             connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
             clipboard: ClipboardKeys::default(),
             site_view: SiteView::Tree,
+            zmodem_dir: String::new(),
         }
     }
 }
@@ -225,6 +228,7 @@ mod tests {
             connect_timeout: 60,
             clipboard: ClipboardKeys { copy_on_select: true, ctrl_v: false, right_click_paste: true, ..Default::default() },
             site_view: SiteView::Grid,
+            zmodem_dir: "D:\\받은 파일".into(),
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);

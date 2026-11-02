@@ -12,6 +12,19 @@ use crate::profile_form::expand_home;
 const DIR_COLOR: &str = "\x1b[1;34m";
 const RESET: &str = "\x1b[0m";
 
+/// The Downloads folder of the user (their home if Windows does not know it).
+pub fn downloads() -> PathBuf {
+    directories::UserDirs::new().and_then(|d| d.download_dir().map(Path::to_owned)).unwrap_or_else(|| home().join("Downloads"))
+}
+
+/// Where ZMODEM downloads are saved: the folder of the setting, or Downloads when it is empty.
+pub fn zmodem_folder(setting: &str) -> PathBuf {
+    match setting.trim() {
+        "" => downloads(),
+        dir => expand_home(dir),
+    }
+}
+
 /// Starting folder of a prompt: the user's home.
 pub fn home() -> PathBuf {
     directories::BaseDirs::new()
