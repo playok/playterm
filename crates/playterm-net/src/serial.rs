@@ -235,6 +235,7 @@ where
                     sink.notice(t("BREAK 신호를 보냈습니다", "Sent BREAK"));
                 }
                 Some(SessionCommand::Resize { .. } | SessionCommand::Rdp(_)) => {}
+                Some(SessionCommand::ShellDir) => sink.send(SessionEvent::ShellDir(None)),
                 Some(SessionCommand::OpenSftp) => {
                     sink.send(SessionEvent::Sftp(Err(t(
                         "시리얼 세션에서는 SFTP를 쓸 수 없습니다",

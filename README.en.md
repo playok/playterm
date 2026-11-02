@@ -248,6 +248,10 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
 - Downloads go to a partial file next to the target (`.name.….part`) that replaces it once complete, so a failed or cancelled download leaves an
   existing file as it was. Names from the server that cannot be used on this PC or could point outside the folder (`..`, `\`, `:`, device names
   such as `CON`, ...) are refused with a message.
+- The SFTP window and the explorer panel open at the **current directory of the terminal's shell**; **[Terminal's folder]** goes back there any time.
+  playterm opens another, invisible channel on the same SSH connection and reads the shell process's directory (`/proc/<shell>/cwd`): no shell
+  setup is needed and nothing is typed into the terminal. Nested shells (`bash` in `bash`) are followed. It works on Linux servers; when the
+  directory cannot be found (another OS, a shell of another user after `sudo`, ...) SFTP opens at the login directory.
 - When a download finishes, the transfer list shows **[Open folder]**, which opens Windows Explorer with the file selected (in both the SFTP window and the side panel).
 - Icons tell files apart: folders are yellow folders, files get a colored band by kind (images green, archives purple, code blue, scripts orange,
   configuration teal, documents red, media pink, executables dark red; text and others striped).

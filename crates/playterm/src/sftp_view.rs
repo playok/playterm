@@ -33,6 +33,8 @@ enum Prompt {
 pub struct SftpBrowser {
     conn: SftpConnection,
     pub open: bool,
+    /// The user asked to go to the terminal's current directory (see `Session::poll`).
+    pub follow_requested: bool,
     /// Canonical current directory; empty until the first listing arrives.
     cwd: String,
     path_input: String,
@@ -77,11 +79,14 @@ fn format_time(secs: u32) -> String {
 }
 
 impl SftpBrowser {
-    pub fn new(conn: SftpConnection) -> Self {
-        conn.list(".");
+    /// Opens at `start` (the terminal's current directory, when known), else the login
+    /// directory.
+    pub fn new(conn: SftpConnection, start: Option<String>) -> Self {
+        conn.list(start.as_deref().unwrap_or("."));
         Self {
             conn,
             open: true,
+            follow_requested: false,
             cwd: String::new(),
             path_input: String::new(),
             entries: Vec::new(),
@@ -91,6 +96,15 @@ impl SftpBrowser {
             transfers: Vec::new(),
             prompt: None,
         }
+    }
+
+    /// Shows `dir` (the terminal's current directory).
+    pub fn go_to(&mut self, dir: &str) {
+        self.navigate(dir);
+    }
+
+    pub fn set_status(&mut self, text: impl Into<String>, error: bool) {
+        self.status = Some((text.into(), error));
     }
 
     fn navigate(&mut self, path: &str) {
@@ -120,6 +134,12 @@ impl SftpBrowser {
                             self.cwd = path.clone();
                             self.path_input = path;
                             self.entries = entries;
+                        }
+                        Err(e) if self.cwd.is_empty() => {
+                            // The first directory could not be listed (no permission, say):
+                            // the login directory instead.
+                            self.status = Some((e, true));
+                            self.navigate(".");
                         }
                         Err(e) => {
                             self.path_input = self.cwd.clone();
@@ -258,6 +278,16 @@ impl SftpBrowser {
     }
 
     fn nav_buttons(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button(t("터미널 위치", "Terminal's folder"))
+            .on_hover_text(t(
+                "터미널(셸)의 현재 디렉터리로 갑니다 (Linux 서버)",
+                "Goes to the current directory of the terminal's shell (Linux servers)",
+            ))
+            .clicked()
+        {
+            self.follow_requested = true;
+        }
         if ui.button(t("상위", "Up")).clicked() && !self.cwd.is_empty() {
             let parent = remote_parent(&self.cwd);
             self.navigate(&parent);

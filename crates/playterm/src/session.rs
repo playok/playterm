@@ -142,6 +142,10 @@ pub struct Session {
     pub rdp: RdpScreen,
     /// An SFTP channel was requested and has not answered yet.
     sftp_pending: bool,
+    /// Where a new SFTP browser opens: the shell's directory, if it arrived first.
+    sftp_start: Option<String>,
+    /// A question for the shell's directory is out; `true` if the user asked (reports failure).
+    shell_dir_request: Option<bool>,
     /// Open the window when the requested SFTP channel arrives (not just for the side panel).
     sftp_window: bool,
     /// Why SFTP could not be opened on this connection; the side panel does not retry by itself.
@@ -215,6 +219,8 @@ impl Session {
             tab_color: None,
             rdp: RdpScreen::default(),
             sftp_pending: false,
+            sftp_start: None,
+            shell_dir_request: None,
             sftp_window: false,
             sftp_error: None,
             log_plan: None,
@@ -250,6 +256,8 @@ impl Session {
         self.host_key = None;
         self.auth = None;
         self.sftp = None;
+        self.sftp_start = None;
+        self.shell_dir_request = None;
         self.sftp_pending = false;
         self.sftp_error = None;
         self.requests.clear();
@@ -487,6 +495,10 @@ impl Session {
     /// Processes pending network and terminal events. Returns `true` if anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        // The SFTP browser's "terminal's folder" button.
+        if self.sftp.as_mut().is_some_and(|b| std::mem::take(&mut b.follow_requested)) {
+            self.follow_shell_dir(true);
+        }
         // The first picture of an RDP connection (the view takes later changes itself).
         if !self.rdp.has_picture()
             && let Some(frame) = self.remote.as_ref().and_then(|r| r.handle.take_frame())
@@ -515,11 +527,26 @@ impl Session {
                     self.auth =
                         Some(PendingAuth { prompt, answers, focus_requested: false, user, save_user: false, save_password });
                 }
+                SessionEvent::ShellDir(dir) => {
+                    let asked = self.shell_dir_request.take().unwrap_or(false);
+                    match (dir, &mut self.sftp) {
+                        (Some(dir), Some(browser)) => browser.go_to(&dir),
+                        (Some(dir), None) => self.sftp_start = Some(dir),
+                        (None, Some(browser)) if asked => browser.set_status(
+                            t(
+                                "터미널의 현재 디렉터리를 알 수 없습니다 (Linux 서버의 SSH 셸에서 됩니다)",
+                                "The terminal's current directory is not known (works with SSH shells on Linux servers)",
+                            ),
+                            true,
+                        ),
+                        _ => {}
+                    }
+                }
                 SessionEvent::Sftp(result) => {
                     self.sftp_pending = false;
                     match result {
                         Ok(conn) => {
-                            let mut browser = SftpBrowser::new(conn);
+                            let mut browser = SftpBrowser::new(conn, self.sftp_start.take());
                             browser.open = std::mem::take(&mut self.sftp_window);
                             self.sftp = Some(browser);
                         }
@@ -537,6 +564,8 @@ impl Session {
                     self.host_key = None;
                     self.auth = None;
                     self.sftp = None;
+                    self.sftp_start = None;
+                    self.shell_dir_request = None;
                     self.sftp_pending = false;
                     self.sftp_window = false;
                     self.sftp_error = None;
@@ -780,15 +809,27 @@ impl Session {
         }
     }
 
-    /// Shows the SFTP browser, opening the SFTP channel on first use.
-    /// Opens the SFTP window (asking the server for SFTP first if needed).
+    /// Opens the SFTP window (asking the server for SFTP first if needed), at the shell's
+    /// current directory.
     pub fn open_sftp(&mut self) {
         if let Some(browser) = &mut self.sftp {
             browser.open = true;
+            self.follow_shell_dir(false);
         } else if self.can_sftp() {
             self.sftp_window = true;
             self.sftp_error = None;
             self.request_sftp();
+        }
+    }
+
+    /// Asks for the shell's current directory; the SFTP browser goes there once it is known.
+    /// `asked`: the user asked for it, so a failure is reported.
+    pub fn follow_shell_dir(&mut self, asked: bool) {
+        if self.can_sftp()
+            && let Some(remote) = &self.remote
+        {
+            self.shell_dir_request = Some(asked || self.shell_dir_request == Some(true));
+            remote.handle.query_shell_dir();
         }
     }
 
@@ -815,7 +856,10 @@ impl Session {
             && let Some(remote) = &self.remote
         {
             self.sftp_pending = true;
+            self.sftp_start = None;
             remote.handle.open_sftp();
+            // Opens where the user is in the terminal.
+            self.follow_shell_dir(false);
         }
     }
 

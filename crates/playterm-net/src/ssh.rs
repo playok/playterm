@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use playterm_i18n::{t, tr};
@@ -216,6 +217,16 @@ pub(crate) async fn run(
                         sink.send(SessionEvent::Sftp(result));
                     });
                 }
+                Some(SessionCommand::ShellDir) => {
+                    let (session, sink) = (session.clone(), sink.clone());
+                    tasks.spawn(async move {
+                        let dir = shell_dir(&session).await.unwrap_or_else(|e| {
+                            log::info!("shell directory not found: {e:#}");
+                            None
+                        });
+                        sink.send(SessionEvent::ShellDir(dir));
+                    });
+                }
                 Some(SessionCommand::SendBreak) => {
                     sink.notice(t("SSH 세션에서는 BREAK 신호를 지원하지 않습니다", "SSH sessions do not support BREAK"))
                 }
@@ -233,6 +244,35 @@ pub(crate) async fn run(
     tasks.abort_all();
     let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
     Ok(())
+}
+
+/// The current directory of the interactive shell, found by `shell_dir.sh` in a second channel
+/// of this connection. Nothing is typed into the shell, and nothing shows in the terminal.
+async fn shell_dir(session: &client::Handle<ClientHandler>) -> anyhow::Result<Option<String>> {
+    const SCRIPT: &str = include_str!("shell_dir.sh");
+    const LIMIT: usize = 4096;
+    let query = async {
+        let mut channel = session.channel_open_session().await?;
+        channel.exec(true, "sh -s").await?;
+        // LF only, whatever the checkout did to line endings: `sh` would choke on CR.
+        channel.data(SCRIPT.replace("\r\n", "\n").as_bytes()).await?;
+        channel.eof().await?;
+        let mut out = Vec::new();
+        let mut status = None;
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                ChannelMsg::Data { data } if out.len() < LIMIT => out.extend_from_slice(&data),
+                ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                // The exit status comes before the end of the channel.
+                ChannelMsg::Eof | ChannelMsg::Close if status.is_some() => break,
+                _ => {}
+            }
+        }
+        anyhow::Ok((status, out))
+    };
+    let (status, out) = tokio::time::timeout(Duration::from_secs(5), query).await.context("timed out")??;
+    let dir = String::from_utf8_lossy(&out).trim_end_matches(['\r', '\n']).to_owned();
+    Ok((status == Some(0) && dir.starts_with('/') && !dir.contains('\n')).then_some(dir))
 }
 
 async fn open_sftp(session: &client::Handle<ClientHandler>, sink: &EventSink) -> anyhow::Result<SftpConnection> {
