@@ -7,6 +7,7 @@ use playterm_i18n::{t, tr};
 use playterm_term::{THEMES, Theme};
 
 use crate::fonts::{self, FontChoice};
+use crate::local_fs;
 
 pub enum SettingsResult {
     Open,
@@ -91,6 +92,7 @@ impl SettingsDialog {
                 ui.end_row();
                 self.sleep_row(ui);
                 self.timeout_row(ui);
+                self.zmodem_row(ui);
                 self.clipboard_rows(ui);
             });
             ui.add_space(8.0);
@@ -315,6 +317,30 @@ impl SettingsDialog {
                 AppSettings::MIN_CONNECT_TIMEOUT,
                 AppSettings::MAX_CONNECT_TIMEOUT
             ));
+        });
+        ui.end_row();
+    }
+
+    fn zmodem_row(&mut self, ui: &mut egui::Ui) {
+        ui.label(t("ZMODEM 받을 폴더", "ZMODEM downloads"));
+        ui.horizontal(|ui| {
+            let folder = local_fs::zmodem_folder(&self.draft.zmodem_dir);
+            if ui.button(t("바꾸기…", "Change…")).clicked()
+                && let Some(dir) = rfd::FileDialog::new()
+                    .set_title(t("ZMODEM 으로 받은 파일을 저장할 폴더", "Folder for files received with ZMODEM"))
+                    .set_directory(&folder)
+                    .pick_folder()
+            {
+                self.draft.zmodem_dir = dir.display().to_string();
+            }
+            if !self.draft.zmodem_dir.is_empty() && ui.button(t("기본 폴더", "Default")).clicked() {
+                self.draft.zmodem_dir.clear();
+            }
+            ui.add(egui::Label::new(egui::RichText::new(folder.display().to_string()).weak()).truncate())
+                .on_hover_text(t(
+                    "서버에서 sz 로 보낸 파일이 저장되는 곳입니다. 같은 이름의 파일이 있으면 덮어쓰지 않고 '이름 (1)' 로 저장합니다.",
+                    "Where files sent with sz on the server are saved. A file with the same name is not replaced: the new one is saved as 'name (1)'.",
+                ));
         });
         ui.end_row();
     }

@@ -15,7 +15,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **SSH extras**: key authentication (OpenSSH / PuTTY `.ppk`, Pageant, Windows OpenSSH agent), `-L` / `-R` / `-D` port forwarding, and an SFTP file browser beside the terminal
 - **Remote Desktop**: resolution that follows the tab size, shared clipboard, Unicode/IME input, and certificate pinning
 - **Password vault**: saved passwords are encrypted with a master password (Argon2id + XChaCha20-Poly1305)
-- **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, and CP949 (EUC-KR) with encoding auto-detection
+- **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads (`sz`)
 - **Site manager**: folders, per-site tab colors, PuTTY session import, and a `playterm>` command prompt in unconnected tabs
 - Korean / English UI, dark / light themes
 
@@ -24,7 +24,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 | Crate | Role |
 |---|---|
 | `crates/playterm-term` | Terminal emulation (alacritty_terminal), UTF-8/CP949 conversion, color palettes |
-| `crates/playterm-net` | SSH (russh) / Telnet / serial / RDP (IronRDP) transports, session event and command channels |
+| `crates/playterm-net` | SSH (russh) / Telnet / serial / RDP (IronRDP) transports, session event and command channels, ZMODEM receiving |
 | `crates/playterm-config` | Site list (`sessions.toml`), password vault (`vault.toml`), settings (`settings.toml`) |
 | `crates/playterm-i18n` | Korean / English UI strings |
 | `crates/playterm` | GUI app (eframe/egui): rendering, keyboard/IME input, dialogs |
@@ -270,6 +270,15 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
   - Remote (R): a port on the server → connected from this PC to the target
   - Dynamic (D): a SOCKS5 proxy on this PC
 
+## ZMODEM downloads (sz)
+
+- Running `sz file...` on the server is recognized by the terminal, and the files are received on this PC. Works over SSH, Telnet and serial (the server needs lrzsz).
+- They are saved in **Tools → Settings → ZMODEM downloads** (Windows' Downloads folder by default). A file with the same name is not replaced: the new one is saved as `name (1).ext`.
+- While receiving, the terminal shows the progress of each file, and at the end the files received and where they are. **Ctrl+C** (or Esc, Ctrl+X) cancels.
+- Every data block is checked (16/32-bit CRC); a damaged part is received again from where it went wrong, and only complete files are kept (a file is written under a temporary name and renamed at the end).
+  Cancelling or losing the connection deletes the file being received. File names from the server lose their path and characters Windows does not allow, so nothing is saved outside the folder.
+- ZCOMMAND, a server asking to run a command on this PC, is refused. `rz` on the server (sending from this PC) is not supported yet and is cancelled automatically; use SFTP to send files.
+
 ## Remote Desktop (RDP)
 
 Connects to a Windows Remote Desktop server and draws its screen inside a tab (playterm connects itself; it does not start mstsc).
@@ -317,7 +326,7 @@ with 'Forgot the master password?' keeps the old file as `vault.toml.bak`.
 | File | Contents |
 |---|---|
 | `sessions.toml` | Saved sites and templates (no passwords) |
-| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys |
+| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder |
 | `vault.toml` | Saved passwords, encrypted with the master password → Argon2id → XChaCha20-Poly1305. Each password is stored with the target it was saved for (protocol, user, host, port), also encrypted: if a site in `sessions.toml` is pointed elsewhere, its password is not sent (changes made in playterm carry it along). Several windows do not delete each other's saved passwords |
 | `known_hosts` | SSH host keys. If a known host's key changes — even to a key of another type — the connection is refused (protection against man-in-the-middle attacks). Key types on record are asked for first |
 | `known_rdp_hosts` | RDP server certificate fingerprints. A changed certificate is refused |

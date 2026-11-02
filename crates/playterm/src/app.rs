@@ -28,7 +28,7 @@ use crate::site_manager::{SiteManager, SiteManagerResult};
 use crate::licenses::LicensesDialog;
 use crate::template_dialog::{TemplateDialog, TemplateResult};
 use crate::view::UserInput;
-use crate::{clip_keys, clipboard, fonts, status_bar, view};
+use crate::{clip_keys, clipboard, fonts, local_fs, status_bar, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
 /// Largest text a remote program may put on the clipboard (OSC 52).
@@ -187,6 +187,8 @@ pub struct PlaytermApp {
     settings_path: PathBuf,
     /// Zoom changes not saved yet, and when the last one happened.
     settings_unsaved: Option<Instant>,
+    /// Where ZMODEM downloads are saved (from the settings).
+    zmodem_dir: PathBuf,
     /// Ctrl+wheel / pinch steps not yet turned into a whole font size step.
     zoom_accum: f32,
     /// Simultaneous input: typing in the active tab also goes to the other included tabs.
@@ -252,6 +254,7 @@ impl PlaytermApp {
             always_on_top: false,
             connect_target: None,
             dialog_target: None,
+            zmodem_dir: local_fs::zmodem_folder(&settings.zmodem_dir),
             settings,
             settings_path,
             settings_unsaved: None,
@@ -992,6 +995,9 @@ impl PlaytermApp {
                 s.terminal.set_scrollback(new.scrollback);
             }
         }
+        if new.zmodem_dir != self.settings.zmodem_dir {
+            self.zmodem_dir = local_fs::zmodem_folder(&new.zmodem_dir);
+        }
         self.settings = new;
     }
 
@@ -1676,8 +1682,13 @@ impl eframe::App for PlaytermApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let active_id = self.sessions.get(self.active).map(|s| s.id);
+        let downloads = self.zmodem_dir.clone();
         for session in &mut self.sessions {
-            session.poll();
+            session.poll(&downloads);
+            if session.in_zmodem() {
+                // Timeouts of the transfer, also while nothing arrives.
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
             if let Some(text) = session.clipboard_store.take() {
                 // A program on the remote side set the clipboard (OSC 52). Only the tab the
                 // user is looking at may, within a size limit, and they see it happen: a
