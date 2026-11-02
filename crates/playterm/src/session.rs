@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use playterm_config::{SessionProfile, TabColor};
 use playterm_i18n::{t, tr};
+use playterm_net::ping::{self, Ping, PingEvent, PingOptions, PingStats};
 use playterm_net::zmodem::{self, Outcome, Start};
 use playterm_net::{AuthPrompt, ConnectParams, HostKeyCheck, NetRuntime, Protocol, SessionEvent, SessionHandle, Waker};
 use playterm_term::{Charset, LogMode, Palette, Point, Terminal, TerminalEvent};
@@ -118,6 +119,16 @@ struct Remote {
     handle: SessionHandle,
 }
 
+/// A `ping` running at the prompt.
+struct PingRun {
+    ping: Ping,
+    host: String,
+    size: u16,
+    /// The address the name resolved to.
+    addr: Option<std::net::IpAddr>,
+    stats: PingStats,
+}
+
 /// A ZMODEM download and what the screen shows of it.
 struct ZmodemRun {
     download: zmodem::Download,
@@ -192,6 +203,8 @@ pub struct Session {
     zmodem_detector: zmodem::Detector,
     /// A ZMODEM download in progress: the output goes to it instead of the screen.
     zmodem: Option<ZmodemRun>,
+    /// `ping` running at the prompt (until it ends or Ctrl+C).
+    ping: Option<PingRun>,
 }
 
 impl Session {
@@ -257,6 +270,7 @@ impl Session {
             tx_bytes: 0,
             zmodem_detector: zmodem::Detector::default(),
             zmodem: None,
+            ping: None,
         }
     }
 
@@ -266,6 +280,7 @@ impl Session {
         if let Some(remote) = &self.remote {
             remote.handle.close();
         }
+        self.ping = None;
         self.leave_prompt();
         self.end_zmodem();
         // A log belongs to one connection: the new one follows its own profile's setting.
@@ -406,6 +421,7 @@ impl Session {
         }
         self.rdp.reset();
         remote.handle = net.connect(remote.params.clone(), waker);
+        self.ping = None;
         self.leave_prompt();
         self.end_zmodem();
         let target = self.target();
@@ -520,6 +536,7 @@ impl Session {
     /// Returns `true` if anything changed.
     pub fn poll(&mut self, downloads: &Path) -> bool {
         let mut changed = false;
+        changed |= self.ping_output();
         // A quiet ZMODEM sender is reminded, and given up after a while.
         if let Some(run) = &mut self.zmodem {
             let reply = run.download.tick(Instant::now());
@@ -898,7 +915,7 @@ impl Session {
     }
 
     fn console_text(&mut self, text: &str) {
-        if !self.requests.is_empty() {
+        if !self.requests.is_empty() || self.ping.is_some() {
             return;
         }
         self.terminal.scroll_to_bottom();
@@ -917,6 +934,14 @@ impl Session {
     }
 
     fn console_key(&mut self, bytes: &[u8]) {
+        // A running ping takes no input but Ctrl+C, which stops it.
+        if self.ping.is_some() {
+            if bytes.contains(&0x03) {
+                self.terminal.feed_local("^C\r\n");
+                self.end_ping();
+            }
+            return;
+        }
         if !self.requests.is_empty() {
             return;
         }
@@ -973,6 +998,87 @@ impl Session {
             // The app answers with output and a new prompt, or connects.
             Parsed::Request(request) => self.requests.push(request),
         }
+    }
+
+    /// Starts `ping` at the prompt; its lines appear as the answers come (see `ping_output`).
+    pub fn start_ping(&mut self, host: String, options: PingOptions, waker: Waker) {
+        let size = options.size;
+        let ping = Ping::start(host.clone(), options, waker);
+        self.ping = Some(PingRun { ping, host, size, addr: None, stats: PingStats::default() });
+    }
+
+    /// Prints what the running ping reports. Returns whether anything came.
+    fn ping_output(&mut self) -> bool {
+        let Some(run) = &mut self.ping else { return false };
+        let mut text = String::new();
+        let mut ended = false;
+        while let Some(event) = run.ping.try_recv() {
+            run.stats.record(&event);
+            match event {
+                PingEvent::Start(addr) => {
+                    run.addr = Some(addr);
+                    let target = if run.host == addr.to_string() { run.host.clone() } else { format!("{} [{addr}]", run.host) };
+                    let size = run.size;
+                    text += &tr!(
+                        "{target} 에 ping 을 보냅니다 ({size}바이트 데이터) \x1b[90m· Ctrl+C 로 중지\x1b[0m\n",
+                        "Pinging {target} with {size} bytes of data \x1b[90m· Ctrl+C stops\x1b[0m\n"
+                    );
+                }
+                PingEvent::Reply { from, bytes, time_ms, ttl } => {
+                    let time = if time_ms == 0 { "<1ms".to_owned() } else { format!("={time_ms}ms") };
+                    let ttl = ttl.map(|ttl| format!(" TTL={ttl}")).unwrap_or_default();
+                    text += &tr!("{from} 의 응답: 바이트={bytes} 시간{time}{ttl}\n", "Reply from {from}: bytes={bytes} time{time}{ttl}\n");
+                }
+                PingEvent::TimedOut => {
+                    text += &format!("\x1b[33m{}\x1b[0m\n", t("요청 시간이 만료되었습니다.", "Request timed out."));
+                }
+                PingEvent::Failed { from, status } => {
+                    let what = ping::status_text(status);
+                    text += &match from {
+                        Some(from) => tr!("\x1b[33m{from} 의 응답: {what}\x1b[0m\n", "\x1b[33mReply from {from}: {what}\x1b[0m\n"),
+                        None => format!("\x1b[33m{what}\x1b[0m\n"),
+                    };
+                }
+                PingEvent::Error(e) => {
+                    text += &format!("\x1b[31m{}\x1b[0m\n", printable(&e));
+                    ended = true;
+                }
+                PingEvent::Done => ended = true,
+            }
+        }
+        let changed = !text.is_empty() || ended;
+        if !text.is_empty() {
+            self.print(text.trim_end_matches('\n'));
+        }
+        if ended {
+            self.end_ping();
+        }
+        changed
+    }
+
+    /// Ends the ping (it finished, or Ctrl+C): prints its statistics and the prompt again.
+    fn end_ping(&mut self) {
+        let Some(run) = self.ping.take() else { return };
+        let stats = &run.stats;
+        if let Some(addr) = run.addr
+            && stats.sent > 0
+        {
+            let (sent, received, lost, loss) = (stats.sent, stats.received, stats.lost(), stats.loss_percent());
+            let mut text = tr!(
+                "\n{addr} 에 대한 ping 통계:\n    패킷: 보냄 = {sent}, 받음 = {received}, 손실 = {lost} ({loss}% 손실)",
+                "\nPing statistics for {addr}:\n    Packets: Sent = {sent}, Received = {received}, Lost = {lost} ({loss}% loss)"
+            );
+            if stats.received > 0 {
+                let (min, max, average) = (stats.min_ms, stats.max_ms, stats.average_ms());
+                text += &tr!(
+                    "\n왕복 시간(밀리초):\n    최소 = {min}ms, 최대 = {max}ms, 평균 = {average}ms",
+                    "\nApproximate round trip times in milli-seconds:\n    Minimum = {min}ms, Maximum = {max}ms, Average = {average}ms"
+                );
+            }
+            self.print(&text);
+        }
+        drop(run);
+        self.prompt();
     }
 
     /// Opens the SFTP window (asking the server for SFTP first if needed), at the shell's

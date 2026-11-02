@@ -3,6 +3,7 @@
 
 use playterm_config::SessionProfile;
 use playterm_i18n::{t, tr};
+use playterm_net::ping::{self, Family, PingOptions};
 use playterm_net::{ForwardKind, ForwardRule};
 use playterm_term::Charset;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -23,6 +24,8 @@ const HELP_KO: &str = "\
   telnet 호스트 [포트]              Telnet 접속 (--cp949: 한글 구형 장비)
   serial COM3 [속도]                시리얼 콘솔 (기본 9600 8N1)
   rdp [사용자@]호스트[:포트]         원격 데스크톱 (Windows RDP)
+  ping [-t] [-n 횟수] [-w 밀리초] [-l 크기] [-4|-6] 호스트
+                                    응답 확인 (기본 4번, -t: Ctrl+C 로 멈출 때까지)
   open                              사이트 관리 창 열기
   open 이름|번호                    저장된 사이트에 접속 (번호는 sites 의 번호)
   sites [검색어]                    저장된 사이트 목록
@@ -44,6 +47,8 @@ const HELP_EN: &str = "\
   telnet host [port]                Telnet connection (--cp949: older Korean devices)
   serial COM3 [speed]               Serial console (default 9600 8N1)
   rdp [user@]host[:port]            Remote desktop (Windows RDP)
+  ping [-t] [-n count] [-w ms] [-l size] [-4|-6] host
+                                    Check that a host answers (4 times, -t: until Ctrl+C)
   open                              Open the Site Manager
   open name|number                  Connect to a saved site (number as listed by sites)
   sites [filter]                    List saved sites
@@ -71,6 +76,8 @@ pub enum Request {
     NewSite,
     QuickConnect,
     Reconnect,
+    /// `ping`: the host and the options.
+    Ping(String, PingOptions),
     Exit,
 }
 
@@ -236,11 +243,63 @@ pub fn parse(line: &str) -> Parsed {
         "new" => Parsed::Request(Request::NewSite),
         "quick" => Parsed::Request(Request::QuickConnect),
         "r" | "reconnect" => Parsed::Request(Request::Reconnect),
+        "ping" => parse_ping(rest),
         "exit" | "quit" | "close" => Parsed::Request(Request::Exit),
         other => Parsed::Error(tr!(
             "알 수 없는 명령: {other}  (help 로 목록 보기)",
             "Unknown command: {other}  (type help for a list)"
         )),
+    }
+}
+
+/// `ping [-t] [-n count] [-w ms] [-l size] [-4|-6] host`, the options of Windows' `ping`
+/// (`/t` works too), and `-c count` as on Linux.
+fn parse_ping(args: &[String]) -> Parsed {
+    let usage = || {
+        Parsed::Error(
+            t(
+                "사용법: ping [-t] [-n 횟수] [-w 밀리초] [-l 크기] [-4|-6] 호스트",
+                "Usage: ping [-t] [-n count] [-w ms] [-l size] [-4|-6] host",
+            )
+            .into(),
+        )
+    };
+    let mut options = PingOptions::default();
+    let mut host = None;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let flag = arg.to_ascii_lowercase().replacen('/', "-", 1);
+        let mut number = |max: u32, what: &str| {
+            it.next().and_then(|v| v.parse::<u32>().ok()).filter(|n| (1..=max).contains(n)).ok_or_else(|| {
+                Parsed::Error(tr!("{flag} 다음에는 1~{max} 의 {what}", "{flag} needs {what} from 1 to {max}"))
+            })
+        };
+        match flag.as_str() {
+            "-t" => options.count = None,
+            "-n" | "-c" => match number(u32::MAX, t("횟수", "a count")) {
+                Ok(n) => options.count = Some(n),
+                Err(e) => return e,
+            },
+            "-w" => match number(ping::MAX_TIMEOUT_MS, t("밀리초", "milliseconds")) {
+                Ok(ms) => options.timeout_ms = ms,
+                Err(e) => return e,
+            },
+            "-l" => match number(ping::MAX_SIZE.into(), t("바이트 수", "a size in bytes")) {
+                Ok(size) => options.size = size as u16,
+                Err(e) => return e,
+            },
+            "-4" => options.family = Some(Family::V4),
+            "-6" => options.family = Some(Family::V6),
+            _ if flag.starts_with('-') => {
+                return Parsed::Error(tr!("ping: 알 수 없는 옵션 {arg}", "ping: unknown option {arg}"));
+            }
+            _ if host.is_none() => host = Some(arg.clone()),
+            _ => return usage(),
+        }
+    }
+    match host {
+        Some(host) => Parsed::Request(Request::Ping(host, options)),
+        None => usage(),
     }
 }
 
@@ -596,6 +655,23 @@ mod tests {
 
         let p = connect("serial COM3 115200");
         assert_eq!((p.serial.port.as_str(), p.serial.baud), ("COM3", 115200));
+    }
+
+    #[test]
+    fn ping_commands() {
+        let ping = |line: &str| match parse(line) {
+            Parsed::Request(Request::Ping(host, options)) => (host, options),
+            other => panic!("{line}: {other:?}"),
+        };
+        assert_eq!(ping("ping router"), ("router".into(), PingOptions::default()));
+        let (host, options) = ping("ping -n 2 -w 500 -l 1400 -4 10.0.0.1");
+        assert_eq!(host, "10.0.0.1");
+        assert_eq!(options, PingOptions { count: Some(2), timeout_ms: 500, size: 1400, family: Some(Family::V4) });
+        assert_eq!(ping("PING /t -6 ::1").1.count, None);
+        assert_eq!(ping("ping -c 3 host").1.count, Some(3));
+        for bad in ["ping", "ping -n 0 host", "ping -n x host", "ping -l 70000 host", "ping -x host", "ping a b"] {
+            assert!(matches!(parse(bad), Parsed::Error(_)), "{bad}");
+        }
     }
 
     #[test]

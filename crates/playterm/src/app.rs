@@ -856,6 +856,11 @@ impl PlaytermApp {
                 return;
             }
             Request::Reconnect => output = Some(t("다시 연결할 대상이 없습니다", "Nothing to reconnect to").into()),
+            Request::Ping(host, options) => {
+                let waker = self.waker.clone();
+                self.sessions[i].start_ping(host, options, waker);
+                return;
+            }
             Request::Exit => {
                 self.close_session(i);
                 return;
