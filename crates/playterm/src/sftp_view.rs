@@ -40,6 +40,8 @@ pub struct SftpBrowser {
     path_input: String,
     entries: Vec<RemoteEntry>,
     selected: BTreeSet<String>,
+    /// The entry last clicked: where a Shift+click range starts.
+    anchor: Option<String>,
     loading: bool,
     status: Option<(String, bool)>,
     transfers: Vec<Transfer>,
@@ -91,6 +93,7 @@ impl SftpBrowser {
             path_input: String::new(),
             entries: Vec::new(),
             selected: BTreeSet::new(),
+            anchor: None,
             loading: true,
             status: None,
             transfers: Vec::new(),
@@ -129,6 +132,7 @@ impl SftpBrowser {
                         Ok(entries) => {
                             if path != self.cwd {
                                 self.selected.clear();
+                                self.anchor = None;
                             }
                             self.selected.retain(|n| entries.iter().any(|e| &e.name == n));
                             self.cwd = path.clone();
@@ -228,6 +232,25 @@ impl SftpBrowser {
         }
     }
 
+    /// A click on entry `name` with these modifiers: alone, Ctrl toggles it, Shift selects the
+    /// range from the last clicked entry (Ctrl+Shift adds the range).
+    fn click(&mut self, name: &str, ctrl: bool, shift: bool) {
+        let order: Vec<&str> = self.entries.iter().map(|e| e.name.as_str()).collect();
+        select(&mut self.selected, &mut self.anchor, &order, name, ctrl, shift);
+    }
+
+    fn select_all(&mut self) {
+        self.selected = self.entries.iter().map(|e| e.name.clone()).collect();
+    }
+
+    /// Asks before deleting the selected entries.
+    fn delete_selected(&mut self) {
+        let items: Vec<(String, bool)> = self.selected_entries().into_iter().map(|e| (e.name, e.is_dir)).collect();
+        if !items.is_empty() {
+            self.prompt = Some(Prompt::Delete(items));
+        }
+    }
+
     fn selected_entries(&self) -> Vec<RemoteEntry> {
         self.entries.iter().filter(|e| self.selected.contains(&e.name)).cloned().collect()
     }
@@ -261,8 +284,8 @@ impl SftpBrowser {
         ui.separator();
         self.listing(ui, true);
         ui.weak(t(
-            "더블클릭: 폴더 열기 / 파일 다운로드 · 탐색기에서 파일을 끌어다 놓으면 업로드",
-            "Double-click: open a folder / download a file · Drop files from Explorer to upload",
+            "더블클릭: 폴더 열기 / 파일 다운로드 · Ctrl·Shift+클릭, Ctrl+A: 여러 개 선택 · 탐색기에서 파일을 끌어다 놓으면 업로드",
+            "Double-click: open a folder / download a file · Ctrl/Shift+click, Ctrl+A: select several · Drop files from Explorer to upload",
         ));
     }
 
@@ -324,13 +347,17 @@ impl SftpBrowser {
                 self.upload_paths(vec![dir]);
             }
             let has_selection = !self.selected.is_empty();
-            if ui.add_enabled(has_selection, egui::Button::new(t("다운로드", "Download"))).clicked() {
+            let selected_count = self.selected.len();
+            let count = |label: &str| match selected_count {
+                0 | 1 => label.to_owned(),
+                n => format!("{label} ({n})"),
+            };
+            if ui.add_enabled(has_selection, egui::Button::new(count(t("다운로드", "Download")))).clicked() {
                 let items = self.selected_entries();
                 self.download(items);
             }
-            if ui.add_enabled(has_selection, egui::Button::new(t("삭제", "Delete"))).clicked() {
-                let items = self.selected_entries().into_iter().map(|e| (e.name, e.is_dir)).collect();
-                self.prompt = Some(Prompt::Delete(items));
+            if ui.add_enabled(has_selection, egui::Button::new(count(t("삭제", "Delete")))).clicked() {
+                self.delete_selected();
             }
         }
     }
@@ -339,15 +366,39 @@ impl SftpBrowser {
     fn listing(&mut self, ui: &mut egui::Ui, compact: bool) {
         let transfers_height = if self.transfers.is_empty() { 0.0 } else { 120.0 };
         let list_height = (ui.available_height() - transfers_height - 30.0).max(80.0);
-        egui::ScrollArea::vertical().id_salt("sftp-list").max_height(list_height).auto_shrink([false, false]).show(
+        let list = egui::ScrollArea::vertical().id_salt("sftp-list").max_height(list_height).auto_shrink([false, false]).show(
             ui,
             |ui| {
                 if self.loading && self.entries.is_empty() {
                     ui.spinner();
                 }
-                self.entry_grid(ui, compact);
+                self.entry_grid(ui, compact)
             },
         );
+        // A click in the list gives it the keyboard (away from the terminal): Ctrl+A selects
+        // all, Delete deletes the selection, Escape clears it.
+        let focus = ui.interact(list.inner_rect, ui.scope_id().with("sftp-list-keys"), egui::Sense::focusable_noninteractive());
+        if list.inner {
+            focus.request_focus();
+        }
+        if focus.has_focus() && self.prompt.is_none() {
+            let (all, delete, clear) = ui.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::A),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Delete),
+                    i.key_pressed(egui::Key::Escape),
+                )
+            });
+            if all {
+                self.select_all();
+            }
+            if delete {
+                self.delete_selected();
+            }
+            if clear {
+                self.selected.clear();
+            }
+        }
 
         if !self.transfers.is_empty() {
             ui.separator();
@@ -359,16 +410,29 @@ impl SftpBrowser {
         }
     }
 
-    /// `compact`: name and size only (side panel); long names are cut short.
-    fn entry_grid(&mut self, ui: &mut egui::Ui, compact: bool) {
+    /// `compact`: name and size only (side panel); long names are cut short. Returns whether an
+    /// entry was clicked.
+    fn entry_grid(&mut self, ui: &mut egui::Ui, compact: bool) -> bool {
         let mut enter_dir = None;
         let mut download = None;
         let mut prompt = None;
+        let mut clicked = None;
+        let mut select_all = None;
         let columns = if compact { 2 } else { 4 };
         // Side panel: the name column takes the width the size column leaves.
         let name_width = (ui.available_width() - 110.0).max(80.0);
         egui::Grid::new("sftp-grid").num_columns(columns).striped(true).spacing([16.0, 4.0]).show(ui, |ui| {
-            ui.strong(t("이름", "Name"));
+            ui.horizontal(|ui| {
+                // Selects or clears them all.
+                let total = self.entries.len();
+                let mut all = total > 0 && self.selected.len() == total;
+                let partly = !all && !self.selected.is_empty();
+                let check = egui::Checkbox::without_text(&mut all).indeterminate(partly);
+                if ui.add_enabled(total > 0, check).on_hover_text(t("모두 선택 (Ctrl+A)", "Select all (Ctrl+A)")).changed() {
+                    select_all = Some(all);
+                }
+                ui.strong(t("이름", "Name"));
+            });
             ui.strong(t("크기", "Size"));
             if !compact {
                 ui.strong(t("수정 시각", "Modified"));
@@ -410,18 +474,33 @@ impl SftpBrowser {
                     })
                     .inner;
                 if response.clicked() {
-                    if ui.input(|i| i.modifiers.ctrl) {
-                        if !self.selected.remove(&entry.name) {
-                            self.selected.insert(entry.name.clone());
-                        }
-                    } else {
-                        self.selected = BTreeSet::from([entry.name.clone()]);
-                    }
+                    let m = ui.input(|i| i.modifiers);
+                    clicked = Some((entry.name.clone(), m.command, m.shift));
                 }
+                // A right click on an entry outside the selection is about that entry alone.
+                if response.secondary_clicked() && !selected {
+                    clicked = Some((entry.name.clone(), false, false));
+                }
+                let many = selected && self.selected.len() > 1;
                 if response.double_clicked() {
                     if entry.is_dir { enter_dir = Some(entry.name.clone()) } else { download = Some(vec![entry.clone()]) }
                 }
                 response.context_menu(|ui| {
+                    if many {
+                        // The whole selection.
+                        let n = self.selected.len();
+                        let chosen: Vec<RemoteEntry> =
+                            self.entries.iter().filter(|e| self.selected.contains(&e.name)).cloned().collect();
+                        if ui.button(tr!("선택한 {n}개 다운로드", "Download {n} selected")).clicked() {
+                            download = Some(chosen.clone());
+                            ui.close();
+                        }
+                        if ui.button(tr!("선택한 {n}개 삭제", "Delete {n} selected")).clicked() {
+                            prompt = Some(Prompt::Delete(chosen.into_iter().map(|e| (e.name, e.is_dir)).collect()));
+                            ui.close();
+                        }
+                        return;
+                    }
                     if ui.button(t("다운로드", "Download")).clicked() {
                         download = Some(vec![entry.clone()]);
                         ui.close();
@@ -447,12 +526,21 @@ impl SftpBrowser {
             let path = remote_join(&self.cwd, &name);
             self.navigate(&path);
         }
+        if let Some((name, ctrl, shift)) = &clicked {
+            self.click(name, *ctrl, *shift);
+        }
+        match select_all {
+            Some(true) => self.select_all(),
+            Some(false) => self.selected.clear(),
+            None => {}
+        }
         if let Some(items) = download {
             self.download(items);
         }
         if prompt.is_some() {
             self.prompt = prompt;
         }
+        clicked.is_some()
     }
 
     fn transfer_list(&mut self, ui: &mut egui::Ui) {
@@ -525,8 +613,19 @@ impl SftpBrowser {
                 }
                 Prompt::Delete(items) => {
                     ui.heading(t("삭제", "Delete"));
-                    let names: Vec<&str> = items.iter().map(|(n, _)| n.as_str()).collect();
-                    ui.label(tr!("{} 을(를) 삭제할까요?", "Delete {}?", names.join(", ")));
+                    const SHOWN: usize = 8;
+                    let mut names: Vec<&str> = items.iter().take(SHOWN).map(|(n, _)| n.as_str()).collect();
+                    let more = items.len().saturating_sub(SHOWN);
+                    let more_text = tr!("외 {more}개", "and {more} more");
+                    if more > 0 {
+                        names.push(&more_text);
+                    }
+                    if items.len() > 1 {
+                        ui.label(tr!("{}개를 삭제할까요?", "Delete {} items?", items.len()));
+                        ui.weak(names.join(", "));
+                    } else {
+                        ui.label(tr!("{} 을(를) 삭제할까요?", "Delete {}?", names.join(", ")));
+                    }
                     if items.iter().any(|(_, dir)| *dir) {
                         ui.colored_label(
                             ui.visuals().warn_fg_color,
@@ -569,9 +668,55 @@ impl SftpBrowser {
     }
 }
 
+/// Applies a click on `name` to the selection (`order`: the entries as listed). Plain: just
+/// it. Ctrl: toggled. Shift: the range from `anchor` (Ctrl+Shift: added to the selection).
+fn select(selected: &mut BTreeSet<String>, anchor: &mut Option<String>, order: &[&str], name: &str, ctrl: bool, shift: bool) {
+    if shift {
+        let start = anchor.as_deref().and_then(|a| order.iter().position(|n| *n == a));
+        let end = order.iter().position(|n| *n == name);
+        if let (Some(a), Some(b)) = (start, end) {
+            if !ctrl {
+                selected.clear();
+            }
+            selected.extend(order[a.min(b)..=a.max(b)].iter().map(|n| n.to_string()));
+            return;
+        }
+    }
+    if ctrl {
+        if !selected.remove(name) {
+            selected.insert(name.to_owned());
+        }
+    } else {
+        *selected = BTreeSet::from([name.to_owned()]);
+    }
+    *anchor = Some(name.to_owned());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selecting_with_ctrl_and_shift() {
+        let order = ["d1", "a.txt", "b.txt", "c.txt", "e.log"];
+        let (mut sel, mut anchor) = (BTreeSet::new(), None);
+        let names = |s: &BTreeSet<String>| order.iter().filter(|n| s.contains(**n)).copied().collect::<Vec<_>>();
+        select(&mut sel, &mut anchor, &order, "a.txt", false, false);
+        select(&mut sel, &mut anchor, &order, "c.txt", false, true);
+        assert_eq!(names(&sel), ["a.txt", "b.txt", "c.txt"], "Shift: the range");
+        select(&mut sel, &mut anchor, &order, "b.txt", true, false);
+        assert_eq!(names(&sel), ["a.txt", "c.txt"], "Ctrl: toggled off");
+        select(&mut sel, &mut anchor, &order, "e.log", true, true);
+        assert_eq!(names(&sel), ["a.txt", "b.txt", "c.txt", "e.log"], "Ctrl+Shift: range added from b.txt");
+        select(&mut sel, &mut anchor, &order, "d1", false, true);
+        assert_eq!(names(&sel), ["d1", "a.txt", "b.txt"], "Shift again: a new range from the same anchor (b.txt)");
+        select(&mut sel, &mut anchor, &order, "c.txt", false, false);
+        assert_eq!(names(&sel), ["c.txt"], "a plain click selects one");
+        // Shift with no anchor in the list (it was refreshed away): just that one.
+        anchor = Some("gone".into());
+        select(&mut sel, &mut anchor, &order, "a.txt", false, true);
+        assert_eq!(names(&sel), ["a.txt"]);
+    }
 
     #[test]
     fn formatting() {

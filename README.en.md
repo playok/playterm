@@ -257,6 +257,9 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
   configuration teal, documents red, media pink, executables dark red; text and others striped).
   Symbolic links get a small arrow, and hidden files (starting with .) are dimmed.
   Change folders, upload (files/folders, or drop them on the window), download (folders as a whole), new folder, rename, delete, transfer progress/cancel.
+- **Selecting several**: Ctrl+click (add/remove one), Shift+click (a range), Ctrl+A or the checkbox at the top of the list (all). [Download (N)],
+  [Delete (N)] and 'Download/Delete N selected' in the right-click menu act on all of them; downloading several asks for one folder to put them in.
+  After a click in the list, Delete deletes the selection (after asking) and Esc clears it.
 - Port forwarding is set under "Port forwarding" in the Site Manager and starts on connecting.
   - Local (L): a port on this PC → connected from the server to the target
   - Remote (R): a port on the server → connected from this PC to the target
