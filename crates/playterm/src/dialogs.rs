@@ -136,7 +136,7 @@ impl VaultDialog {
             let mut enter = false;
             ui.label(t("마스터 비밀번호", "Master password"));
             let first = ui.add(egui::TextEdit::singleline(&mut *self.master).password(true));
-            forget_history(ui, first.id);
+            secret_field(ui, &first);
             enter |= first.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if !self.focus_requested {
                 first.request_focus();
@@ -145,7 +145,7 @@ impl VaultDialog {
             if self.mode == VaultMode::Create {
                 ui.label(t("마스터 비밀번호 확인", "Confirm master password"));
                 let second = ui.add(egui::TextEdit::singleline(&mut *self.confirm).password(true));
-                forget_history(ui, second.id);
+                secret_field(ui, &second);
                 enter |= second.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             }
 
@@ -489,7 +489,7 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
             ui.label(&field.label);
             let edit = ui.add(egui::TextEdit::singleline(&mut *pending.answers[i]).password(!field.echo));
             if !field.echo {
-                forget_history(ui, edit.id);
+                secret_field(ui, &edit);
             }
             // Check before (re)focusing: Enter makes the field surrender focus this frame.
             enter |= edit.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter));
@@ -539,12 +539,20 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
     None
 }
 
-/// egui keeps an undo history for every text field, password fields too: copies of what was
-/// typed (the master password included) that stay in memory after the dialog is closed.
-/// Called each frame after a password field, so no copy outlives the frame.
-fn forget_history(ui: &egui::Ui, id: egui::Id) {
-    if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
+/// Called each frame right after a password field.
+///
+/// - egui keeps an undo history for every text field, password fields too: copies of what was
+///   typed (the master password included) that stay in memory after the dialog is closed. It is
+///   cleared, so no copy outlives the frame.
+/// - The input method is switched off while the field has focus, as Windows does for its own
+///   password boxes: with Korean input on, `secret` would be typed as `ㄴㄷㅊㄱㄷㅅ`, hidden
+///   behind the dots, and the login would fail for no visible reason.
+pub fn secret_field(ui: &egui::Ui, field: &egui::Response) {
+    if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), field.id) {
         state.clear_undoer();
-        state.store(ui.ctx(), id);
+        state.store(ui.ctx(), field.id);
+    }
+    if field.has_focus() {
+        ui.ctx().output_mut(|o| o.ime = None);
     }
 }

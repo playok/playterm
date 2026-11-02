@@ -309,6 +309,9 @@ Test RDP server: `tools\dev-rdpd` (`cargo run --release` → 127.0.0.1:3389, tes
 
 RSA keys sign with `rsa-sha2-512` / `rsa-sha2-256`, as advertised by the server.
 
+Password fields (login, key passphrase, vault master password, a site's password) switch the input method (IME) off: even right after typing
+Korean in the terminal, a password is typed in Latin letters instead of jamo hidden behind the dots, which would fail the login. The input mode comes back when the dialog closes.
+
 If you entered the wrong user name, fix it in the **User** field of the password dialog. SSH servers do not allow changing the user during authentication,
 so playterm reconnects and logs in as that user; for a saved site, check **Save it in the site too** to change the site's user name as well.
 
