@@ -396,6 +396,22 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
         submit |= enter(ui, &jump);
         ui.end_row();
 
+        ui.label(t("X11 포워딩", "X11 forwarding"));
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut p.x11_forwarding, "")
+                .on_hover_text(t(
+                    "서버의 X 프로그램(xterm, 설치 도구 등)을 이 PC 의 X 서버에 띄웁니다 (ssh -X). Windows: VcXsrv·Xming, macOS: XQuartz 를 먼저 실행하세요.",
+                    "Shows X programs of the server (xterm, installers…) on the X server of this PC (ssh -X). Start VcXsrv or Xming (Windows) or XQuartz (macOS) first.",
+                ));
+            let hint = tr!("DISPLAY (기본 {})", "DISPLAY (default {})", playterm_net::x11::default_display());
+            let display = ui.add_enabled(
+                p.x11_forwarding,
+                egui::TextEdit::singleline(&mut p.x11_display).hint_text(hint).desired_width(220.0),
+            );
+            submit |= enter(ui, &display);
+        });
+        ui.end_row();
+
         ui.label("");
         ui.checkbox(
             &mut p.use_agent,

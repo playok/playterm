@@ -1710,6 +1710,7 @@ mod tests {
             known_hosts: std::env::temp_dir().join("playterm-macro-test-known_hosts"),
             connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
             jump: None,
+            x11: None,
         };
         let spec = SessionSpec {
             params,

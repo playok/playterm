@@ -15,6 +15,7 @@ mod sftp;
 mod ssh;
 mod ssh_auth;
 mod telnet;
+pub mod x11;
 pub mod zmodem;
 
 use std::io;

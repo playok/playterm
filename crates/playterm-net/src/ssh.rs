@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use crate::x11::{self, X11Forward};
 use std::future::Future;
 use std::pin::Pin;
 use std::path::{Path, PathBuf};
@@ -27,6 +28,8 @@ pub(crate) struct ClientHandler {
     sink: EventSink,
     /// Remote (-R) rules, to route channels the server opens back to us.
     remote_forwards: Vec<ForwardRule>,
+    /// X11 forwarding asked for: where the server's `x11` channels go.
+    x11: Option<Arc<X11Forward>>,
 }
 
 impl client::Handler for ClientHandler {
@@ -105,6 +108,29 @@ impl client::Handler for ClientHandler {
         });
         Ok(())
     }
+
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        // Only when this session asked for it (a server must not open X11 channels uninvited).
+        let Some(x11) = self.x11.clone() else {
+            reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
+            return Ok(());
+        };
+        reply.accept().await;
+        let sink = self.sink.clone();
+        tokio::spawn(async move {
+            if let Err(e) = x11.relay(channel.into_stream()).await {
+                sink.notice(tr!("X11 포워딩: {e:#}", "X11 forwarding: {e:#}"));
+            }
+        });
+        Ok(())
+    }
 }
 
 /// Host key algorithms in `order`, those already known for the host first, as OpenSSH does: a
@@ -142,6 +168,7 @@ type Connecting<'a> = Pin<Box<dyn Future<Output = anyhow::Result<(client::Handle
 fn connect_ssh<'a>(
     params: &'a ConnectParams,
     sink: &'a EventSink,
+    x11: Option<Arc<X11Forward>>,
 ) -> Connecting<'a> {
     Box::pin(async move {
         // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
@@ -159,6 +186,7 @@ fn connect_ssh<'a>(
             known_hosts: params.known_hosts.clone(),
             sink: sink.clone(),
             remote_forwards: params.forwards.iter().filter(|r| r.kind == ForwardKind::Remote).cloned().collect(),
+            x11,
         };
         let (mut session, hops) = match &params.jump {
             None => {
@@ -169,7 +197,7 @@ fn connect_ssh<'a>(
                 (client::connect_stream(config, stream, handler).await?, Hops::new())
             }
             Some(jump) => {
-                let (bastion, mut hops) = connect_ssh(jump, sink).await?;
+                let (bastion, mut hops) = connect_ssh(jump, sink, None).await?;
                 let channel = bastion
                     .channel_open_direct_tcpip(params.host.as_str(), params.port.into(), "127.0.0.1", 0)
                     .await
@@ -198,7 +226,11 @@ async fn open(
     params: &ConnectParams,
     sink: &EventSink,
 ) -> anyhow::Result<(Arc<client::Handle<ClientHandler>>, russh::Channel<client::Msg>, JoinSet<()>, Hops)> {
-    let (session, hops) = connect_ssh(params, sink).await?;
+    let x11 = match &params.x11 {
+        Some(display) => Some(Arc::new(X11Forward::new(display).await?)),
+        None => None,
+    };
+    let (session, hops) = connect_ssh(params, sink, x11.clone()).await?;
     // Shared with forwarding listeners and SFTP, which open their own channels.
     let session = Arc::new(session);
     let mut tasks = JoinSet::new();
@@ -216,6 +248,10 @@ async fn open(
             &[],
         )
         .await?;
+    if let Some(x11) = &x11 {
+        channel.request_x11(false, false, x11::AUTH_PROTOCOL, x11.fake_cookie_hex(), x11.screen).await?;
+        sink.notice(tr!("X11 포워딩: 서버의 X 프로그램을 {} 에 표시합니다", "X11 forwarding: X programs on the server show on {}", x11.display));
+    }
     channel.request_shell(false).await?;
     Ok((session, channel, tasks, hops))
 }
