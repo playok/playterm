@@ -1,11 +1,14 @@
-# Builds the Windows packages (x64 and ARM64) and publishes them as a GitHub release.
+# Builds the Windows packages (x64 and ARM64) and the macOS apps (Apple silicon and Intel) and
+# publishes them as a GitHub release.
 #
-#   git tag v0.1.0 && git push origin v0.1.0     -> release "v0.1.0" with both zips
-#   Actions tab -> Release -> Run workflow        -> the same build, kept as a workflow artifact
+#   git tag v0.1.0 && git push origin v0.1.0     -> release "v0.1.0" with every zip
+#   Actions tab -> Release -> Run workflow        -> the same builds, kept as workflow artifacts
 #                                                    (no release; to try the build)
 #
-# The tag must match the version in Cargo.toml. Both architectures are built on one x64
+# The tag must match the version in Cargo.toml. Both Windows architectures are built on one x64
 # runner: ARM64 is cross-compiled (clang, preinstalled with LLVM, builds the crypto library).
+# Both macOS architectures are built on one Apple silicon runner (x64 cross-compiled). The
+# release is published only when every build succeeded.
 name: Release
 
 on:
@@ -21,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -39,10 +42,12 @@ jobs:
       - name: Tag matches Cargo.toml
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
-          if ("v$version" -ne "${{ github.ref_name }}") {
-            throw "tag ${{ github.ref_name }} does not match the Cargo.toml version $version"
+          if ("v$version" -ne $env:TAG) {
+            throw "tag $env:TAG does not match the Cargo.toml version $version"
           }
 
       - name: Check (clippy)
@@ -60,38 +65,108 @@ jobs:
         run: |
           if ($env:GITHUB_REF -like "refs/tags/*") { ./scripts/package.ps1 -Upx -Sign } else { ./scripts/package.ps1 -Upx }
 
-      - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "${{ github.ref_name }}"
-          $sums = (Get-Content dist/SHA256SUMS.txt -Raw).Trim()
-          $notes = @"
-          Windows packages of playterm $tag (portable: unzip and run ``playterm.exe``).
-
-          | File | For |
-          |---|---|
-          | ``playterm-*-windows-x64.zip`` | Intel / AMD 64-bit Windows |
-          | ``playterm-*-windows-arm64.zip`` | ARM64 Windows (Snapdragon, ...) |
-
-          The executables are not code-signed, so Windows SmartScreen may warn on the first run
-          (More info -> Run anyway). They are compressed with UPX, which some antivirus products
-          flag by mistake.
-
-          SHA-256 (``SHA256SUMS.txt.sig`` is its Ed25519 signature, checked by the in-app updater):
-          ``````
-          $sums
-          ``````
-          "@
-          gh release create $tag dist/*.zip dist/SHA256SUMS.txt dist/SHA256SUMS.txt.sig --verify-tag --title "playterm $tag" --notes $notes
-
-      - name: Keep the packages (manual run)
-        if: "!startsWith(github.ref, 'refs/tags/')"
+      - name: Keep the packages
         uses: actions/upload-artifact@v4
         with:
-          name: playterm-packages
+          name: playterm-windows
           path: |
             dist/*.zip
             dist/SHA256SUMS.txt*
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustc --version
+
+      - name: Tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "tag $TAG does not match the Cargo.toml version $version" >&2
+            exit 1
+          fi
+
+      # clippy runs in the Windows job (the code checked with -D warnings is mostly shared).
+      - name: Test
+        run: cargo test --locked --workspace
+
+      # Signed ad hoc: the apps are not notarized, so Gatekeeper asks on the first run.
+      - name: Package (arm64, x64)
+        run: scripts/package-macos.sh arm64 x64
+
+      - name: Keep the packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: playterm-macos
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS-macos.txt
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download the packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          cd dist
+          ls -l
+          windows_sums=$(tr -d '\r' < SHA256SUMS.txt)
+          macos_sums=$(cat SHA256SUMS-macos.txt)
+          tick='`'
+          fence='```'
+          cat > notes.md <<EOF
+          Packages of playterm $TAG.
+
+          | File | For |
+          |---|---|
+          | ${tick}playterm-*-windows-x64.zip${tick} | Intel / AMD 64-bit Windows (portable: unzip and run ${tick}playterm.exe${tick}) |
+          | ${tick}playterm-*-windows-arm64.zip${tick} | ARM64 Windows (Snapdragon, ...) |
+          | ${tick}playterm-*-macos-arm64.zip${tick} | Apple silicon Macs, macOS 11 or later (unzip and move ${tick}playterm.app${tick} to Applications) |
+          | ${tick}playterm-*-macos-x64.zip${tick} | Intel Macs, macOS 11 or later |
+
+          The Windows executables are not code-signed, so Windows SmartScreen may warn on the first run
+          (More info -> Run anyway). They are compressed with UPX, which some antivirus products
+          flag by mistake.
+
+          The macOS apps are signed ad hoc and not notarized, so macOS stops the first run of a
+          downloaded app: right-click ${tick}playterm.app${tick} -> Open, or System Settings -> Privacy & Security
+          -> Open Anyway.
+
+          SHA-256 of the Windows packages (${tick}SHA256SUMS.txt.sig${tick} is its Ed25519 signature, checked by the in-app updater):
+          ${fence}
+          $windows_sums
+          ${fence}
+
+          SHA-256 of the macOS packages (${tick}SHA256SUMS-macos.txt${tick}):
+          ${fence}
+          $macos_sums
+          ${fence}
+          EOF
+          gh release create "$TAG" *.zip SHA256SUMS.txt SHA256SUMS.txt.sig SHA256SUMS-macos.txt \
+            --verify-tag --title "playterm $TAG" --notes-file notes.md

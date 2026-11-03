@@ -52,8 +52,9 @@ cargo build --release
 
 ### GitHub 릴리스 (자동 빌드)
 
-`v` 로 시작하는 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 clippy 검사 → 테스트 → x64·ARM64 패키지(UPX 압축)를 만들어
-그 태그의 릴리스에 zip 두 개와 `SHA256SUMS.txt`, 그 서명 `SHA256SUMS.txt.sig` 를 올립니다. 태그는 `Cargo.toml` 의 버전과 같아야 합니다.
+`v` 로 시작하는 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 Windows 에서 clippy 검사 → 테스트 → x64·ARM64 패키지(UPX 압축)를,
+macOS 에서 테스트 → arm64·x64 `playterm.app` zip(ad-hoc 서명)을 만들고, 둘 다 성공하면 그 태그의 릴리스에 zip 네 개와 `SHA256SUMS.txt`,
+그 서명 `SHA256SUMS.txt.sig`, macOS zip 의 `SHA256SUMS-macos.txt` 를 올립니다. 태그는 `Cargo.toml` 의 버전과 같아야 합니다.
 
 앱 안의 업데이트는 서명이 맞는 릴리스만 설치하므로, 저장소 시크릿 `PLAYTERM_SIGNING_KEY` 에 서명 개인 키(hex)가 있어야 태그 빌드가 성공합니다.
 키는 `cargo run -p playterm-sign -- keygen > 키파일` 로 만들고(공개 키는 화면에 출력 → `crates/playterm/src/update.rs` 의 `PUBLIC_KEY`),
@@ -65,7 +66,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Actions 탭에서 **Release → Run workflow** 로 직접 실행하면 릴리스는 만들지 않고, 같은 빌드 결과를 워크플로 아티팩트로 남깁니다(빌드 시험용).
+Actions 탭에서 **Release → Run workflow** 로 직접 실행하면 릴리스는 만들지 않고, 같은 빌드 결과를 워크플로 아티팩트(`playterm-windows`, `playterm-macos`)로 남깁니다(빌드 시험용).
 
 ### 릴리스 패키지
 

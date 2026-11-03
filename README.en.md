@@ -52,8 +52,9 @@ Both scripts put LLVM (clang) on PATH by themselves and build with `--locked`, s
 
 ### GitHub releases (automatic build)
 
-Pushing a tag that starts with `v` runs GitHub Actions (`.github/workflows/release.yml`): clippy → tests → x64 and ARM64 packages (UPX-compressed),
-uploaded with `SHA256SUMS.txt` and its signature `SHA256SUMS.txt.sig` to that tag's release. The tag must match the version in `Cargo.toml`.
+Pushing a tag that starts with `v` runs GitHub Actions (`.github/workflows/release.yml`): on Windows clippy → tests → x64 and ARM64 packages
+(UPX-compressed), on macOS tests → arm64 and x64 `playterm.app` zips (signed ad hoc). When both succeed, the four zips are uploaded with
+`SHA256SUMS.txt`, its signature `SHA256SUMS.txt.sig` and `SHA256SUMS-macos.txt` (for the macOS zips) to that tag's release. The tag must match the version in `Cargo.toml`.
 
 The in-app updater installs only releases with a valid signature, so a tag build needs the signing private key (hex) in the repository secret
 `PLAYTERM_SIGNING_KEY`. Make a key with `cargo run -p playterm-sign -- keygen > keyfile` (the public key it prints goes into `PUBLIC_KEY` in
@@ -65,7 +66,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Running it by hand from the Actions tab (**Release → Run workflow**) makes no release; the same build is kept as a workflow artifact (to try the build).
+Running it by hand from the Actions tab (**Release → Run workflow**) makes no release; the same builds are kept as workflow artifacts (`playterm-windows`, `playterm-macos`; to try the build).
 
 ### Release packages
 
