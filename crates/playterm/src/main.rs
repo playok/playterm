@@ -32,6 +32,7 @@ mod site_tree;
 mod status_bar;
 mod template_dialog;
 mod toast;
+mod update;
 mod view;
 
 use std::sync::Arc;
@@ -51,6 +52,7 @@ fn usage() -> &'static str {
 fn main() -> eframe::Result {
     restrict_dll_search();
     env_logger::init();
+    update::clean_up();
     // The language is needed before the window exists (command-line errors).
     if let Some(dir) = app::config_dir()
         && let Ok(settings) = playterm_config::AppSettings::load(&dir.join("settings.toml"))

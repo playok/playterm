@@ -51,9 +51,14 @@ jobs:
       - name: Test
         run: cargo test --locked --workspace
 
+      # A tagged release must be signed (repository secret PLAYTERM_SIGNING_KEY): the in-app
+      # updater installs only releases whose SHA256SUMS.txt.sig matches its public key.
       - name: Package (x64, ARM64)
         shell: pwsh
-        run: ./scripts/package.ps1 -Upx
+        env:
+          PLAYTERM_SIGNING_KEY: ${{ secrets.PLAYTERM_SIGNING_KEY }}
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/*") { ./scripts/package.ps1 -Upx -Sign } else { ./scripts/package.ps1 -Upx }
 
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/')
@@ -75,12 +80,12 @@ jobs:
           (More info -> Run anyway). They are compressed with UPX, which some antivirus products
           flag by mistake.
 
-          SHA-256:
+          SHA-256 (``SHA256SUMS.txt.sig`` is its Ed25519 signature, checked by the in-app updater):
           ``````
           $sums
           ``````
           "@
-          gh release create $tag dist/*.zip dist/SHA256SUMS.txt --verify-tag --title "playterm $tag" --notes $notes
+          gh release create $tag dist/*.zip dist/SHA256SUMS.txt dist/SHA256SUMS.txt.sig --verify-tag --title "playterm $tag" --notes $notes
 
       - name: Keep the packages (manual run)
         if: "!startsWith(github.ref, 'refs/tags/')"
@@ -89,4 +94,4 @@ jobs:
           name: playterm-packages
           path: |
             dist/*.zip
-            dist/SHA256SUMS.txt
+            dist/SHA256SUMS.txt*

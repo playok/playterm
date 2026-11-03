@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, Button};
 use playterm_config::TabColor;
-use playterm_i18n::t;
+use playterm_i18n::{t, tr};
 use playterm_term::LogMode;
 
 use crate::session::Session;
@@ -72,6 +72,9 @@ pub enum Command {
     Shortcuts,
     About,
     Licenses,
+    CheckUpdates,
+    /// The dialog of the newer release found earlier.
+    ShowUpdate,
 }
 
 /// What the menus need to know to enable and check their items.
@@ -89,6 +92,8 @@ pub struct MenuState<'a> {
     /// Keys shown next to Copy and Paste.
     pub copy_hint: &'static str,
     pub paste_hint: &'static str,
+    /// A newer release that was found and not installed or skipped.
+    pub update: Option<String>,
 }
 
 /// Adds a menu item; a click records `command` and closes the menu.
@@ -294,7 +299,17 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             ui.separator();
             item(ui, out, t("playterm 정보", "About playterm"), "", true, Command::About);
             item(ui, out, t("오픈소스 라이선스", "Open-source licenses"), "", true, Command::Licenses);
+            ui.separator();
+            item(ui, out, t("업데이트 확인…", "Check for updates…"), "", true, Command::CheckUpdates);
         });
+
+        if let Some(version) = &st.update {
+            let text = egui::RichText::new(tr!("⬆ 새 버전 {version}", "⬆ New version {version}"))
+                .color(ui.visuals().selection.stroke.color);
+            if ui.button(text).on_hover_text(t("업데이트 설치…", "Install the update…")).clicked() {
+                *out = Some(Command::ShowUpdate);
+            }
+        }
     });
     out.take()
 }

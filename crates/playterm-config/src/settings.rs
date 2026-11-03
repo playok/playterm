@@ -142,6 +142,10 @@ pub struct AppSettings {
     pub site_view: SiteView,
     /// Folder ZMODEM downloads (`sz` on the server) are saved in; empty = the Downloads folder.
     pub zmodem_dir: String,
+    /// Look for a new release on GitHub at start-up.
+    pub check_updates: bool,
+    /// A release version the user chose to skip ("Skip this version"); not offered again.
+    pub skipped_update: String,
 }
 
 impl AppSettings {
@@ -200,6 +204,8 @@ impl Default for AppSettings {
             clipboard: ClipboardKeys::default(),
             site_view: SiteView::Tree,
             zmodem_dir: String::new(),
+            check_updates: true,
+            skipped_update: String::new(),
         }
     }
 }
@@ -229,6 +235,8 @@ mod tests {
             clipboard: ClipboardKeys { copy_on_select: true, ctrl_v: false, right_click_paste: true, ..Default::default() },
             site_view: SiteView::Grid,
             zmodem_dir: "D:\\받은 파일".into(),
+            check_updates: false,
+            skipped_update: "0.3.0".into(),
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);

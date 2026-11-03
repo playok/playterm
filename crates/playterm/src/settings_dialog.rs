@@ -93,6 +93,7 @@ impl SettingsDialog {
                 self.sleep_row(ui);
                 self.timeout_row(ui);
                 self.zmodem_row(ui);
+                self.update_row(ui);
                 self.clipboard_rows(ui);
             });
             ui.add_space(8.0);
@@ -342,6 +343,18 @@ impl SettingsDialog {
                     "Where files sent with sz on the server are saved. A file with the same name is not replaced: the new one is saved as 'name (1)'.",
                 ));
         });
+        ui.end_row();
+    }
+
+    fn update_row(&mut self, ui: &mut egui::Ui) {
+        ui.label(t("업데이트", "Updates"));
+        ui.checkbox(&mut self.draft.check_updates, t("시작할 때 새 버전 확인", "Check for a new version at start-up"))
+            .on_hover_text(t(
+                "GitHub 의 최신 릴리스를 확인해 새 버전이 있으면 알려 줍니다. 설치는 확인을 받은 뒤에만 합니다.
+도움말 → 업데이트 확인 으로 언제든 직접 확인할 수 있습니다.",
+                "Looks up the latest release on GitHub and tells you about a new version. Nothing is installed without asking.
+Help → Check for updates checks at any time.",
+            ));
         ui.end_row();
     }
 

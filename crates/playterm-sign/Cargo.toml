@@ -1,0 +1,10 @@
+[package]
+name = "playterm-sign"
+description = "Signs release checksums for playterm's updater (release builds only)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+ring = "0.17.14"

@@ -27,7 +27,8 @@ x64·ARM64용 실행 파일 하나로 동작하며, 설치나 런타임 설치�
 | `crates/playterm-net` | SSH(russh) / Telnet / 시리얼 / RDP(IronRDP) 전송, 세션 이벤트·명령 채널, ZMODEM 받기 |
 | `crates/playterm-config` | 세션 목록(`sessions.toml`), 비밀번호 볼트(`vault.toml`), 설정(`settings.toml`) |
 | `crates/playterm-i18n` | 한국어 / 영어 UI 문구 |
-| `crates/playterm` | GUI 앱(eframe/egui): 렌더링, 키보드/IME 입력, 대화상자 |
+| `crates/playterm` | GUI 앱(eframe/egui): 렌더링, 키보드/IME 입력, 대화상자, 업데이트 |
+| `crates/playterm-sign` | 릴리스 체크섬 서명 도구 (릴리스 빌드용) |
 
 ## 빌드
 
@@ -52,7 +53,12 @@ cargo build --release
 ### GitHub 릴리스 (자동 빌드)
 
 `v` 로 시작하는 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 clippy 검사 → 테스트 → x64·ARM64 패키지(UPX 압축)를 만들어
-그 태그의 릴리스에 zip 두 개와 `SHA256SUMS.txt` 를 올립니다. 태그는 `Cargo.toml` 의 버전과 같아야 합니다.
+그 태그의 릴리스에 zip 두 개와 `SHA256SUMS.txt`, 그 서명 `SHA256SUMS.txt.sig` 를 올립니다. 태그는 `Cargo.toml` 의 버전과 같아야 합니다.
+
+앱 안의 업데이트는 서명이 맞는 릴리스만 설치하므로, 저장소 시크릿 `PLAYTERM_SIGNING_KEY` 에 서명 개인 키(hex)가 있어야 태그 빌드가 성공합니다.
+키는 `cargo run -p playterm-sign -- keygen > 키파일` 로 만들고(공개 키는 화면에 출력 → `crates/playterm/src/update.rs` 의 `PUBLIC_KEY`),
+`gh secret set PLAYTERM_SIGNING_KEY < 키파일` 로 등록합니다. 개인 키는 저장소 밖에 안전하게 보관하세요. 잃어버리면 새 키를 만들고
+`PUBLIC_KEY` 를 바꾼 버전을 낸 뒤, 그 전 버전 사용자는 한 번 직접 받아야 합니다.
 
 ```powershell
 git tag v0.1.0
@@ -304,6 +310,15 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 
 볼트를 **잠그면** 열린 탭에 넘겨준 비밀번호도 지웁니다. 그 탭을 다시 연결하면 볼트 잠금 해제를 먼저 묻습니다. '마스터 비밀번호를 잊었나요?' 로 볼트를 초기화하면 기존 파일은 `vault.toml.bak` 으로 남겨 둡니다.
 
+## 업데이트
+
+시작할 때 GitHub 의 최신 릴리스를 확인해 새 버전이 있으면 알려 줍니다(**도구 → 설정 → 업데이트** 에서 끌 수 있고, **도움말 → 업데이트 확인** 으로 언제든 확인).
+**업데이트** 를 누르면 이 PC 용 zip(x64 / ARM64)을 받아 릴리스의 `SHA256SUMS.txt` 와 비교하고, 그 파일의 Ed25519 서명이 앱에 들어 있는 공개 키와
+맞는지 확인한 뒤에만 `playterm.exe` 를 바꿉니다. 지금보다 새 버전만 설치합니다(버전은 서명된 파일 이름에 들어 있음).
+실행 중인 exe 는 `playterm.exe.old` 로 옮겨 두었다가 다음 시작 때 지우며, 새 버전은 다시 시작하면 적용됩니다(**지금 다시 시작** 또는 나중에).
+**나중에** 를 고르면 메뉴 막대 오른쪽의 **⬆ 새 버전** 으로 다시 열 수 있고, **이 버전 건너뛰기** 를 고르면 그 버전은 다시 알리지 않습니다.
+exe 가 쓰기 권한이 없는 폴더(예: `Program Files`)에 있으면 설치할 수 없으니 릴리스 페이지에서 직접 받으세요.
+
 ## 설정 파일
 
 `%APPDATA%\playterm\config\` (환경변수 `PLAYTERM_CONFIG_DIR` 로 변경 가능 — 포터블 사용)
@@ -311,7 +326,7 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 | 파일 | 내용 |
 |---|---|
 | `sessions.toml` | 저장된 세션과 템플릿 (비밀번호 없음) |
-| `settings.toml` | 언어, 화면 테마, 글꼴, 크기, 색 테마, 스크롤백, 상태 표시줄, 명령 입력창, 절전 방지, 화면보호기 진입 방지, 연결 시간 제한, 복사 / 붙여넣기 키, 사이트 관리 보기(트리/그리드), ZMODEM 받을 폴더 |
+| `settings.toml` | 언어, 화면 테마, 글꼴, 크기, 색 테마, 스크롤백, 상태 표시줄, 명령 입력창, 절전 방지, 화면보호기 진입 방지, 연결 시간 제한, 복사 / 붙여넣기 키, 사이트 관리 보기(트리/그리드), ZMODEM 받을 폴더, 업데이트 확인 / 건너뛴 버전 |
 | `vault.toml` | 저장된 비밀번호. 마스터 비밀번호 → Argon2id → XChaCha20-Poly1305 로 암호화. 비밀번호마다 저장할 때의 접속 대상(프로토콜·사용자·호스트·포트)도 함께 암호화해 두어, `sessions.toml` 에서 사이트의 대상이 바뀌면 그 비밀번호를 보내지 않습니다(playterm 에서 직접 고친 경우는 따라감). 창을 여러 개 띄워도 서로 저장한 비밀번호를 지우지 않습니다 |
 | `known_hosts` | SSH 호스트 키. 알려진 호스트의 키가 바뀌면 — 종류가 다른 키여도 — 접속을 거부합니다(중간자 공격 방지). 알고 있는 키 종류를 먼저 요청합니다 |
 | `known_rdp_hosts` | RDP 서버 인증서 지문. 바뀌면 접속을 거부합니다 |
