@@ -5,6 +5,8 @@
 use eframe::egui::{self, RichText};
 use playterm_i18n::{t, tr};
 
+use crate::icon;
+
 /// An open-source crate built into the program. Crates linked in several versions (each used
 /// by different crates) are one component with all of them.
 pub struct Component {
@@ -105,7 +107,7 @@ impl LicensesDialog {
                     }
                 });
                 ui.add_space(8.0);
-                done = ui.button(t("닫기", "Close")).clicked();
+                done = ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked();
             })
             .should_close();
         done || close

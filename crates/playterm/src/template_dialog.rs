@@ -5,6 +5,7 @@ use playterm_config::{ProfileStore, SessionProfile, SiteTemplate, TemplateLayout
 use playterm_i18n::{t, tr};
 
 use crate::sidebar;
+use crate::icon;
 
 pub enum TemplateResult {
     Open,
@@ -63,8 +64,8 @@ impl TemplateDialog {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
                 ui.horizontal(|ui| {
-                    submit |= ui.button(t("저장", "Save")).clicked();
-                    if ui.button(t("취소", "Cancel")).clicked() {
+                    submit |= ui.add(icon::button(icon::SAVE, t("저장", "Save"))).clicked();
+                    if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                         result = TemplateResult::Cancel;
                     }
                 });
@@ -101,13 +102,13 @@ impl TemplateDialog {
                     ui.label(format!("{}.", i + 1));
                     ui.label(p.display_name()).on_hover_text(sidebar::summary(p));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("✕").on_hover_text(t("빼기", "Remove")).clicked() {
+                        if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("빼기", "Remove")).clicked() {
                             remove = Some(i);
                         }
-                        if ui.add_enabled(i + 1 < sites.len(), egui::Button::new("▼").small()).clicked() {
+                        if ui.add_enabled(i + 1 < sites.len(), icon::icon_button(icon::DOWN).small()).clicked() {
                             swap = Some((i, i + 1));
                         }
-                        if ui.add_enabled(i > 0, egui::Button::new("▲").small()).clicked() {
+                        if ui.add_enabled(i > 0, icon::icon_button(icon::UP).small()).clicked() {
                             swap = Some((i - 1, i));
                         }
                     });

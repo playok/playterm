@@ -7,6 +7,7 @@ use zeroize::Zeroizing;
 
 use crate::profile_form::{FormOptions, ProfileForm};
 use crate::session::Session;
+use crate::icon;
 
 fn modal(id: impl std::hash::Hash + std::fmt::Debug, ctx: &egui::Context, add: impl FnOnce(&mut egui::Ui)) -> bool {
     egui::Modal::new(egui::Id::unique(id)).show(ctx, add).should_close()
@@ -43,8 +44,8 @@ impl QuickConnect {
             ui.checkbox(&mut self.save, t("사이트 목록에 저장", "Save to the site list"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                submit |= ui.button(t("연결", "Connect")).clicked();
-                if ui.button(t("취소", "Cancel")).clicked() {
+                submit |= ui.add(icon::button(icon::CONNECT, t("연결", "Connect"))).clicked();
+                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                     result = QuickConnectResult::Cancel;
                 }
             });
@@ -155,7 +156,8 @@ impl VaultDialog {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let label = if self.mode == VaultMode::Unlock { t("잠금 해제", "Unlock") } else { t("만들기", "Create") };
-                if ui.button(label).clicked() || enter {
+                let icon = if self.mode == VaultMode::Unlock { icon::UNLOCK } else { icon::ADD };
+                if ui.add(icon::button(icon, label)).clicked() || enter {
                     if self.master.is_empty() {
                         self.error = Some(t("마스터 비밀번호를 입력하세요", "Enter the master password").into());
                     } else if self.mode == VaultMode::Create && *self.master != *self.confirm {
@@ -164,7 +166,7 @@ impl VaultDialog {
                         result = VaultResult::Submit(self.master.clone());
                     }
                 }
-                if ui.button(t("취소", "Cancel")).clicked() {
+                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                     result = VaultResult::Cancel;
                 }
             });
@@ -184,10 +186,10 @@ impl VaultDialog {
                         ),
                     );
                     ui.horizontal(|ui| {
-                        if ui.button(t("초기화", "Reset")).clicked() {
+                        if ui.add(icon::button(icon::RESET, t("초기화", "Reset"))).clicked() {
                             result = VaultResult::Reset;
                         }
-                        if ui.button(t("돌아가기", "Back")).clicked() {
+                        if ui.add(icon::button(icon::BACK, t("돌아가기", "Back"))).clicked() {
                             self.confirm_reset = false;
                         }
                     });
@@ -213,10 +215,10 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
         ui.label(text);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button(ok_label).clicked() {
+            if ui.add(icon::button(icon::OK, ok_label)).clicked() {
                 answer = Some(true);
             }
-            if ui.button(t("취소", "Cancel")).clicked() {
+            if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                 answer = Some(false);
             }
         });
@@ -259,10 +261,10 @@ pub fn confirm_paste(ctx: &egui::Context, text: &str) -> Option<bool> {
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button(t("붙여넣기", "Paste")).clicked() {
+            if ui.add(icon::button(icon::PASTE, t("붙여넣기", "Paste"))).clicked() {
                 answer = Some(true);
             }
-            if ui.button(t("취소", "Cancel")).clicked() {
+            if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                 answer = Some(false);
             }
         });
@@ -360,7 +362,7 @@ pub fn shortcuts(ctx: &egui::Context, keys: &ClipboardKeys) -> bool {
             }
         });
         ui.add_space(8.0);
-        done = ui.button(t("닫기", "Close")).clicked();
+        done = ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked();
     });
     done || close
 }
@@ -388,7 +390,7 @@ pub fn about(ctx: &egui::Context) -> bool {
                 "MIT License · open-source components: Help → Open-source licenses",
             ));
             ui.add_space(8.0);
-            done = ui.button(t("확인", "OK")).clicked();
+            done = ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked();
         });
     });
     done || close
@@ -430,10 +432,10 @@ pub fn host_key(ctx: &egui::Context, session: &mut Session) {
         });
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            if ui.button(t("신뢰하고 연결", "Trust and connect")).clicked() {
+            if ui.add(icon::button(icon::TRUST, t("신뢰하고 연결", "Trust and connect"))).clicked() {
                 decision = Some(true);
             }
-            if ui.button(t("취소", "Cancel")).clicked() {
+            if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                 decision = Some(false);
             }
         });
@@ -508,10 +510,10 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
         ui.add_space(10.0);
         let user_ok = original_user.is_none() || !pending.user.trim().is_empty();
         ui.horizontal(|ui| {
-            if ui.add_enabled(user_ok, egui::Button::new(t("확인", "OK"))).clicked() || (enter && user_ok) {
+            if ui.add_enabled(user_ok, icon::button(icon::OK, t("확인", "OK"))).clicked() || (enter && user_ok) {
                 submit = Some(true);
             }
-            if ui.button(t("취소", "Cancel")).clicked() {
+            if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                 submit = Some(false);
             }
         });

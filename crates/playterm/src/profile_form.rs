@@ -13,6 +13,8 @@ use playterm_net::{
 use playterm_term::Charset;
 use zeroize::Zeroizing;
 
+use crate::icon;
+
 /// Parses `ssh://[user@]host[:port]` or `telnet://host[:port]` (`user@host` alone means SSH).
 /// IPv6 hosts are written in brackets: `ssh://user@[::1]:2222`.
 pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
@@ -129,7 +131,7 @@ fn serial_rows(
                 }
             }
         });
-        if ui.button(t("새로고침", "Refresh")).clicked() {
+        if ui.add(icon::button(icon::REFRESH, t("새로고침", "Refresh"))).clicked() {
             *ports = list_ports();
         }
     });
@@ -196,7 +198,7 @@ fn log_ui(ui: &mut egui::Ui, log: &mut playterm_config::LogSettings) {
             ui.label(t("폴더", "Folder"));
             let default_dir = crate::logging::default_log_dir().display().to_string();
             ui.add(egui::TextEdit::singleline(&mut log.dir).hint_text(default_dir).desired_width(240.0));
-            if ui.button(t("찾아보기", "Browse…")).clicked()
+            if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
                 && let Some(dir) = rfd::FileDialog::new().set_title(t("로그 폴더", "Log folder")).pick_folder()
             {
                 log.dir = dir.display().to_string();
@@ -298,7 +300,7 @@ fn keepalive_ui(ui: &mut egui::Ui, k: &mut KeepAlive, protocol: Protocol) {
                 ui.horizontal(|ui| {
                     ui.label(t("문자열", "Text"));
                     ui.add(egui::TextEdit::singleline(&mut k.text).hint_text(KeepAlive::DEFAULT_TEXT).desired_width(160.0));
-                    if ui.small_button(t("기본값", "Default")).clicked() {
+                    if ui.add(icon::button(icon::RESET, t("기본값", "Default")).small()).clicked() {
                         k.text = KeepAlive::DEFAULT_TEXT.into();
                     }
                 });
@@ -555,7 +557,7 @@ impl ProfileForm {
                             .desired_width(220.0),
                     );
                     submit |= enter(ui, &key);
-                    if ui.button(t("찾아보기", "Browse…")).clicked()
+                    if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
                         && let Some(path) = pick_key_file(&p.identity_file)
                     {
                         p.identity_file = path.display().to_string();
@@ -634,7 +636,7 @@ impl ProfileForm {
                         ui.label(format!("{}.", i + 1));
                         ui.add(egui::TextEdit::singleline(&mut step.expect).hint_text("login:").desired_width(150.0));
                         ui.add(egui::TextEdit::singleline(&mut step.send).hint_text("{user}").desired_width(170.0));
-                        if ui.small_button("✕").on_hover_text(t("삭제", "Delete")).clicked() {
+                        if ui.add(icon::icon_button(icon::DELETE).small()).on_hover_text(t("삭제", "Delete")).clicked() {
                             remove = Some(i);
                         }
                         ui.end_row();
@@ -644,10 +646,10 @@ impl ProfileForm {
                     a.steps.remove(i);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button(t("+ 단계 추가", "+ Add step")).clicked() {
+                    if ui.add(icon::button(icon::ADD, t("단계 추가", "Add step"))).clicked() {
                         a.steps.push(LoginStep::default());
                     }
-                    if ui.button(t("기본값 (login: / Password:)", "Defaults (login: / Password:)")).clicked() {
+                    if ui.add(icon::button(icon::RESET, t("기본값 (login: / Password:)", "Defaults (login: / Password:)"))).clicked() {
                         a.steps = AutoLogin::standard_steps();
                     }
                 });
@@ -705,7 +707,7 @@ impl ProfileForm {
                             );
                         });
                     }
-                    if ui.small_button("✕").on_hover_text(t("삭제", "Delete")).clicked() {
+                    if ui.add(icon::icon_button(icon::DELETE).small()).on_hover_text(t("삭제", "Delete")).clicked() {
                         remove = Some(i);
                     }
                     ui.end_row();
@@ -714,7 +716,7 @@ impl ProfileForm {
             if let Some(i) = remove {
                 self.forwards.remove(i);
             }
-            if ui.button(t("+ 포워딩 추가", "+ Add forwarding")).clicked() {
+            if ui.add(icon::button(icon::ADD, t("포워딩 추가", "Add forwarding"))).clicked() {
                 self.forwards.push(ForwardRow {
                     kind: ForwardKind::Local,
                     bind_host: String::new(),

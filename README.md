@@ -85,6 +85,8 @@ release.cmd                                  # 또는: pwsh scripts\package.ps1 
 - 화면은 OpenGL(glow)로 그리고, OpenGL 을 쓸 수 없는 환경(GPU 없는 VM 등)에서는 자동으로 wgpu(DX12)로 전환합니다.
   환경변수 `PLAYTERM_RENDERER=wgpu` 또는 `glow` 로 강제할 수 있습니다.
 - 아이콘은 `assets/make_icon.py` 로 생성합니다 (`playterm.png`, `playterm.ico`, macOS 용 `playterm.icns`).
+- 버튼 아이콘은 Material Symbols Rounded(Apache-2.0)에서 쓰는 아이콘만 잘라 낸 글꼴(`assets/icons/material-symbols-subset.ttf`, 약 7 KB)로 그립니다.
+  `crates/playterm/src/icon.rs` 에 아이콘을 추가하면 `python assets/make_icon_font.py`(fontTools 필요)로 다시 만드세요. 빠진 아이콘은 테스트가 알려 줍니다.
 
 ### macOS (.app)
 
@@ -405,3 +407,6 @@ cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 ## 라이선스
 
 [MIT](LICENSE)
+
+단, 버튼 아이콘 글꼴 `assets/icons/material-symbols-subset.ttf` (Google 의 Material Symbols Rounded 서브셋)는 MIT 가 아니라
+[Apache License 2.0](assets/icons/LICENSE.txt) 을 따릅니다. 앱 안의 **도움말 → 오픈소스 라이선스** 에도 표시됩니다.

@@ -11,6 +11,7 @@ mod dialogs;
 mod dock;
 mod file_icons;
 mod fonts;
+mod icon;
 mod import_dialog;
 mod input;
 mod licenses;
