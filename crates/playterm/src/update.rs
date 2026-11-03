@@ -448,7 +448,7 @@ impl Updater {
                 Dialog::UpToDate => {
                     ui.label(tr!("최신 버전({})을 쓰고 있습니다.", "You have the latest version ({}).", Version::current()));
                     ui.add_space(8.0);
-                    keep = !ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked();
+                    keep = !ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked();
                 }
                 Dialog::Available(release) => {
                     ui.label(tr!(
@@ -467,7 +467,7 @@ impl Updater {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if AUTO_INSTALL {
-                            if ui.add(icon::button(icon::UPDATE, t("업데이트", "Update"))).clicked() {
+                            if ui.add(icon::primary(ui, icon::UPDATE, t("업데이트", "Update"))).clicked() {
                                 install = Some(release.clone());
                             }
                         } else if ui.add(icon::button(icon::WEB_PAGE, t("다운로드 페이지 열기", "Open the download page"))).clicked() {
@@ -510,7 +510,7 @@ impl Updater {
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.add(icon::button(icon::RESTART, t("지금 다시 시작", "Restart now"))).clicked() {
+                        if ui.add(icon::primary(ui, icon::RESTART, t("지금 다시 시작", "Restart now"))).clicked() {
                             action = Some(Action::Restart(exe.clone()));
                             keep = false;
                         }
@@ -524,7 +524,7 @@ impl Updater {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                     ui.hyperlink_to(t("릴리스 페이지", "Releases page"), RELEASES_PAGE);
                     ui.add_space(8.0);
-                    keep = !ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked();
+                    keep = !ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked();
                 }
             }
         });

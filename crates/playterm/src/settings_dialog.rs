@@ -103,7 +103,7 @@ impl SettingsDialog {
             self.preview(ui);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked() {
+                if ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked() {
                     result = Some(SettingsResult::Save(self.draft.clone()));
                 }
                 if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
