@@ -1615,6 +1615,22 @@ impl PlaytermApp {
         }
     }
 
+    /// The SFTP explorer folded to a strip, for a tab it cannot show (see [`SFTP_STRIP`]).
+    fn sftp_strip_ui(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::right("sftp-strip").resizable(false).exact_size(SFTP_STRIP).show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(4.0);
+                ui.add(icon::icon_button(icon::SFTP).frame(false)).on_hover_text(t(
+                    "SFTP 탐색기: SSH 로 연결된 탭에서 원격 파일을 보고 올리거나 받을 수 있습니다.",
+                    "SFTP explorer: shows, uploads and downloads remote files in a tab connected over SSH.",
+                ));
+                if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)")).clicked() {
+                    self.sftp_panel = false;
+                }
+            });
+        });
+    }
+
     /// The SFTP explorer side panel: the active tab's remote files.
     fn sftp_panel_ui(&mut self, ui: &mut egui::Ui) {
         let mut close = false;
@@ -1694,6 +1710,9 @@ const SMALL_TEXT: f32 = 12.0;
 fn readable_text(style: &mut egui::Style) {
     style.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(SMALL_TEXT));
 }
+
+/// Width of the SFTP explorer folded on a tab without SFTP.
+const SFTP_STRIP: f32 = 34.0;
 
 /// Weak text (hints, placeholders, status details) at the WCAG AA contrast for body text,
 /// 4.5:1: egui makes it from the text color at 60 % alpha, which gives about 2.7:1 on the dark
@@ -1893,16 +1912,22 @@ impl eframe::App for PlaytermApp {
             }
         }
 
-        // Slides in from the right edge; added before the terminal so it takes its room.
-        let mut sftp_panel = self.sftp_panel;
-        egui::Panel::right("sftp-panel")
-            .resizable(true)
-            .default_size(340.0)
-            .min_size(240.0)
-            .drag_to_open(false)
-            .show_collapsible(ui, &mut sftp_panel, |ui| self.sftp_panel_ui(ui));
-        // Closed with its ✕ (inside) or by dragging the edge (outside).
-        self.sftp_panel = self.sftp_panel && sftp_panel;
+        // Slides in from the right edge; added before the terminal so it takes its room. On a
+        // tab without SFTP (local, Telnet, serial, RDP) it folds into a thin strip, so the
+        // terminal keeps its width, and opens again on an SSH tab.
+        if self.sftp_panel && !self.sessions.get(self.active).is_some_and(|s| s.sftp.is_some() || s.can_sftp()) {
+            self.sftp_strip_ui(ui);
+        } else {
+            let mut sftp_panel = self.sftp_panel;
+            egui::Panel::right("sftp-panel")
+                .resizable(true)
+                .default_size(340.0)
+                .min_size(240.0)
+                .drag_to_open(false)
+                .show_collapsible(ui, &mut sftp_panel, |ui| self.sftp_panel_ui(ui));
+            // Closed with its ✕ (inside) or by dragging the edge (outside).
+            self.sftp_panel = self.sftp_panel && sftp_panel;
+        }
 
         for session in &mut self.sessions {
             if let Some(browser) = &mut session.sftp {
