@@ -5,6 +5,8 @@
 use eframe::egui::{self, Key, Modifiers};
 use playterm_i18n::{t, tr};
 
+use crate::icon;
+
 const MAX_HISTORY: usize = 100;
 
 /// A message to type into the tabs.
@@ -90,7 +92,7 @@ impl ComposeBar {
                     "모든 탭: 연결된 탭 전부에 보냅니다 (탭 우클릭의 '동시 입력에 포함' 을 끈 탭은 제외)",
                     "All tabs: every connected tab (except tabs with 'Include in simultaneous input' off)",
                 ));
-            if ui.button(t("보내기", "Send")).on_hover_text("Enter").clicked() {
+            if ui.add(icon::button(icon::SEND, t("보내기", "Send"))).on_hover_text("Enter").clicked() {
                 send = true;
                 edit.request_focus();
             }

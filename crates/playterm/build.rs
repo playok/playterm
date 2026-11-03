@@ -83,6 +83,26 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.";
 
+/// Version of the Material Symbols Rounded font the icon subset was cut from (its `name`
+/// table), and the notice that goes with it.
+const ICON_FONT_VERSION: &str = "2.973";
+const ICON_FONT_NOTICE: &str = "Material Symbols Rounded (a subset: only the icons playterm uses)
+
+Copyright 2026 Google LLC. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the \"License\"); you may not use this file
+except in compliance with the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the
+License is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+either express or implied. See the License for the specific language governing permissions
+and limitations under the License.
+
+Changes: only the glyphs of the icons playterm shows are kept, and the ligature tables are
+removed.";
+
 /// One crate built into the program.
 struct Crate {
     name: String,
@@ -205,6 +225,20 @@ fn licenses() {
             crates[i].texts.insert(0, index);
         }
     }
+
+    // Bundled files that are no crate: the Material Symbols subset the button icons are drawn
+    // with (assets/icons, made by assets/make_icon_font.py from the font in egui_material_icons).
+    let mut notice = vec![add_text(ICON_FONT_NOTICE.to_owned())];
+    if let Some(apache) = &apache {
+        notice.push(add_text(apache.clone()));
+    }
+    crates.push(Crate {
+        name: "Material Symbols Rounded (icon font)".into(),
+        version: ICON_FONT_VERSION.into(),
+        license: "Apache-2.0".into(),
+        url: "https://github.com/google/material-design-icons".into(),
+        texts: notice,
+    });
 
     // One entry per name, its versions oldest first.
     let mut by_name: BTreeMap<String, Vec<Crate>> = BTreeMap::new();

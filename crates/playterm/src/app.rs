@@ -30,6 +30,7 @@ use crate::template_dialog::{TemplateDialog, TemplateResult};
 use crate::view::UserInput;
 use crate::update::{self, Updater};
 use crate::{clip_keys, clipboard, fonts, local_fs, status_bar, view};
+use crate::icon;
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
 /// Largest text a remote program may put on the clipboard (OSC 52).
@@ -1505,7 +1506,7 @@ impl PlaytermApp {
         ui.horizontal_wrapped(|ui| {
             ui.toggle_value(&mut self.show_sidebar, t("사이트", "Sites"))
                 .on_hover_text(t("사이트 목록 (Ctrl+Shift+B)", "Site list (Ctrl+Shift+B)"));
-            if ui.button(t("+ 빠른 연결", "+ Quick Connect")).on_hover_text("Ctrl+Shift+T").clicked() {
+            if ui.add(icon::button(icon::ADD, t("빠른 연결", "Quick Connect"))).on_hover_text("Ctrl+Shift+T").clicked() {
                 action = Some(Command::QuickConnect);
             }
             if self.broadcast {
@@ -1520,18 +1521,18 @@ impl PlaytermApp {
                     "이 탭에 치는 내용이 주황색 탭에도 똑같이 입력됩니다. 탭 우클릭으로 뺄 수 있습니다.",
                     "What you type here also goes to the orange tabs. Right-click a tab to leave it out.",
                 ));
-                if ui.button(t("끄기", "Turn off")).on_hover_text("Ctrl+Shift+I").clicked() {
+                if ui.add(icon::button(icon::TURN_OFF, t("끄기", "Turn off"))).on_hover_text("Ctrl+Shift+I").clicked() {
                     action = Some(Command::ToggleBroadcast);
                 }
             }
             if self.sessions.get(self.active).is_some_and(|s| s.can_sftp())
-                && ui.button("SFTP").on_hover_text(t("SFTP 탐색기 (Ctrl+Shift+X)", "SFTP explorer (Ctrl+Shift+X)")).clicked()
+                && ui.add(icon::button(icon::SFTP, "SFTP")).on_hover_text(t("SFTP 탐색기 (Ctrl+Shift+X)", "SFTP explorer (Ctrl+Shift+X)")).clicked()
             {
                 action = Some(Command::ToggleSftpPanel);
             }
             if self.sessions.get(self.active).is_some_and(|s| s.state == SessionState::Closed) {
                 ui.separator();
-                if ui.button(t("다시 연결", "Reconnect")).clicked() {
+                if ui.add(icon::button(icon::RECONNECT, t("다시 연결", "Reconnect"))).clicked() {
                     action = Some(Command::Reconnect(self.active));
                 }
             }
@@ -1600,7 +1601,7 @@ impl PlaytermApp {
         ui.horizontal(|ui| {
             ui.strong(t("SFTP 탐색기", "SFTP explorer"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                close = ui.small_button("✕").on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)")).clicked();
+                close = ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)")).clicked();
             });
         });
         if close {
@@ -1620,7 +1621,7 @@ impl PlaytermApp {
             browser.panel(ui);
         } else if let Some(err) = session.sftp_error() {
             ui.colored_label(ui.visuals().error_fg_color, tr!("SFTP 열기 실패: {err}", "Could not open SFTP: {err}"));
-            if ui.button(t("다시 시도", "Try again")).clicked() {
+            if ui.add(icon::button(icon::RETRY, t("다시 시도", "Try again"))).clicked() {
                 session.retry_sftp();
             }
         } else {

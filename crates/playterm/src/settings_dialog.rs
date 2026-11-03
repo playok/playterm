@@ -8,6 +8,7 @@ use playterm_term::{THEMES, Theme};
 
 use crate::fonts::{self, FontChoice};
 use crate::local_fs;
+use crate::icon;
 
 pub enum SettingsResult {
     Open,
@@ -100,14 +101,14 @@ impl SettingsDialog {
             self.preview(ui);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button(t("확인", "OK")).clicked() {
+                if ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked() {
                     result = Some(SettingsResult::Save(self.draft.clone()));
                 }
-                if ui.button(t("취소", "Cancel")).clicked() {
+                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                     result = Some(SettingsResult::Cancel(self.original.clone()));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(t("기본값으로", "Reset to defaults")).clicked() {
+                    if ui.add(icon::button(icon::RESET, t("기본값으로", "Reset to defaults"))).clicked() {
                         self.draft = AppSettings::default();
                     }
                 });
@@ -137,7 +138,7 @@ impl SettingsDialog {
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show_ui(ui, |ui| self.font_list(ui));
             if ui
-                .button(t("파일에서…", "From file…"))
+                .add(icon::button(icon::BROWSE, t("파일에서…", "From file…")))
                 .on_hover_text(t("TTF / OTF / TTC 글꼴 파일", "TTF / OTF / TTC font file"))
                 .clicked()
                 && let Some(path) = rfd::FileDialog::new()
@@ -326,7 +327,7 @@ impl SettingsDialog {
         ui.label(t("ZMODEM 받을 폴더", "ZMODEM downloads"));
         ui.horizontal(|ui| {
             let folder = local_fs::zmodem_folder(&self.draft.zmodem_dir);
-            if ui.button(t("바꾸기…", "Change…")).clicked()
+            if ui.add(icon::button(icon::BROWSE, t("바꾸기…", "Change…"))).clicked()
                 && let Some(dir) = rfd::FileDialog::new()
                     .set_title(t("ZMODEM 으로 받은 파일을 저장할 폴더", "Folder for files received with ZMODEM"))
                     .set_directory(&folder)
@@ -334,7 +335,7 @@ impl SettingsDialog {
             {
                 self.draft.zmodem_dir = dir.display().to_string();
             }
-            if !self.draft.zmodem_dir.is_empty() && ui.button(t("기본 폴더", "Default")).clicked() {
+            if !self.draft.zmodem_dir.is_empty() && ui.add(icon::button(icon::RESET, t("기본 폴더", "Default"))).clicked() {
                 self.draft.zmodem_dir.clear();
             }
             ui.add(egui::Label::new(egui::RichText::new(folder.display().to_string()).weak()).truncate())

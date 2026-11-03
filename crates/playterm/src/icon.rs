@@ -1,0 +1,120 @@
+//! Icons on buttons: Material Symbols (rounded, outlined), drawn in their own font family so
+//! they never mix with the symbols of egui's default fonts. Each action has one icon, used
+//! wherever that action appears.
+//!
+//! The icon names come from `egui_material_icons`; the font is a subset with only the icons
+//! below (`assets/icons/material-symbols-subset.ttf`, a few kilobytes instead of 1.2 MB),
+//! made by `assets/make_icon_font.py`. After adding an icon, run that script again.
+
+use std::sync::Arc;
+
+use eframe::egui::{Button, FontData, FontDefinitions, WidgetText};
+pub use egui_material_icons::MaterialIcon;
+use egui_material_icons::icons;
+
+/// The Material Symbols Rounded subset (Apache License 2.0, see Help → Open-source licenses).
+const FONT: &[u8] = include_bytes!("../../../assets/icons/material-symbols-subset.ttf");
+const FONT_NAME: &str = "material-symbols-subset";
+
+/// Defines the icon of each action and [`ALL`], the list the icon font must cover.
+macro_rules! icons {
+    ($($name:ident = $icon:ident),* $(,)?) => {
+        $(pub const $name: MaterialIcon = icons::$icon;)*
+        /// Every icon above, by name.
+        #[cfg(test)]
+        const ALL: &[(&str, MaterialIcon)] = &[$((stringify!($name), $name)),*];
+    };
+}
+
+icons! {
+    OK = ICON_CHECK,
+    CANCEL = ICON_CLOSE,
+    CLOSE = ICON_CLOSE,
+    SAVE = ICON_SAVE,
+    DONT_SAVE = ICON_BLOCK,
+    REVERT = ICON_UNDO,
+    DELETE = ICON_DELETE,
+    CONNECT = ICON_LOGIN,
+    RECONNECT = ICON_REPLAY,
+    RETRY = ICON_REFRESH,
+    REFRESH = ICON_REFRESH,
+    BROWSE = ICON_FOLDER_OPEN,
+    OPEN_FOLDER = ICON_FOLDER_OPEN,
+    NEW_SITE = ICON_ADD,
+    ADD = ICON_ADD,
+    NEW_FOLDER = ICON_CREATE_NEW_FOLDER,
+    DUPLICATE = ICON_CONTENT_COPY,
+    UPLOAD = ICON_UPLOAD,
+    UPLOAD_FOLDER = ICON_DRIVE_FOLDER_UPLOAD,
+    DOWNLOAD = ICON_DOWNLOAD,
+    UP = ICON_ARROW_UPWARD,
+    DOWN = ICON_ARROW_DOWNWARD,
+    UNLOCK = ICON_LOCK_OPEN,
+    TERMINAL_DIR = ICON_TERMINAL,
+    IMPORT = ICON_INPUT,
+    SEND = ICON_SEND,
+    PASTE = ICON_CONTENT_PASTE,
+    TRUST = ICON_VERIFIED_USER,
+    RESET = ICON_RESTART_ALT,
+    BACK = ICON_ARROW_BACK,
+    UPDATE = ICON_SYSTEM_UPDATE_ALT,
+    WEB_PAGE = ICON_OPEN_IN_NEW,
+    LATER = ICON_SCHEDULE,
+    SKIP = ICON_SKIP_NEXT,
+    RESTART = ICON_RESTART_ALT,
+    TEMPLATE = ICON_BOOKMARK_ADD,
+    MANAGE = ICON_SETTINGS,
+    CLEAR = ICON_CLEAR_ALL,
+    TURN_OFF = ICON_POWER_SETTINGS_NEW,
+    SFTP = ICON_FOLDER,
+}
+
+/// A button with `icon` before `text`.
+pub fn button<'a>(icon: MaterialIcon, text: impl Into<WidgetText>) -> Button<'a> {
+    Button::new((icon.rich_text(), text.into()))
+}
+
+/// A button showing only `icon` (give it a tooltip with `on_hover_text`).
+pub fn icon_button<'a>(icon: MaterialIcon) -> Button<'a> {
+    Button::new(icon.rich_text())
+}
+
+/// Adds the icon font to `defs` (which [`crate::fonts::install`] then installs), as the only
+/// font of the family [`MaterialIcon::rich_text`] draws with.
+pub fn add_font(defs: &mut FontDefinitions) {
+    let mut data = FontData::from_static(FONT);
+    // As egui_material_icons does: the icons sit a little high otherwise.
+    data.tweak.y_offset_factor = 0.05;
+    defs.font_data.insert(FONT_NAME.to_owned(), Arc::new(data));
+    defs.families.insert(OK.font_family(), vec![FONT_NAME.to_owned()]);
+}
+
+#[cfg(test)]
+mod tests {
+    use eframe::egui::FontFamily;
+
+    use super::*;
+
+    #[test]
+    fn icon_font_is_registered() {
+        let mut defs = FontDefinitions::default();
+        add_font(&mut defs);
+        assert!(defs.font_data.contains_key(FONT_NAME));
+        assert_eq!(defs.families[&OK.font_family()], [FONT_NAME]);
+        // Not mixed into the text fonts: their symbols keep their own look.
+        assert!(!defs.families[&FontFamily::Proportional].iter().any(|f| f == FONT_NAME));
+    }
+
+    #[test]
+    fn icons_are_in_the_font() {
+        let face = ttf_parser::Face::parse(FONT, 0).expect("the icon font parses");
+        for (name, icon) in ALL {
+            let c = icon.codepoint.chars().next().unwrap();
+            assert!(
+                face.glyph_index(c).is_some(),
+                "{name} (U+{:04X}) is not in the icon font: run assets/make_icon_font.py",
+                c as u32
+            );
+        }
+    }
+}

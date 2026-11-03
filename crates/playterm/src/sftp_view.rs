@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, RichText};
 
-use crate::file_icons;
+use crate::{file_icons, icon};
 use playterm_i18n::{t, tr};
 use playterm_net::{
     RemoteEntry, SftpConnection, SftpEvent, TransferState, is_safe_local_name, remote_join, remote_parent,
@@ -276,7 +276,7 @@ impl SftpBrowser {
 
     fn nav_buttons(&mut self, ui: &mut egui::Ui) {
         if ui
-            .button(t("터미널 위치", "Terminal's folder"))
+            .add(icon::button(icon::TERMINAL_DIR, t("터미널 위치", "Terminal's folder")))
             .on_hover_text(t(
                 "터미널(셸)의 현재 디렉터리로 갑니다 (Linux 서버)",
                 "Goes to the current directory of the terminal's shell (Linux servers)",
@@ -285,11 +285,11 @@ impl SftpBrowser {
         {
             self.follow_requested = true;
         }
-        if ui.button(t("상위", "Up")).clicked() && !self.cwd.is_empty() {
+        if ui.add(icon::button(icon::UP, t("상위", "Up"))).clicked() && !self.cwd.is_empty() {
             let parent = remote_parent(&self.cwd);
             self.navigate(&parent);
         }
-        if ui.button(t("새로고침", "Refresh")).clicked() {
+        if ui.add(icon::button(icon::REFRESH, t("새로고침", "Refresh"))).clicked() {
             self.refresh();
         }
     }
@@ -304,18 +304,18 @@ impl SftpBrowser {
 
     fn action_buttons(&mut self, ui: &mut egui::Ui) {
         {
-            if ui.button(t("새 폴더", "New folder")).clicked() {
+            if ui.add(icon::button(icon::NEW_FOLDER, t("새 폴더", "New folder"))).clicked() {
                 self.prompt = Some(Prompt::NewFolder(String::new()));
             }
             if ui
-                .button(t("업로드", "Upload"))
+                .add(icon::button(icon::UPLOAD, t("업로드", "Upload")))
                 .on_hover_text(t("파일 선택 (창에 끌어다 놓아도 됩니다)", "Choose files (or drop them on the window)"))
                 .clicked()
                 && let Some(files) = rfd::FileDialog::new().set_title(t("업로드할 파일", "Files to upload")).pick_files()
             {
                 self.upload_paths(files);
             }
-            if ui.button(t("폴더 업로드", "Upload folder")).clicked()
+            if ui.add(icon::button(icon::UPLOAD_FOLDER, t("폴더 업로드", "Upload folder"))).clicked()
                 && let Some(dir) = rfd::FileDialog::new().set_title(t("업로드할 폴더", "Folder to upload")).pick_folder()
             {
                 self.upload_paths(vec![dir]);
@@ -326,11 +326,11 @@ impl SftpBrowser {
                 0 | 1 => label.to_owned(),
                 n => format!("{label} ({n})"),
             };
-            if ui.add_enabled(has_selection, egui::Button::new(count(t("다운로드", "Download")))).clicked() {
+            if ui.add_enabled(has_selection, icon::button(icon::DOWNLOAD, count(t("다운로드", "Download")))).clicked() {
                 let items = self.selected_entries();
                 self.download(items);
             }
-            if ui.add_enabled(has_selection, egui::Button::new(count(t("삭제", "Delete")))).clicked() {
+            if ui.add_enabled(has_selection, icon::button(icon::DELETE, count(t("삭제", "Delete")))).clicked() {
                 self.delete_selected();
             }
         }
@@ -506,7 +506,7 @@ impl SftpBrowser {
     fn transfer_list(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.strong(t("전송", "Transfers"));
-            if ui.small_button(t("완료 항목 지우기", "Clear finished")).clicked() {
+            if ui.add(icon::button(icon::CLEAR, t("완료 항목 지우기", "Clear finished")).small()).clicked() {
                 self.transfers.retain(|t| t.state == TransferState::Running);
             }
         });
@@ -521,7 +521,7 @@ impl SftpBrowser {
                             let width = (ui.available_width() - 50.0).clamp(60.0, 220.0);
                             ui.add(egui::ProgressBar::new(frac).text(text).desired_width(width));
                             // `t` is the transfer here, hence the full path.
-                            if ui.small_button(playterm_i18n::t("취소", "Cancel")).clicked() {
+                            if ui.add(icon::button(icon::CANCEL, playterm_i18n::t("취소", "Cancel")).small()).clicked() {
                                 self.conn.cancel(t.id);
                             }
                         }
@@ -530,7 +530,7 @@ impl SftpBrowser {
                             // `t` is the transfer here, hence the full path.
                             if let Some(path) = &t.local
                                 && ui
-                                    .small_button(playterm_i18n::t("폴더 열기", "Open folder"))
+                                    .add(icon::button(icon::OPEN_FOLDER, playterm_i18n::t("폴더 열기", "Open folder")).small())
                                     .on_hover_text(tr!(
                                         "탐색기에서 보기: {}",
                                         "Show in Explorer: {}",
@@ -596,10 +596,10 @@ impl SftpBrowser {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button(t("확인", "OK")).clicked() {
+                if ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked() {
                     done = Some(true);
                 }
-                if ui.button(t("취소", "Cancel")).clicked() {
+                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                     done = Some(false);
                 }
             });

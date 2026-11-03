@@ -460,6 +460,7 @@ pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
     let mono_bold: Vec<String> = bold.into_iter().chain(mono.iter().cloned()).collect();
     defs.families.insert(egui::FontFamily::Monospace, mono);
     defs.families.insert(bold_family(), mono_bold);
+    crate::icon::add_font(&mut defs);
     ctx.set_fonts(defs);
     error.map_or(Ok(()), Err)
 }

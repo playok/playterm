@@ -8,8 +8,9 @@ use zeroize::Zeroizing;
 
 use crate::profile_form::{FormOptions, ProfileForm};
 use crate::{sidebar, site_tree};
+use crate::icon;
 
-const LIST_WIDTH: f32 = 260.0;
+const LIST_WIDTH: f32 = 290.0;
 const FORM_WIDTH: f32 = 540.0;
 /// The grid needs room for its columns; the form gives some up.
 const GRID_LIST_WIDTH: f32 = 460.0;
@@ -252,7 +253,7 @@ impl SiteManager {
             ui.horizontal(|ui| {
                 ui.weak(tr!("사이트 {}개", "{} sites", store.profiles().len()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(t("닫기", "Close")).clicked() {
+                    if ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked() {
                         next = Some(Next::Close);
                     }
                 });
@@ -288,14 +289,14 @@ impl SiteManager {
         let site = self.selected_site().map(str::to_owned);
         let dirty = self.is_dirty();
         ui.horizontal_wrapped(|ui| {
-            if ui.button(t("새 사이트", "New site")).clicked() {
+            if ui.add(icon::button(icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
                 *next = Some(Next::Select(Some(Selection::New(self.target_folder()))));
             }
-            if ui.button(t("새 폴더", "New folder")).clicked() {
+            if ui.add(icon::button(icon::NEW_FOLDER, t("새 폴더", "New folder"))).clicked() {
                 self.folder_prompt = Some(FolderPrompt::new_in(self.target_folder()));
             }
             if ui
-                .add_enabled(site.is_some() && !dirty, Button::new(t("복제", "Duplicate")))
+                .add_enabled(site.is_some() && !dirty, icon::button(icon::DUPLICATE, t("복제", "Duplicate")))
                 .on_disabled_hover_text(t(
                     "저장된 사이트를 선택하세요 (변경 사항은 먼저 저장)",
                     "Select a saved site (save your changes first)",
@@ -305,7 +306,7 @@ impl SiteManager {
             {
                 *result = SiteManagerResult::Duplicate(id.clone());
             }
-            if ui.add_enabled(self.selected.is_some(), Button::new(t("삭제", "Delete"))).clicked() {
+            if ui.add_enabled(self.selected.is_some(), icon::button(icon::DELETE, t("삭제", "Delete"))).clicked() {
                 match &site {
                     Some(id) => *result = SiteManagerResult::Delete(id.clone()),
                     // An unsaved site is simply dropped.
@@ -460,11 +461,11 @@ impl SiteManager {
         // Changing other sites is fine; the one being edited must be saved first.
         let free = idle || !selected;
         response.context_menu(|ui| {
-            if ui.add_enabled(idle, Button::new(t("연결", "Connect"))).clicked() {
+            if ui.add_enabled(idle, icon::button(icon::CONNECT, t("연결", "Connect"))).clicked() {
                 *result = SiteManagerResult::Connect(p.id.clone());
                 ui.close();
             }
-            if ui.add_enabled(idle, Button::new(t("복제", "Duplicate"))).clicked() {
+            if ui.add_enabled(idle, icon::button(icon::DUPLICATE, t("복제", "Duplicate"))).clicked() {
                 *result = SiteManagerResult::Duplicate(p.id.clone());
                 ui.close();
             }
@@ -482,7 +483,7 @@ impl SiteManager {
                 });
             });
             ui.separator();
-            if ui.add_enabled(free, Button::new(t("삭제", "Delete"))).clicked() {
+            if ui.add_enabled(free, icon::button(icon::DELETE, t("삭제", "Delete"))).clicked() {
                 *result = SiteManagerResult::Delete(p.id.clone());
                 ui.close();
             }
@@ -516,10 +517,10 @@ impl SiteManager {
                         ui.colored_label(ui.visuals().error_fg_color, e.as_str());
                     }
                     ui.horizontal(|ui| {
-                        if ui.button(t("확인", "OK")).clicked() || enter {
+                        if ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked() || enter {
                             answer = Some(true);
                         }
-                        if ui.button(t("취소", "Cancel")).clicked() {
+                        if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                             answer = Some(false);
                         }
                     });
@@ -539,10 +540,10 @@ impl SiteManager {
                         store.sites_in_folder(path)
                     ));
                     ui.horizontal(|ui| {
-                        if ui.button(t("삭제", "Delete")).clicked() {
+                        if ui.add(icon::button(icon::DELETE, t("삭제", "Delete"))).clicked() {
                             answer = Some(true);
                         }
-                        if ui.button(t("취소", "Cancel")).clicked() {
+                        if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                             answer = Some(false);
                         }
                     });
@@ -625,9 +626,9 @@ impl SiteManager {
         let mut connect = false;
         let mut revert = false;
         ui.horizontal(|ui| {
-            connect = ui.button(t("연결", "Connect")).clicked();
-            submit |= ui.add_enabled(dirty || is_new, Button::new(t("저장", "Save"))).clicked();
-            revert = ui.add_enabled(dirty && !is_new, Button::new(t("되돌리기", "Revert"))).clicked();
+            connect = ui.add(icon::button(icon::CONNECT, t("연결", "Connect"))).clicked();
+            submit |= ui.add_enabled(dirty || is_new, icon::button(icon::SAVE, t("저장", "Save"))).clicked();
+            revert = ui.add_enabled(dirty && !is_new, icon::button(icon::REVERT, t("되돌리기", "Revert"))).clicked();
         });
 
         if connect {
@@ -676,13 +677,13 @@ impl SiteManager {
             ui.label(tr!("'{name}' 의 변경 사항을 저장할까요?", "Save the changes to '{name}'?"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button(t("저장", "Save")).clicked() {
+                if ui.add(icon::button(icon::SAVE, t("저장", "Save"))).clicked() {
                     answer = Some(Answer::Save);
                 }
-                if ui.button(t("저장 안 함", "Don't save")).clicked() {
+                if ui.add(icon::button(icon::DONT_SAVE, t("저장 안 함", "Don't save"))).clicked() {
                     answer = Some(Answer::Discard);
                 }
-                if ui.button(t("취소", "Cancel")).clicked() {
+                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                     answer = Some(Answer::Cancel);
                 }
             });

@@ -7,6 +7,7 @@ use playterm_config::{ProfileStore, SessionProfile, normalize_folder};
 use playterm_i18n::{t, tr};
 
 use crate::{putty, sidebar, xshell};
+use crate::icon;
 
 /// Where sessions are imported from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,7 +139,7 @@ impl ImportDialog {
                 Some(dir) => ui.weak(tr!("폴더: {}", "Folder: {}", dir.display())),
                 None => ui.label(t("Xshell 세션 폴더를 찾지 못했습니다.", "The Xshell sessions folder was not found.")),
             };
-            if ui.small_button(t("다른 폴더…", "Other folder…")).clicked() {
+            if ui.add(icon::button(icon::BROWSE, t("다른 폴더…", "Other folder…")).small()).clicked() {
                 let mut dialog = rfd::FileDialog::new().set_title(t("Xshell 세션 폴더", "Xshell sessions folder"));
                 if let Some(dir) = &self.dir {
                     dialog = dialog.set_directory(dir);
@@ -220,7 +221,7 @@ impl ImportDialog {
             ui.add_space(8.0);
             let count = self.items.iter().filter(|i| i.checked).count();
             ui.horizontal(|ui| {
-                if ui.add_enabled(count > 0, egui::Button::new(tr!("가져오기 ({count})", "Import ({count})"))).clicked() {
+                if ui.add_enabled(count > 0, icon::button(icon::IMPORT, tr!("가져오기 ({count})", "Import ({count})"))).clicked() {
                     let folder = normalize_folder(&self.folder);
                     let profiles = self
                         .items
@@ -233,7 +234,7 @@ impl ImportDialog {
                         .collect();
                     result = ImportResult::Import { source: self.source, folder, profiles };
                 }
-                if ui.button(t("취소", "Cancel")).clicked() {
+                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
                     result = ImportResult::Cancel;
                 }
             });

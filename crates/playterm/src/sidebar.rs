@@ -9,6 +9,7 @@ use playterm_config::{ProfileStore, SessionProfile, SiteTemplate, TemplateLayout
 use playterm_i18n::{t, tr};
 
 use crate::site_tree;
+use crate::icon;
 
 pub enum SidebarAction {
     Connect(String),
@@ -164,7 +165,7 @@ impl Sidebar {
     /// Menu entries for the selected sites.
     fn many_items(ui: &mut egui::Ui, ids: &[String], action: &mut Option<SidebarAction>) {
         let n = ids.len();
-        if ui.button(tr!("선택한 {n}개 연결 (탭)", "Connect {n} selected (tabs)")).clicked() {
+        if ui.add(icon::button(icon::CONNECT, tr!("선택한 {n}개 연결 (탭)", "Connect {n} selected (tabs)"))).clicked() {
             *action = Some(SidebarAction::ConnectMany(ids.to_vec(), TemplateLayout::Tabs));
             ui.close();
         }
@@ -176,7 +177,7 @@ impl Sidebar {
                 }
             }
         });
-        if ui.button(t("템플릿으로 저장…", "Save as template…")).clicked() {
+        if ui.add(icon::button(icon::TEMPLATE, t("템플릿으로 저장…", "Save as template…"))).clicked() {
             *action = Some(SidebarAction::NewTemplate(ids.to_vec()));
             ui.close();
         }
@@ -189,13 +190,13 @@ impl Sidebar {
             ui.strong(t("사이트", "Sites"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .button(t("관리", "Manage"))
+                    .add(icon::button(icon::MANAGE, t("관리", "Manage")))
                     .on_hover_text(t("사이트 관리 (Ctrl+Shift+S)", "Site Manager (Ctrl+Shift+S)"))
                     .clicked()
                 {
                     action = Some(SidebarAction::Manage(self.selected.clone()));
                 }
-                if ui.button("+").on_hover_text(t("새 사이트", "New site")).clicked() {
+                if ui.add(icon::icon_button(icon::NEW_SITE)).on_hover_text(t("새 사이트", "New site")).clicked() {
                     action = Some(SidebarAction::New);
                 }
             });
@@ -228,7 +229,7 @@ impl Sidebar {
             let ids = self.chosen_in_order();
             egui::Panel::bottom("sidebar-selection").show(ui, |ui| ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr!("{}개 선택", "{} selected", ids.len())).strong());
-                if ui.small_button(t("연결", "Connect")).on_hover_text(t("탭으로 모두 연결", "Connect all as tabs")).clicked() {
+                if ui.add(icon::button(icon::CONNECT, t("연결", "Connect")).small()).on_hover_text(t("탭으로 모두 연결", "Connect all as tabs")).clicked() {
                     action = Some(SidebarAction::ConnectMany(ids.clone(), TemplateLayout::Tabs));
                 }
                 ui.menu_button(RichText::new(t("나란히 ▾", "Side by side ▾")).small(), |ui| {
@@ -239,10 +240,10 @@ impl Sidebar {
                         }
                     }
                 });
-                if ui.small_button(t("템플릿 저장", "Save template")).clicked() {
+                if ui.add(icon::button(icon::TEMPLATE, t("템플릿 저장", "Save template")).small()).clicked() {
                     action = Some(SidebarAction::NewTemplate(ids.clone()));
                 }
-                if ui.small_button("✕").on_hover_text(t("선택 해제", "Clear the selection")).clicked() {
+                if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("선택 해제", "Clear the selection")).clicked() {
                     self.chosen.clear();
                 }
             }));

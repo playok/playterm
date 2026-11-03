@@ -25,6 +25,8 @@ use playterm_i18n::{t, tr};
 use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::Deserialize;
 
+use crate::icon;
+
 const LATEST_URL: &str = "https://api.github.com/repos/playok/playterm/releases/latest";
 pub const RELEASES_PAGE: &str = "https://github.com/playok/playterm/releases";
 /// Ed25519 key that signs `SHA256SUMS.txt` of a release (its private half is the
@@ -441,12 +443,12 @@ impl Updater {
                         ui.label(t("새 버전을 확인하는 중…", "Checking for a new version…"));
                     });
                     ui.add_space(8.0);
-                    keep = !ui.button(t("닫기", "Close")).clicked();
+                    keep = !ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked();
                 }
                 Dialog::UpToDate => {
                     ui.label(tr!("최신 버전({})을 쓰고 있습니다.", "You have the latest version ({}).", Version::current()));
                     ui.add_space(8.0);
-                    keep = !ui.button(t("확인", "OK")).clicked();
+                    keep = !ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked();
                 }
                 Dialog::Available(release) => {
                     ui.label(tr!(
@@ -465,17 +467,17 @@ impl Updater {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if AUTO_INSTALL {
-                            if ui.button(t("업데이트", "Update")).clicked() {
+                            if ui.add(icon::button(icon::UPDATE, t("업데이트", "Update"))).clicked() {
                                 install = Some(release.clone());
                             }
-                        } else if ui.button(t("다운로드 페이지 열기", "Open the download page")).clicked() {
+                        } else if ui.add(icon::button(icon::WEB_PAGE, t("다운로드 페이지 열기", "Open the download page"))).clicked() {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(&release.page));
                             keep = false;
                         }
-                        if ui.button(t("나중에", "Later")).clicked() {
+                        if ui.add(icon::button(icon::LATER, t("나중에", "Later"))).clicked() {
                             keep = false;
                         }
-                        if ui.button(t("이 버전 건너뛰기", "Skip this version")).clicked() {
+                        if ui.add(icon::button(icon::SKIP, t("이 버전 건너뛰기", "Skip this version"))).clicked() {
                             action = Some(Action::Skip(release.version.to_string()));
                             self.available = None;
                             keep = false;
@@ -508,11 +510,11 @@ impl Updater {
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button(t("지금 다시 시작", "Restart now")).clicked() {
+                        if ui.add(icon::button(icon::RESTART, t("지금 다시 시작", "Restart now"))).clicked() {
                             action = Some(Action::Restart(exe.clone()));
                             keep = false;
                         }
-                        if ui.button(t("나중에", "Later")).clicked() {
+                        if ui.add(icon::button(icon::LATER, t("나중에", "Later"))).clicked() {
                             keep = false;
                         }
                     });
@@ -522,7 +524,7 @@ impl Updater {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                     ui.hyperlink_to(t("릴리스 페이지", "Releases page"), RELEASES_PAGE);
                     ui.add_space(8.0);
-                    keep = !ui.button(t("확인", "OK")).clicked();
+                    keep = !ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked();
                 }
             }
         });
