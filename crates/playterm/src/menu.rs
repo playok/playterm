@@ -35,7 +35,6 @@ pub enum Command {
     ZoomReset,
     Settings,
 
-    Sftp(usize),
     /// The SFTP explorer sliding in at the right edge, following the active tab.
     ToggleSftpPanel,
     Break(usize),
@@ -142,9 +141,8 @@ pub fn tab_color_menu(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, cu
     });
 }
 
-/// SFTP, BREAK and logging for tab `i`. Used by the tools menu and the tab context menu.
+/// BREAK and logging for tab `i`. Used by the tools menu and the tab context menu.
 pub fn session_items(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, s: &Session) {
-    item(ui, out, t("SFTP 파일 브라우저", "SFTP file browser"), "Ctrl+Shift+E", s.can_sftp(), Command::Sftp(i));
     item(ui, out, t("BREAK 신호 보내기", "Send BREAK"), "", s.can_break(), Command::Break(i));
     ui.menu_button(t("로그", "Log"), |ui| {
         if s.terminal.log().is_some() {
@@ -215,7 +213,6 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             match active {
                 Some(s) => session_items(ui, out, i, s),
                 None => {
-                    item(ui, out, t("SFTP 파일 브라우저", "SFTP file browser"), "Ctrl+Shift+E", false, Command::Sftp(i));
                     item(ui, out, t("BREAK 신호 보내기", "Send BREAK"), "", false, Command::Break(i));
                     item(ui, out, t("로그 폴더 열기", "Open log folder"), "", true, Command::OpenLogFolder);
                 }
