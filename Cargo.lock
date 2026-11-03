@@ -4600,7 +4600,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "playterm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4632,7 +4632,7 @@ dependencies = [
 
 [[package]]
 name = "playterm-config"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -4649,11 +4649,11 @@ dependencies = [
 
 [[package]]
 name = "playterm-i18n"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "playterm-net"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -4689,14 +4689,14 @@ dependencies = [
 
 [[package]]
 name = "playterm-sign"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ring",
 ]
 
 [[package]]
 name = "playterm-term"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "alacritty_terminal",
  "chrono",
