@@ -407,3 +407,6 @@ cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 ## 라이선스
 
 [MIT](LICENSE)
+
+단, 버튼 아이콘 글꼴 `assets/icons/material-symbols-subset.ttf` (Google 의 Material Symbols Rounded 서브셋)는 MIT 가 아니라
+[Apache License 2.0](assets/icons/LICENSE.txt) 을 따릅니다. 앱 안의 **도움말 → 오픈소스 라이선스** 에도 표시됩니다.

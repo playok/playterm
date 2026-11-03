@@ -419,3 +419,6 @@ cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 ## License
 
 [MIT](LICENSE)
+
+Except the button icon font `assets/icons/material-symbols-subset.ttf` (a subset of Google's Material Symbols Rounded), which is under the
+[Apache License 2.0](assets/icons/LICENSE.txt), not MIT. It is also listed under **Help → Open-source licenses** in the app.
