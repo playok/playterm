@@ -148,6 +148,7 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 - **Help → Open-source licenses**: the licenses of playterm (MIT) and of every open-source component built into the executable (searchable, with each one's full license text and source repository).
   The list is generated with `cargo metadata` at build time, so it follows dependency changes by itself.
 - **File → Site Manager** (Ctrl+Shift+S): sites by folder (searchable) on the left, the settings of the selected site on the right.
+  It is a window that does not cover the app: drag it aside and change settings while reading the terminal (a connection error, say). Esc or × closes it.
   - [New site] / [New folder] / [Duplicate] / [Delete]; [Connect] / [Save] / [Revert] at the bottom right
   - **Folders** can be nested (`prod/web`). Right-click a folder for New site here, New folder inside, Rename and Delete; right-click a site for
     Connect, Duplicate, Move to folder and Delete; right-click the empty space for New site and New folder.

@@ -200,6 +200,8 @@ pub struct PlaytermApp {
     show_sidebar: bool,
     /// The site manager window; app modals (vault, delete confirmation) stack above it.
     site_manager: Option<SiteManager>,
+    /// The site manager was just opened: the terminal gives up the keyboard to it.
+    site_manager_opened: bool,
     modal: Option<Modal>,
     /// Last error, shown in the tab bar until clicked.
     status: Option<String>,
@@ -287,6 +289,7 @@ impl PlaytermApp {
             sidebar: Sidebar::default(),
             show_sidebar: true,
             site_manager: None,
+            site_manager_opened: false,
             status,
             info: None,
             window_title: String::new(),
@@ -805,6 +808,14 @@ impl PlaytermApp {
     /// Opens the site manager, with `select` selected or a new site started. `target` is the
     /// prompt tab it was opened from, if any.
     fn open_site_manager(&mut self, select: Option<&str>, new_site: bool, target: Option<u64>) {
+        // Already open (it is not modal): it goes there itself, keeping unsaved edits in view.
+        if let Some(manager) = &mut self.site_manager {
+            manager.request(select, new_site);
+            if target.is_some() {
+                self.dialog_target = target;
+            }
+            return;
+        }
         let mut manager = SiteManager::default();
         manager.view = self.settings.site_view;
         if new_site {
@@ -813,6 +824,7 @@ impl PlaytermApp {
             manager.select(p, has_secret(&self.vault, p));
         }
         self.site_manager = Some(manager);
+        self.site_manager_opened = true;
         self.dialog_target = target;
     }
 
@@ -862,8 +874,16 @@ impl PlaytermApp {
     /// Shows the site manager, if open, and applies its outcome.
     fn show_site_manager(&mut self, ctx: &egui::Context) {
         let Some(mut manager) = self.site_manager.take() else { return };
+        if std::mem::take(&mut self.site_manager_opened) {
+            ctx.memory_mut(|m| {
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
+        }
         let vault = &self.vault;
-        let result = manager.show(ctx, &self.store, &|p| has_secret(vault, p));
+        let keys_free = !self.dock.has_focus() && self.modal.is_none();
+        let result = manager.show(ctx, &self.store, &|p| has_secret(vault, p), keys_free);
         let target = self.dialog_target;
         match result {
             SiteManagerResult::Open => self.site_manager = Some(manager),
@@ -2035,7 +2055,7 @@ impl eframe::App for PlaytermApp {
         self.updater.poll(&self.settings.skipped_update);
         let prompt_open = self.show_session_prompts(&ctx);
         if !prompt_open {
-            if self.modal.is_none() && self.site_manager.is_none() && !self.updater.is_open() {
+            if self.modal.is_none() && !self.updater.is_open() {
                 self.shortcuts(&ctx);
             }
             // App modals are shown after the site manager so they stack above it.
@@ -2047,7 +2067,10 @@ impl eframe::App for PlaytermApp {
             }
         }
         let modal_open =
-            prompt_open || self.modal.is_some() || self.site_manager.is_some() || self.updater.is_open();
+            prompt_open || self.modal.is_some() || self.updater.is_open();
+        // Beside the (non-modal) site manager a terminal takes the keyboard only when clicked,
+        // so typing after opening the manager does not reach a shell.
+        let autofocus = !modal_open && self.site_manager.is_none();
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
@@ -2111,7 +2134,7 @@ impl eframe::App for PlaytermApp {
 
         let style = self.view_style();
         let output = egui::CentralPanel::no_frame()
-            .show(ui, |ui| self.dock.show(ui, &mut self.sessions, self.active, !modal_open, self.broadcast, &style))
+            .show(ui, |ui| self.dock.show(ui, &mut self.sessions, self.active, autofocus, self.broadcast, &style))
             .inner;
         if let Some(px) = output.active_px {
             self.view_px = px;
