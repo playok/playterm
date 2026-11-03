@@ -568,7 +568,7 @@ impl ProfileForm {
                 ui.label("");
                 ui.checkbox(
                     &mut p.use_agent,
-                    t("SSH 에이전트 사용 (Pageant / Windows OpenSSH)", "Use the SSH agent (Pageant / Windows OpenSSH)"),
+                    tr!("SSH 에이전트 사용 ({})", "Use the SSH agent ({})", crate::platform::ssh_agents()),
                 );
                 ui.end_row();
             }

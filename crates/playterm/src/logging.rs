@@ -56,23 +56,51 @@ pub fn new_log_path(dir: &Path, title: &str) -> PathBuf {
     path
 }
 
-/// Shows a file selected in Explorer, or opens a folder.
+/// Shows a file selected in the file manager (Explorer, Finder), or opens a folder.
 pub fn reveal(path: &Path) {
-    let mut cmd = std::process::Command::new("explorer");
-    if path.is_file() {
-        cmd.arg(format!("/select,{}", path.display()));
-    } else {
+    if !path.is_file() {
         let _ = std::fs::create_dir_all(path);
-        cmd.arg(path);
     }
-    if let Err(e) = cmd.spawn() {
-        log::warn!("explorer failed: {e}");
+    let (program, args) = reveal_command(path, path.is_file());
+    if let Err(e) = std::process::Command::new(program).args(&args).spawn() {
+        log::warn!("{program} failed: {e}");
+    }
+}
+
+/// The command that shows `path` in the file manager (`file`: select it in its folder).
+fn reveal_command(path: &Path, file: bool) -> (&'static str, Vec<std::ffi::OsString>) {
+    if cfg!(windows) {
+        let arg = if file { format!("/select,{}", path.display()).into() } else { path.as_os_str().to_owned() };
+        ("explorer", vec![arg])
+    } else if cfg!(target_os = "macos") {
+        let mut args: Vec<std::ffi::OsString> = if file { vec!["-R".into()] } else { Vec::new() };
+        args.push(path.as_os_str().to_owned());
+        ("open", args)
+    } else {
+        // xdg-open cannot select a file: open its folder.
+        let dir = if file { path.parent().unwrap_or(path) } else { path };
+        ("xdg-open", vec![dir.as_os_str().to_owned()])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_uses_the_platform_file_manager() {
+        let file = Path::new("/tmp/x/a.log");
+        let (program, args) = reveal_command(file, true);
+        if cfg!(target_os = "macos") {
+            assert_eq!((program, args), ("open", vec!["-R".into(), file.as_os_str().to_owned()]));
+            assert_eq!(reveal_command(Path::new("/tmp/x"), false).1, vec![std::ffi::OsString::from("/tmp/x")]);
+        } else if cfg!(windows) {
+            assert_eq!(program, "explorer");
+            assert!(args[0].to_string_lossy().starts_with("/select,"));
+        } else {
+            assert_eq!((program, args), ("xdg-open", vec!["/tmp/x".into()]));
+        }
+    }
 
     #[test]
     fn file_names_are_safe_and_unique() {

@@ -237,15 +237,17 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                     item(ui, out, t("비밀번호 볼트 잠그기", "Lock password vault"), "", true, Command::LockVault)
                 }
             }
-            ui.separator();
-            check(
-                ui,
-                out,
-                t("화면보호기 진입 방지", "Prevent screen saver"),
-                "",
-                st.prevent_screensaver,
-                Command::TogglePreventScreensaver,
-            );
+            if crate::power::SUPPORTED {
+                ui.separator();
+                check(
+                    ui,
+                    out,
+                    t("화면보호기 진입 방지", "Prevent screen saver"),
+                    "",
+                    st.prevent_screensaver,
+                    Command::TogglePreventScreensaver,
+                );
+            }
             ui.separator();
             item(ui, out, t("설정…", "Settings…"), "", true, Command::Settings);
         });

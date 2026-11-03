@@ -21,6 +21,7 @@ mod menu;
 mod mouse;
 mod power;
 mod profile_form;
+mod platform;
 mod putty;
 mod rdp_view;
 mod search_bar;
