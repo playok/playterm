@@ -332,6 +332,10 @@ impl Behavior<u64> for DockView<'_> {
             (mark.icon.rich_text().color(mark.color), font.clone()),
             (RichText::new(" "), font.clone()),
         ];
+        if let Some(label) = s.site_label() {
+            let color = s.tab_color.map_or(ui.visuals().strong_text_color(), crate::menu::color32);
+            parts.push((RichText::new(format!("{label} ")).strong().color(color), font.clone()));
+        }
         if s.is_logging() {
             parts.push((RichText::new("REC ").color(Color32::from_rgb(220, 60, 60)), TextStyle::Small.resolve(ui.style())));
         }

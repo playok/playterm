@@ -1584,7 +1584,10 @@ impl PlaytermApp {
 
     fn update_window_title(&mut self, ctx: &egui::Context) {
         let title = match self.sessions.get(self.active) {
-            Some(s) => format!("{} - playterm", s.tab_title()),
+            Some(s) => match s.site_label() {
+                Some(label) => format!("[{label}] {} - playterm", s.tab_title()),
+                None => format!("{} - playterm", s.tab_title()),
+            },
             None => "playterm".to_owned(),
         };
         if title != self.window_title {
