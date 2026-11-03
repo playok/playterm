@@ -37,13 +37,31 @@ fn escape(text: &str) -> String {
     out
 }
 
+/// How a search matches.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SearchOptions {
+    /// Upper and lower case are different letters. Off: the case is ignored unless the text
+    /// has upper-case letters ("smart case").
+    pub case_sensitive: bool,
+    /// The text is a regular expression rather than literal text.
+    pub regex: bool,
+}
+
 impl TextSearch {
     /// `None` for empty text.
     pub fn new(text: &str) -> Option<Self> {
+        Self::with_options(text, SearchOptions::default()).ok().flatten()
+    }
+
+    /// `Ok(None)` for empty text, `Err` for a regular expression that does not compile.
+    pub fn with_options(text: &str, options: SearchOptions) -> Result<Option<Self>, String> {
         if text.is_empty() {
-            return None;
+            return Ok(None);
         }
-        RegexSearch::new(&escape(text)).ok().map(|regex| Self { regex })
+        let pattern = if options.regex { text.to_owned() } else { escape(text) };
+        // An inline flag overrides the smart case of the search.
+        let pattern = if options.case_sensitive { format!("(?-i){pattern}") } else { pattern };
+        RegexSearch::new(&pattern).map(|regex| Some(Self { regex })).map_err(|e| e.to_string())
     }
 }
 
@@ -78,6 +96,14 @@ impl Terminal {
         let mut selection = Selection::new(SelectionType::Simple, *m.start(), Side::Left);
         selection.update(*m.end(), Side::Right);
         term.selection = Some(selection);
+    }
+
+    /// Every match in the history and on the screen, oldest first (at most `limit`).
+    pub fn all_matches(&self, search: &mut TextSearch, limit: usize) -> Vec<SearchMatch> {
+        let term = self.term();
+        let start = Point::new(Line(-(term.history_size() as i32)), Column(0));
+        let end = Point::new(Line(term.screen_lines() as i32 - 1), term.last_column());
+        RegexIter::new(start, end, Direction::Right, term, &mut search.regex).take(limit).collect()
     }
 
     /// Matches on the part of the history that is on screen now.
@@ -152,4 +178,34 @@ mod tests {
         t.show_match(&m);
         assert_eq!(t.selection_text().as_deref(), Some("오류"));
     }
+
+    #[test]
+    fn options_case_and_regex() {
+        let t = term_with("Error 1\r\nerror 2\r\nERROR 3\r\n");
+        let count = |text: &str, options: SearchOptions| {
+            let mut s = TextSearch::with_options(text, options).unwrap().unwrap();
+            t.all_matches(&mut s, 100).len()
+        };
+        let smart = SearchOptions::default();
+        assert_eq!(count("error", smart), 3, "lower case: any case");
+        assert_eq!(count("Error", smart), 1, "upper case in the text: exact");
+        let exact = SearchOptions { case_sensitive: true, ..smart };
+        assert_eq!(count("error", exact), 1);
+        let regex = SearchOptions { regex: true, ..smart };
+        assert_eq!(count(r"error \d", regex), 3);
+        assert_eq!(count(r"error \d", smart), 0, "literal: the backslash is text");
+        assert!(TextSearch::with_options("(", regex).is_err(), "a bad regex is reported");
+        assert!(TextSearch::with_options("(", smart).unwrap().is_some(), "literal ( is fine");
+        assert!(TextSearch::with_options("", regex).unwrap().is_none());
+    }
+
+    #[test]
+    fn all_matches_covers_the_history_in_order() {
+        let t = term_with("alpha 1\r\nbeta\r\nalpha 2\r\ngamma\r\nalpha 3\r\n");
+        let mut s = TextSearch::new("alpha").unwrap();
+        let all = t.all_matches(&mut s, 100);
+        assert_eq!(all.iter().map(|m| m.start().line.0).collect::<Vec<_>>(), [-2, 0, 2]);
+        assert_eq!(t.all_matches(&mut s, 2).len(), 2, "limited");
+    }
+
 }
