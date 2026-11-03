@@ -19,6 +19,8 @@ use crate::view::{self, ViewOutput, ViewStyle};
 
 /// Tab title color of sessions receiving simultaneous input.
 pub const BROADCAST_COLOR: Color32 = Color32::from_rgb(230, 140, 30);
+/// Width of the frame around the panes that take part in simultaneous input.
+const BROADCAST_FRAME: f32 = 2.0;
 
 /// How a tab shows its connection state: a shape as well as a color, so the states stay
 /// apart without telling red from green, and a word in the tooltip.
@@ -275,6 +277,7 @@ impl Behavior<u64> for DockView<'_> {
             let ppp = ui.ctx().pixels_per_point();
             self.out.active_px = Some(((area.width() * ppp) as u16, (area.height() * ppp) as u16));
         }
+        let pane_rect = ui.available_rect_before_wrap();
         let session = &mut self.sessions[i];
         let autofocus = self.autofocus && is_active;
         let output = if session.shows_rdp() {
@@ -284,6 +287,10 @@ impl Behavior<u64> for DockView<'_> {
         };
         if output.focused {
             self.focused = Some(id);
+        }
+        // What is typed goes to every pane in an orange frame: hard to miss while it is on.
+        if self.broadcast && session.in_broadcast {
+            ui.painter().rect_stroke(pane_rect, 0.0, Stroke::new(BROADCAST_FRAME, BROADCAST_COLOR), StrokeKind::Inside);
         }
         self.out.view.zoom_steps += output.zoom_steps;
         if output.command.is_some() {

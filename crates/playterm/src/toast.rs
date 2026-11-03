@@ -22,6 +22,8 @@ const ENDS: usize = 3;
 struct Toast {
     what: String,
     snippet: String,
+    /// The snippet is copied text (shown in quotes) rather than an explanation.
+    quoted: bool,
     since: f64,
 }
 
@@ -57,6 +59,13 @@ pub fn remote_copied(ctx: &egui::Context, tab: &str, text: &str) {
     notify(ctx, &tr!("{tab} 에서 클립보드에 씀", "{tab} set the clipboard"), text);
 }
 
+/// A short notice: `what`, with `detail` under it.
+pub fn message(ctx: &egui::Context, what: &str, detail: &str) {
+    let toast = Toast { what: what.to_owned(), snippet: detail.to_owned(), quoted: false, since: ctx.input(|i| i.time) };
+    ctx.data_mut(|d| d.insert_temp(id(), toast));
+    ctx.request_repaint();
+}
+
 /// `what · N chars · M lines "abc…xyz"`.
 fn notify(ctx: &egui::Context, what: &str, text: &str) {
     let chars = text.chars().filter(|&c| c != '\r').count();
@@ -66,7 +75,7 @@ fn notify(ctx: &egui::Context, what: &str, text: &str) {
     } else {
         tr!("{what} · {}자", "{what} · {} chars", chars)
     };
-    let toast = Toast { what, snippet: snippet(text), since: ctx.input(|i| i.time) };
+    let toast = Toast { what, snippet: snippet(text), quoted: true, since: ctx.input(|i| i.time) };
     ctx.data_mut(|d| d.insert_temp(id(), toast));
     ctx.request_repaint();
 }
@@ -103,7 +112,11 @@ pub fn show(ctx: &egui::Context) {
                 let format = |color| TextFormat { font_id: font.clone(), color, valign: Align::Center, ..Default::default() };
                 let mut line = LayoutJob::default();
                 line.append(&toast.what, 0.0, format(ui.visuals().strong_text_color()));
-                line.append(&format!("“{}”", toast.snippet), 12.0, format(ui.visuals().hyperlink_color));
+                if toast.quoted {
+                    line.append(&format!("“{}”", toast.snippet), 12.0, format(ui.visuals().hyperlink_color));
+                } else {
+                    line.append(&toast.snippet, 12.0, format(ui.visuals().text_color()));
+                }
                 ui.add(egui::Label::new(line).wrap_mode(egui::TextWrapMode::Extend));
             });
         });

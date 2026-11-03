@@ -1216,7 +1216,13 @@ impl PlaytermApp {
                 self.active = 0;
             }
             Command::CloseOthers(_) => {}
-            Command::ToggleBroadcast => self.broadcast = !self.broadcast,
+            Command::ToggleBroadcast => {
+                self.broadcast = !self.broadcast;
+                if self.broadcast {
+                    let (text, tip) = broadcast_status(self.broadcast_targets().len());
+                    crate::toast::message(ctx, &text, tip);
+                }
+            }
             Command::SetTabColor(i, color) => {
                 if let Some(s) = self.sessions.get_mut(i) {
                     s.tab_color = color;
@@ -1533,15 +1539,8 @@ impl PlaytermApp {
             if self.broadcast {
                 ui.separator();
                 let others = self.broadcast_targets().len();
-                ui.label(
-                    RichText::new(tr!("동시 입력 켜짐 · 다른 탭 {others}개", "Typing into all tabs · {others} other"))
-                        .strong()
-                        .color(BROADCAST_COLOR),
-                )
-                .on_hover_text(t(
-                    "이 탭에 치는 내용이 주황색 탭에도 똑같이 입력됩니다. 탭 우클릭으로 뺄 수 있습니다.",
-                    "What you type here also goes to the orange tabs. Right-click a tab to leave it out.",
-                ));
+                let (text, tip) = broadcast_status(others);
+                ui.label(RichText::new(text).strong().color(BROADCAST_COLOR)).on_hover_text(tip);
                 if ui.add(icon::button(icon::TURN_OFF, t("끄기", "Turn off"))).on_hover_text("Ctrl+Shift+I").clicked() {
                     action = Some(Command::ToggleBroadcast);
                 }
@@ -1710,6 +1709,27 @@ const SMALL_TEXT: f32 = 12.0;
 /// egui's text sizes with readable small text.
 fn readable_text(style: &mut egui::Style) {
     style.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(SMALL_TEXT));
+}
+
+/// What the simultaneous-input indicator says with `others` tabs receiving, and its tooltip.
+fn broadcast_status(others: usize) -> (String, &'static str) {
+    if others == 0 {
+        (
+            t("동시 입력 켜짐 · 받을 탭 없음", "Typing into all tabs · no other tab").into(),
+            t(
+                "입력을 함께 받을 연결된 탭이 없습니다. 다른 탭을 연결하거나, 탭 우클릭 → 동시 입력에 포함으로 넣으세요.",
+                "No other connected tab takes the input. Connect another tab, or right-click a tab → Include in simultaneous input.",
+            ),
+        )
+    } else {
+        (
+            tr!("동시 입력 켜짐 · 다른 탭 {others}개", "Typing into all tabs · {others} other"),
+            t(
+                "이 탭에 치는 내용이 주황색 테두리의 탭에도 똑같이 입력됩니다. 탭 우클릭으로 뺄 수 있습니다.",
+                "What you type here also goes to the tabs framed in orange. Right-click a tab to leave it out.",
+            ),
+        )
+    }
 }
 
 /// Width of the SFTP explorer folded on a tab without SFTP.
@@ -1998,6 +2018,13 @@ mod contrast_tests {
     fn contrast(a: Color32, b: Color32) -> f64 {
         let (la, lb) = (luminance(a.r()), luminance(b.r()));
         (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    #[test]
+    fn broadcast_status_says_when_nothing_receives() {
+        playterm_i18n::set_english(false);
+        assert!(broadcast_status(0).0.contains("받을 탭 없음"));
+        assert!(broadcast_status(3).0.contains("다른 탭 3개"));
     }
 
     #[test]
