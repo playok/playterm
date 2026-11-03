@@ -75,9 +75,16 @@ pub struct Release {
 /// Whether a release can be installed from within playterm (otherwise its page is opened).
 const AUTO_INSTALL: bool = cfg!(windows);
 
-/// Operating-system part of the package name.
-fn os() -> &'static str {
-    if cfg!(target_os = "macos") { "macos" } else { "windows" }
+/// Operating-system part of the package name; `None` on systems releases have no package for
+/// (Linux and other Unix systems), where no update is offered.
+fn os() -> Option<&'static str> {
+    if cfg!(windows) {
+        Some("windows")
+    } else if cfg!(target_os = "macos") {
+        Some("macos")
+    } else {
+        None
+    }
 }
 
 /// Architecture part of the package name.
@@ -85,8 +92,8 @@ fn arch() -> &'static str {
     if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }
 }
 
-fn package_name(version: Version) -> String {
-    format!("playterm-{version}-{}-{}.zip", os(), arch())
+fn package_name(version: Version) -> Option<String> {
+    os().map(|os| format!("playterm-{version}-{os}-{}.zip", arch()))
 }
 
 #[derive(Deserialize)]
@@ -117,7 +124,7 @@ fn parse_latest(json: &str, current: Version) -> Result<Option<Release>, String>
         return Ok(None);
     }
     let url = |name: &str| gh.assets.iter().find(|a| a.name == name).map(|a| a.browser_download_url.clone());
-    let package = package_name(version);
+    let Some(package) = package_name(version) else { return Ok(None) };
     let package_url = url(&package)
         .ok_or_else(|| tr!("{version} 릴리스에 이 PC 용 패키지({package})가 없습니다", "Release {version} has no package for this PC ({package})"))?;
     let (Some(sums_url), Some(sig_url)) = (url(SUMS), url(SUMS_SIG)) else {
@@ -563,7 +570,14 @@ mod tests {
     #[test]
     fn latest_release() {
         let current = Version(0, 2, 0);
-        let package = format!("playterm-0.3.0-{}-{}.zip", os(), arch());
+        let Some(os) = os() else {
+            // No package for this system: a newer release is not offered.
+            let any = ["windows", "macos"].map(|os| format!("playterm-0.3.0-{os}-{}.zip", arch()));
+            let json = latest_json("v0.3.0", &[&any[0], &any[1], SUMS, SUMS_SIG]);
+            assert_eq!(parse_latest(&json, current).unwrap(), None);
+            return;
+        };
+        let package = format!("playterm-0.3.0-{os}-{}.zip", arch());
         let json = latest_json("v0.3.0", &[&package, SUMS, SUMS_SIG]);
         let release = parse_latest(&json, current).unwrap().unwrap();
         assert_eq!(release.version, Version(0, 3, 0));
@@ -573,7 +587,7 @@ mod tests {
         // Not newer.
         assert_eq!(parse_latest(&latest_json("v0.2.0", &[&package, SUMS, SUMS_SIG]), current).unwrap(), None);
         // A package for another system is not one for this PC.
-        let other = if os() == "macos" { "windows" } else { "macos" };
+        let other = if os == "macos" { "windows" } else { "macos" };
         let elsewhere = format!("playterm-0.3.0-{other}-{}.zip", arch());
         assert!(parse_latest(&latest_json("v0.3.0", &[&elsewhere, SUMS, SUMS_SIG]), current).is_err());
         // Unsigned, or no package for this architecture.

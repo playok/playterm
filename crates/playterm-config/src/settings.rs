@@ -155,8 +155,15 @@ impl AppSettings {
     pub const MIN_FONT_SIZE: f32 = 8.0;
     pub const MAX_FONT_SIZE: f32 = 40.0;
     pub const DEFAULT_FONT_SIZE: f32 = 15.0;
-    /// The terminal font every installation of the platform has.
-    pub const DEFAULT_FONT: &str = if cfg!(target_os = "macos") { "Menlo" } else { "Consolas" };
+    /// The terminal font every installation of the platform has (on Linux, the one most
+    /// distributions install).
+    pub const DEFAULT_FONT: &str = if cfg!(windows) {
+        "Consolas"
+    } else if cfg!(target_os = "macos") {
+        "Menlo"
+    } else {
+        "DejaVu Sans Mono"
+    };
     pub const MIN_SCROLLBACK: usize = 100;
     pub const MAX_SCROLLBACK: usize = 200_000;
     pub const MIN_CONNECT_TIMEOUT: u32 = 3;
