@@ -154,6 +154,9 @@ pub struct SessionProfile {
     /// `localhost:0.0`).
     pub x11_forwarding: bool,
     pub x11_display: String,
+    /// Trusted X11 forwarding (`ssh -Y`): the server's X programs get the whole display,
+    /// keyboard included. Off: an untrusted cookie, or no X connections when none can be made.
+    pub x11_trusted: bool,
     /// A macro (by name, Tools → Macros) run once connected and logged in; empty: none.
     pub after_connect_macro: String,
     /// Options for RDP sites.
@@ -185,6 +188,7 @@ impl Default for SessionProfile {
             jump_host: String::new(),
             x11_forwarding: false,
             x11_display: String::new(),
+            x11_trusted: false,
             after_connect_macro: String::new(),
             rdp: RdpSettings::default(),
         }

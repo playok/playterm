@@ -406,9 +406,14 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
             let hint = tr!("DISPLAY (기본 {})", "DISPLAY (default {})", playterm_net::x11::default_display());
             let display = ui.add_enabled(
                 p.x11_forwarding,
-                egui::TextEdit::singleline(&mut p.x11_display).hint_text(hint).desired_width(220.0),
+                egui::TextEdit::singleline(&mut p.x11_display).hint_text(hint).desired_width(180.0),
             );
             submit |= enter(ui, &display);
+            ui.add_enabled(p.x11_forwarding, egui::Checkbox::new(&mut p.x11_trusted, t("신뢰 (-Y)", "Trusted (-Y)")))
+                .on_hover_text(t(
+                    "켜면 서버의 X 프로그램이 이 PC 화면 전체와 키 입력까지 접근할 수 있습니다. 믿는 서버에만 켜세요. 끄면(-X) 제한된(untrusted) 권한으로, 만들 수 없으면 X 연결을 막습니다 (xauth 와 SECURITY 확장을 지원하는 X 서버 필요).",
+                    "On, the server's X programs can reach the whole display of this PC, keyboard included: only for servers you trust. Off (-X), they get limited (untrusted) access, or none when it cannot be set up (needs xauth and an X server with the SECURITY extension).",
+                ));
         });
         ui.end_row();
 

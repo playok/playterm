@@ -21,7 +21,7 @@ pub mod zmodem;
 use std::io;
 
 pub use session::{
-    AuthPrompt, ConnectParams, HostKeyCheck, PromptField, Protocol, SessionEvent, SessionHandle,
+    AuthPrompt, ConnectParams, X11Request, HostKeyCheck, PromptField, Protocol, SessionEvent, SessionHandle,
     Waker,
 };
 pub use forward::{ForwardKind, ForwardRule};

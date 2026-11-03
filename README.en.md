@@ -126,7 +126,7 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 
 | Command | Does |
 |---|---|
-| `ssh [-p port] [-l user] [-i key] [-J jumphost] [-X] [-L/-R/-D ...] [--cp949] [user@]host[:port]` | SSH (without a user, your user name on this PC). `-J` goes through a jump host: a site name or `user@host:port`; `-X` (`-Y`) forwards X11 |
+| `ssh [-p port] [-l user] [-i key] [-J jumphost] [-X\|-Y] [-L/-R/-D ...] [--cp949] [user@]host[:port]` | SSH (without a user, your user name on this PC). `-J` goes through a jump host: a site name or `user@host:port`; `-X` forwards X11, `-Y` trusted X11 |
 | `telnet host [port]` | Telnet |
 | `serial COM3 [speed]` | Serial console |
 | `rdp [user@]host[:port]` | Remote Desktop |
@@ -385,8 +385,12 @@ Turn on **X11 forwarding** in an SSH site's settings (advanced), or connect with
 server (xterm, installers…) show on the X server of this PC.
 - An X server must be running here: VcXsrv or Xming on Windows (by default `localhost:0.0`), XQuartz on macOS. Without one, a notice says so.
 - Where they show is the site's DISPLAY field (empty: this PC's `DISPLAY`, else `localhost:0.0`).
-- The server gets a made-up cookie, and only connections carrying it reach the X server (only this session's programs get the display).
-  The real cookie is put in from `xauth` when it has one.
+- The server gets a made-up cookie, and only connections carrying it reach the X server (only this session's programs).
+- By default (`-X`) access is **untrusted**: `xauth` makes a limited cookie, so the server's programs cannot read other windows or the
+  keyboard. When none can be made (no `xauth`, or an X server without the SECURITY extension, as VcXsrv and Xming usually are), X
+  connections are refused, with a notice.
+- **Trusted (-Y)** in the site's settings (or `ssh -Y`) passes the real cookie (or none), and the server's X programs can reach the whole
+  display of this PC, keyboard included. Turn it on only for servers you trust.
 
 ## SSH authentication order
 

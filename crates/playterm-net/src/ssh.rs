@@ -227,7 +227,7 @@ async fn open(
     sink: &EventSink,
 ) -> anyhow::Result<(Arc<client::Handle<ClientHandler>>, russh::Channel<client::Msg>, JoinSet<()>, Hops)> {
     let x11 = match &params.x11 {
-        Some(display) => Some(Arc::new(X11Forward::new(display).await?)),
+        Some(request) => Some(Arc::new(X11Forward::new(&request.display, request.trusted).await?)),
         None => None,
     };
     let (session, hops) = connect_ssh(params, sink, x11.clone()).await?;
@@ -250,7 +250,10 @@ async fn open(
         .await?;
     if let Some(x11) = &x11 {
         channel.request_x11(false, false, x11::AUTH_PROTOCOL, x11.fake_cookie_hex(), x11.screen).await?;
-        sink.notice(tr!("X11 포워딩: 서버의 X 프로그램을 {} 에 표시합니다", "X11 forwarding: X programs on the server show on {}", x11.display));
+        match x11.refusal() {
+            Some(why) => sink.notice(tr!("X11 포워딩: {why}", "X11 forwarding: {why}")),
+            None => sink.notice(tr!("X11 포워딩: 서버의 X 프로그램을 {} 에 표시합니다", "X11 forwarding: X programs on the server show on {}", x11.display)),
+        }
     }
     channel.request_shell(false).await?;
     Ok((session, channel, tasks, hops))

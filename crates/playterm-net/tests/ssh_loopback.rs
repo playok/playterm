@@ -606,7 +606,8 @@ fn forwards_x11_to_the_display() {
     let number = display.local_addr().unwrap().port() - 6000;
     let h = fx.connect(ConnectParams {
         identity_file: Some(path),
-        x11: Some(format!("127.0.0.1:{number}.0")),
+        // Trusted: this display (a fake one) cannot make untrusted cookies.
+        x11: Some(playterm_net::X11Request { display: format!("127.0.0.1:{number}.0"), trusted: true }),
         ..fx.params()
     });
     expect_connected(&h);
