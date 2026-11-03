@@ -1516,8 +1516,16 @@ impl PlaytermApp {
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
         ui.horizontal_wrapped(|ui| {
-            ui.toggle_value(&mut self.show_sidebar, t("사이트", "Sites"))
-                .on_hover_text(t("사이트 목록 (Ctrl+Shift+B)", "Site list (Ctrl+Shift+B)"));
+            // A plain icon: showing the list is a secondary switch, not the first thing to look
+            // at (the list has its own "Sites" heading).
+            let (glyph, tip) = if self.show_sidebar {
+                (icon::SIDEBAR_HIDE, t("사이트 목록 숨기기 (Ctrl+Shift+B)", "Hide the site list (Ctrl+Shift+B)"))
+            } else {
+                (icon::SIDEBAR_SHOW, t("사이트 목록 보이기 (Ctrl+Shift+B)", "Show the site list (Ctrl+Shift+B)"))
+            };
+            if ui.add(icon::icon_button(glyph).frame(false)).on_hover_text(tip).clicked() {
+                self.show_sidebar = !self.show_sidebar;
+            }
             if ui.add(icon::button(icon::ADD, t("빠른 연결", "Quick Connect"))).on_hover_text("Ctrl+Shift+T").clicked() {
                 action = Some(Command::QuickConnect);
             }
