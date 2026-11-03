@@ -80,9 +80,14 @@ pub fn button<'a>(icon: MaterialIcon, text: impl Into<WidgetText>) -> Button<'a>
     Button::new((icon.rich_text(), text.into()))
 }
 
-/// A button showing only `icon` (give it a tooltip with `on_hover_text`).
+/// Smallest size of a button that shows only an icon: the recommended minimum target, so a
+/// small ✕ or ▲ is not hard to hit (the icon itself keeps its size).
+pub const MIN_ICON_BUTTON: f32 = 24.0;
+
+/// A button showing only `icon` (give it a tooltip with `on_hover_text`), at least
+/// [`MIN_ICON_BUTTON`] square.
 pub fn icon_button<'a>(icon: MaterialIcon) -> Button<'a> {
-    Button::new(icon.rich_text())
+    Button::new(icon.rich_text()).min_size(eframe::egui::vec2(MIN_ICON_BUTTON, MIN_ICON_BUTTON))
 }
 
 /// Adds the icon font to `defs` (which [`crate::fonts::install`] then installs), as the only
@@ -111,6 +116,20 @@ mod tests {
         assert_eq!(defs.families[&OK.font_family()], [FONT_NAME]);
         // Not mixed into the text fonts: their symbols keep their own look.
         assert!(!defs.families[&FontFamily::Proportional].iter().any(|f| f == FONT_NAME));
+    }
+
+    #[test]
+    fn icon_buttons_are_big_enough_to_hit() {
+        let ctx = eframe::egui::Context::default();
+        let mut size = eframe::egui::Vec2::ZERO;
+        let mut defs = FontDefinitions::default();
+        add_font(&mut defs);
+        ctx.set_fonts(defs);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            size = ui.add(icon_button(CLOSE).small()).rect.size();
+        });
+        out.textures_delta.clear(); // no renderer here
+        assert!(size.x >= MIN_ICON_BUTTON && size.y >= MIN_ICON_BUTTON, "{size:?}");
     }
 
     #[test]
