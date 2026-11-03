@@ -1,4 +1,5 @@
-"""Generates playterm.png (256x256) and playterm.ico (16-256) with only the standard library.
+"""Generates playterm.png (256x256), playterm.ico (16-256, Windows) and playterm.icns (16-1024,
+macOS) with only the standard library.
 
 The icon is a dark rounded square with a green terminal prompt ">_".
 Run: python assets/make_icon.py
@@ -86,8 +87,21 @@ def ico(images):
     return header + entries + blobs
 
 
+# icns element types holding PNG data, by pixel size (the @2x types reuse the larger images).
+ICNS_TYPES = [
+    (b"icp4", 16), (b"icp5", 32), (b"icp6", 64), (b"ic07", 128), (b"ic08", 256), (b"ic09", 512), (b"ic10", 1024),
+    (b"ic11", 32), (b"ic12", 64), (b"ic13", 256), (b"ic14", 512),
+]
+
+
+def icns(pngs):
+    body = b"".join(t + struct.pack(">I", 8 + len(pngs[s])) + pngs[s] for t, s in ICNS_TYPES)
+    return b"icns" + struct.pack(">I", 8 + len(body)) + body
+
+
 if __name__ == "__main__":
-    images = [(s, png(s, render(s))) for s in (16, 24, 32, 48, 64, 128, 256)]
-    (OUT / "playterm.png").write_bytes(images[-1][1])
-    (OUT / "playterm.ico").write_bytes(ico(images))
-    print("wrote", OUT / "playterm.png", OUT / "playterm.ico")
+    pngs = {s: png(s, render(s)) for s in (16, 24, 32, 48, 64, 128, 256, 512, 1024)}
+    (OUT / "playterm.png").write_bytes(pngs[256])
+    (OUT / "playterm.ico").write_bytes(ico([(s, pngs[s]) for s in (16, 24, 32, 48, 64, 128, 256)]))
+    (OUT / "playterm.icns").write_bytes(icns(pngs))
+    print("wrote", OUT / "playterm.png", OUT / "playterm.ico", OUT / "playterm.icns")

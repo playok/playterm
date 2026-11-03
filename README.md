@@ -83,7 +83,25 @@ release.cmd                                  # 또는: pwsh scripts\package.ps1 
   같은 이름의 DLL 이 있어도 쓰이지 않습니다.
 - 화면은 OpenGL(glow)로 그리고, OpenGL 을 쓸 수 없는 환경(GPU 없는 VM 등)에서는 자동으로 wgpu(DX12)로 전환합니다.
   환경변수 `PLAYTERM_RENDERER=wgpu` 또는 `glow` 로 강제할 수 있습니다.
-- 아이콘은 `assets/make_icon.py` 로 생성합니다 (`playterm.png`, `playterm.ico`).
+- 아이콘은 `assets/make_icon.py` 로 생성합니다 (`playterm.png`, `playterm.ico`, macOS 용 `playterm.icns`).
+
+### macOS (.app)
+
+macOS 에서도 빌드해 실행할 수 있습니다(Rust 1.95+ 와 Xcode 명령줄 도구 필요, macOS 11 이상에서 실행).
+
+```sh
+cargo build --release                        # target/release/playterm
+scripts/package-macos.sh                     # arm64·x64 → dist/playterm-<버전>-macos-<arch>.zip (playterm.app)
+scripts/package-macos.sh universal           # Apple silicon·Intel 겸용 앱 하나 (lipo)
+RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh arm64   # 기본이 아닌 툴체인으로
+```
+
+- zip 을 풀어 `playterm.app` 을 응용 프로그램 폴더로 옮기면 됩니다. zip 들의 SHA-256 은 `dist/SHA256SUMS-macos.txt` 에 씁니다.
+- 기본은 **ad-hoc 서명**입니다. 인터넷에서 받은 앱은 처음 실행할 때 Gatekeeper 가 막으므로 우클릭 → 열기(또는 시스템 설정 → 개인정보 보호 및 보안 →
+  그래도 열기)로 엽니다. 환경변수 `MACOS_SIGN_IDENTITY` 에 "Developer ID Application" 인증서 이름을 주면 hardened runtime 과 타임스탬프로
+  서명하므로, `xcrun notarytool submit <zip> --wait` 와 `xcrun stapler staple` 로 공증할 수 있습니다.
+- 터미널 기본 글꼴은 Menlo, 한글은 Apple SD Gothic Neo 로 그립니다. SSH 기본 사용자는 `USER`, 에이전트는 `SSH_AUTH_SOCK` 을 씁니다.
+- 앱 안의 자동 설치는 Windows 에서만 됩니다. macOS 에서는 새 버전(그 릴리스에 이 Mac 용 zip 이 있을 때)을 알려 주고 릴리스 페이지를 엽니다.
 
 ## 실행
 
@@ -296,7 +314,7 @@ Windows 원격 데스크톱 서버에 접속해 탭 안에 화면을 그립니�
 ## SSH 인증 순서
 
 1. 세션에 지정한 키 파일 (OpenSSH 형식 / PuTTY `.ppk`, 암호가 걸려 있으면 passphrase 입력)
-2. SSH 에이전트 — `SSH_AUTH_SOCK` 이 named pipe 이면 그것, 아니면 Windows OpenSSH 에이전트(`\\.\pipe\openssh-ssh-agent`), 그다음 Pageant
+2. SSH 에이전트 — `SSH_AUTH_SOCK` 이 named pipe 이면 그것, 아니면 Windows OpenSSH 에이전트(`\\.\pipe\openssh-ssh-agent`), 그다음 Pageant (macOS 에서는 `SSH_AUTH_SOCK` 소켓)
 3. 기본 키 파일 `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa` (있을 때만)
 4. 저장된 비밀번호
 5. keyboard-interactive / 비밀번호 입력
@@ -321,6 +339,7 @@ RSA 키는 서버가 알려주는 `rsa-sha2-512` / `rsa-sha2-256` 으로 서명�
 실행 중인 exe 는 `playterm.exe.old` 로 옮겨 두었다가 다음 시작 때 지우며, 새 버전은 다시 시작하면 적용됩니다(**지금 다시 시작** 또는 나중에).
 **나중에** 를 고르면 메뉴 막대 오른쪽의 **⬆ 새 버전** 으로 다시 열 수 있고, **이 버전 건너뛰기** 를 고르면 그 버전은 다시 알리지 않습니다.
 exe 가 쓰기 권한이 없는 폴더(예: `Program Files`)에 있으면 설치할 수 없으니 릴리스 페이지에서 직접 받으세요.
+macOS 에서는 서명된 `playterm.app` 을 앱이 직접 바꾸지 않고, **다운로드 페이지 열기** 로 릴리스 페이지를 엽니다.
 
 ## 설정 파일
 
