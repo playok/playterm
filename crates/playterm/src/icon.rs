@@ -83,8 +83,10 @@ pub fn icon_button<'a>(icon: MaterialIcon) -> Button<'a> {
 /// font of the family [`MaterialIcon::rich_text`] draws with.
 pub fn add_font(defs: &mut FontDefinitions) {
     let mut data = FontData::from_static(FONT);
-    // As egui_material_icons does: the icons sit a little high otherwise.
-    data.tweak.y_offset_factor = 0.05;
+    // Centres the icons on the label text: without this they sit about 1.5 px low (at the UI
+    // font size), and egui_material_icons' own +0.05 for egui's default font puts them 2.5 px
+    // low. Measured on the buttons: -0.075 leaves at most half a pixel.
+    data.tweak.y_offset_factor = -0.075;
     defs.font_data.insert(FONT_NAME.to_owned(), Arc::new(data));
     defs.families.insert(OK.font_family(), vec![FONT_NAME.to_owned()]);
 }
