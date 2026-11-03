@@ -30,15 +30,15 @@ pub fn home() -> PathBuf {
     directories::BaseDirs::new()
         .map(|d| d.home_dir().to_owned())
         .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("C:\\"))
+        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" }))
 }
 
-/// `~\Documents` style display of a folder (for the prompt).
+/// `~\Documents` (Windows) or `~/Documents` style display of a folder (for the prompt).
 pub fn display(path: &Path) -> String {
     let home = home();
     match path.strip_prefix(&home) {
         Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
-        Ok(rest) => format!("~\\{}", rest.display()),
+        Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
         Err(_) => path.display().to_string(),
     }
 }
@@ -51,7 +51,7 @@ pub fn resolve(cwd: &Path, arg: &str) -> PathBuf {
     let home_relative = arg == "~" || arg.starts_with("~\\") || arg.starts_with("~/");
     let joined = if home_relative {
         expand_home(arg)
-    } else if arg.len() == 2 && arg.ends_with(':') {
+    } else if cfg!(windows) && arg.len() == 2 && arg.ends_with(':') {
         // A bare drive means its root.
         PathBuf::from(format!("{arg}\\"))
     } else {
@@ -216,7 +216,7 @@ fn short_listing(entries: &[Entry], cols: usize) -> String {
     if entries.is_empty() {
         return t("\x1b[90m(비어 있음)\x1b[0m", "\x1b[90m(empty)\x1b[0m").into();
     }
-    let label = |e: &Entry| if e.is_dir { format!("{}\\", e.name) } else { e.name.clone() };
+    let label = |e: &Entry| if e.is_dir { format!("{}{}", e.name, std::path::MAIN_SEPARATOR) } else { e.name.clone() };
     let width = entries.iter().map(|e| label(e).width()).max().unwrap_or(1) + 2;
     let per_row = (cols.max(width) / width).max(1);
     let rows = entries.len().div_ceil(per_row);
@@ -262,6 +262,22 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
+    fn resolves_unix_paths() {
+        let cwd = Path::new("/Users/me/work");
+        assert_eq!(resolve(cwd, ".."), PathBuf::from("/Users/me"));
+        assert_eq!(resolve(cwd, "../../../.."), PathBuf::from("/"));
+        assert_eq!(resolve(cwd, "src/./a"), PathBuf::from("/Users/me/work/src/a"));
+        assert_eq!(resolve(cwd, "D:"), PathBuf::from("/Users/me/work/D:"), "no drive letters");
+        assert_eq!(resolve(cwd, "/x/../y"), PathBuf::from("/y"));
+        assert_eq!(resolve(cwd, "~"), home());
+        assert_eq!(resolve(cwd, "~/Documents"), home().join("Documents"));
+        assert_eq!(resolve(cwd, "~backup"), PathBuf::from("/Users/me/work/~backup"));
+        assert_eq!(display(&home().join("Documents")), "~/Documents");
+    }
+
+    #[test]
+    #[cfg(windows)]
     fn resolves_paths() {
         let cwd = Path::new(r"C:\Users\me\work");
         assert_eq!(resolve(cwd, ".."), PathBuf::from(r"C:\Users\me"));
@@ -292,9 +308,10 @@ mod tests {
         std::fs::write(dir.path().join(".hidden"), "").unwrap();
 
         let short = plain(&list(dir.path(), &ListOptions::default(), 80).unwrap());
-        assert_eq!(short, "하위폴더\\  a.log      b.txt");
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(short, format!("하위폴더{sep}  a.log      b.txt"));
         let narrow = plain(&list(dir.path(), &ListOptions::default(), 10).unwrap());
-        assert_eq!(narrow, "하위폴더\\\na.log\nb.txt");
+        assert_eq!(narrow, format!("하위폴더{sep}\na.log\nb.txt"));
 
         let all = plain(&list(dir.path(), &ListOptions { all: true, ..Default::default() }, 80).unwrap());
         assert!(all.contains(".hidden"));

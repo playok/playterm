@@ -63,10 +63,10 @@ pub struct ConnectParams {
     pub identity_file: Option<PathBuf>,
     /// Keys tried after the agent if they exist (`~/.ssh/id_ed25519`, ...).
     pub default_identity_files: Vec<PathBuf>,
-    /// Offer keys from running SSH agents (Windows OpenSSH agent, Pageant).
+    /// Offer keys from running SSH agents (Windows OpenSSH agent, Pageant; `SSH_AUTH_SOCK` on Unix).
     pub use_agent: bool,
-    /// Agent named pipe to use instead of `SSH_AUTH_SOCK` / the OpenSSH service pipe.
-    /// When set, Pageant is not consulted.
+    /// Agent to use instead of `SSH_AUTH_SOCK` / the OpenSSH service pipe: a named pipe on
+    /// Windows (Pageant is then not consulted), a Unix socket path elsewhere.
     pub agent_pipe: Option<String>,
     /// Port forwardings started once the SSH session is authenticated.
     pub forwards: Vec<ForwardRule>,

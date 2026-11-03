@@ -129,9 +129,10 @@ fn parse_port(s: &str) -> Result<u16, String> {
     s.parse().ok().filter(|&p: &u16| p > 0).ok_or_else(|| tr!("잘못된 포트: {s}", "Invalid port: {s}"))
 }
 
-/// Local Windows user name, the default SSH user (like OpenSSH).
+/// Local user name, the default SSH user (like OpenSSH): `USERNAME` on Windows, `USER` elsewhere.
 fn local_user() -> String {
-    std::env::var("USERNAME").unwrap_or_default()
+    let var = if cfg!(windows) { "USERNAME" } else { "USER" };
+    std::env::var(var).unwrap_or_default()
 }
 
 fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
