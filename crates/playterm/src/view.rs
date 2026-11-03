@@ -96,8 +96,11 @@ fn c32(rgb: Rgb) -> Color32 {
 pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &ViewStyle) -> ViewOutput {
     let mut output = ViewOutput::default();
     let cell = cell_size(ui.ctx(), style.font_size);
-    let rect = ui.available_rect_before_wrap();
-    let response = ui.allocate_rect(rect, Sense::click_and_drag());
+    // The whole area takes clicks and is painted in the terminal background; the text grid
+    // sits inside it with a margin, so the first column does not touch the border.
+    let area = ui.available_rect_before_wrap();
+    let response = ui.allocate_rect(area, Sense::click_and_drag());
+    let rect = text_rect(area);
 
     if response.clicked() || (autofocus && ui.memory(|m| m.focused().is_none())) {
         response.request_focus();
@@ -172,7 +175,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
         Some(bar) => bar.visible_matches(&session.terminal),
         None => Vec::new(),
     };
-    paint(ui, session, rect, cell, focused, style, &matches);
+    paint(ui, session, area, rect, cell, focused, style, &matches);
     if let Some(bar) = session.search.as_mut()
         && let BarAction::Close = bar.show(ui, &mut session.terminal, rect)
     {
@@ -666,16 +669,29 @@ fn cell_text(cell: &Cell) -> String {
     s
 }
 
+/// Space between the edge of the terminal area and its text.
+const PADDING: f32 = 6.0;
+
+/// Where the text grid of a terminal area goes: inside it by [`PADDING`] (nothing left out
+/// when the area is too small for that).
+fn text_rect(area: Rect) -> Rect {
+    let inner = area.shrink(PADDING);
+    if inner.is_positive() { inner } else { area }
+}
+
+/// Draws the terminal: `area` in the background color, the text grid in `rect` within it.
+#[allow(clippy::too_many_arguments)]
 fn paint(
     ui: &egui::Ui,
     session: &Session,
+    area: Rect,
     rect: Rect,
     cell: CellSize,
     focused: bool,
     style: &ViewStyle,
     matches: &[SearchMatch],
 ) {
-    let painter = ui.painter_at(rect);
+    let painter = ui.painter_at(area);
     let pixels_per_point = ui.ctx().pixels_per_point();
     let term = session.terminal.term();
     let palette = session.terminal.palette();
@@ -683,7 +699,7 @@ fn paint(
     let colors = content.colors;
     let default_bg = palette.background(colors);
     let cursor_color = c32(palette.cursor(colors));
-    painter.rect_filled(rect, 0.0, c32(default_bg));
+    painter.rect_filled(area, 0.0, c32(default_bg));
 
     let offset = content.display_offset as i32;
     let selection = content.selection;
@@ -778,5 +794,21 @@ fn paint(
                 painter.rect_stroke(cursor_cell.shrink(0.5), 0.0, stroke, egui::StrokeKind::Inside);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod padding_tests {
+    use super::*;
+
+    #[test]
+    fn text_sits_inside_a_margin() {
+        let area = Rect::from_min_size(Pos2::new(220.0, 110.0), Vec2::new(600.0, 400.0));
+        let text = text_rect(area);
+        assert_eq!(text.min, area.min + Vec2::splat(PADDING));
+        assert_eq!(text.max, area.max - Vec2::splat(PADDING));
+        // Too small for a margin: the area itself.
+        let tiny = Rect::from_min_size(Pos2::ZERO, Vec2::new(8.0, 8.0));
+        assert_eq!(text_rect(tiny), tiny);
     }
 }
