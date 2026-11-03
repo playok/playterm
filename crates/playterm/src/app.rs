@@ -1674,6 +1674,16 @@ fn apply_ui(ctx: &egui::Context, settings: &AppSettings) {
     });
     ctx.set_visuals_of(egui::Theme::Dark, readable_dark());
     ctx.set_visuals_of(egui::Theme::Light, soft_light());
+    ctx.all_styles_mut(readable_text);
+}
+
+/// Size of small UI text (hints, the status bar, the saved-passwords line). egui's 9 px is
+/// hard to read on 1× monitors.
+const SMALL_TEXT: f32 = 12.0;
+
+/// egui's text sizes with readable small text.
+fn readable_text(style: &mut egui::Style) {
+    style.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(SMALL_TEXT));
 }
 
 /// Weak text (hints, placeholders, status details) at the WCAG AA contrast for body text,
@@ -1953,6 +1963,16 @@ mod contrast_tests {
     fn contrast(a: Color32, b: Color32) -> f64 {
         let (la, lb) = (luminance(a.r()), luminance(b.r()));
         (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    #[test]
+    fn small_text_is_readable() {
+        let mut style = egui::Style::default();
+        readable_text(&mut style);
+        let small = style.text_styles[&egui::TextStyle::Small].size;
+        assert!(small >= 12.0, "{small}");
+        // Still no bigger than body text, so it stays secondary.
+        assert!(small <= style.text_styles[&egui::TextStyle::Body].size);
     }
 
     #[test]
