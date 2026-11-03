@@ -91,7 +91,9 @@ impl SettingsDialog {
                     ui.weak(t("탭마다 보관하는 지난 출력", "Past output kept for each tab"));
                 });
                 ui.end_row();
-                self.sleep_row(ui);
+                if crate::power::SUPPORTED {
+                    self.sleep_row(ui);
+                }
                 self.timeout_row(ui);
                 self.zmodem_row(ui);
                 self.update_row(ui);
@@ -166,7 +168,7 @@ impl SettingsDialog {
         let name = |theme: UiTheme| match theme {
             UiTheme::Dark => t("다크", "Dark"),
             UiTheme::Light => t("라이트", "Light"),
-            UiTheme::System => t("Windows 설정 따르기", "Follow Windows"),
+            UiTheme::System => t("시스템 설정 따르기", "Follow the system"),
         };
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("ui-theme").width(200.0).selected_text(name(self.draft.ui_theme)).show_ui(

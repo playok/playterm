@@ -268,9 +268,10 @@ impl SftpBrowser {
         ui.horizontal_wrapped(|ui| self.action_buttons(ui));
         ui.separator();
         self.listing(ui);
-        ui.weak(t(
-            "더블클릭: 폴더 열기 / 파일 다운로드 · Ctrl·Shift+클릭, Ctrl+A: 여러 개 선택 · 탐색기에서 파일을 끌어다 놓으면 업로드",
-            "Double-click: open a folder / download a file · Ctrl/Shift+click, Ctrl+A: select several · Drop files from Explorer to upload",
+        ui.weak(tr!(
+            "더블클릭: 폴더 열기 / 파일 다운로드 · Ctrl·Shift+클릭, Ctrl+A: 여러 개 선택 · {}에서 파일을 끌어다 놓으면 업로드",
+            "Double-click: open a folder / download a file · Ctrl/Shift+click, Ctrl+A: select several · Drop files from {} to upload",
+            crate::platform::file_manager()
         ));
     }
 
@@ -532,8 +533,9 @@ impl SftpBrowser {
                                 && ui
                                     .add(icon::button(icon::OPEN_FOLDER, playterm_i18n::t("폴더 열기", "Open folder")).small())
                                     .on_hover_text(tr!(
-                                        "탐색기에서 보기: {}",
-                                        "Show in Explorer: {}",
+                                        "{}에서 보기: {}",
+                                        "Show in {}: {}",
+                                        crate::platform::file_manager(),
                                         path.display()
                                     ))
                                     .clicked()

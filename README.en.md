@@ -290,7 +290,7 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
   playterm opens another, invisible channel on the same SSH connection and reads the shell process's directory (`/proc/<shell>/cwd`): no shell
   setup is needed and nothing is typed into the terminal. Nested shells (`bash` in `bash`) are followed. It works on Linux servers; when the
   directory cannot be found (another OS, a shell of another user after `sudo`, ...) SFTP opens at the login directory.
-- When a download finishes, the transfer list shows **[Open folder]**, which opens Windows Explorer with the file selected.
+- When a download finishes, the transfer list shows **[Open folder]**, which opens Windows Explorer (macOS: Finder) with the file selected.
 - Icons tell files apart: folders are yellow folders, files get a colored band by kind (images green, archives purple, code blue, scripts orange,
   configuration teal, documents red, media pink, executables dark red; text and others striped).
   Symbolic links get a small arrow, and hidden files (starting with .) are dimmed.

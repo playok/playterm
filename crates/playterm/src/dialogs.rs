@@ -377,8 +377,8 @@ pub fn about(ctx: &egui::Context) -> bool {
             ui.label(tr!("버전 {}", "Version {}", env!("CARGO_PKG_VERSION")));
             ui.add_space(6.0);
             ui.label(t(
-                "Windows용 SSH · Telnet · 시리얼 · 원격 데스크톱 터미널",
-                "SSH · Telnet · serial · Remote Desktop terminal for Windows",
+                "SSH · Telnet · 시리얼 · 원격 데스크톱 터미널",
+                "SSH · Telnet · serial · Remote Desktop terminal",
             ));
             ui.weak(t(
                 "SFTP, 포트 포워딩, 세션 로그, 한글(CP949) 지원",

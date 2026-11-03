@@ -12,6 +12,10 @@ use std::time::Duration;
 use playterm_config::PreventSleep;
 
 /// The execution state this (UI) thread has asked Windows for.
+/// Whether this system can hold off sleep and the screen saver (Windows only so far); elsewhere
+/// the settings and the menu item are hidden.
+pub const SUPPORTED: bool = cfg!(windows);
+
 #[derive(Default)]
 pub struct SleepGuard {
     current: Option<PreventSleep>,
@@ -28,7 +32,7 @@ impl SleepGuard {
 
     /// Whether sleep is being held off right now.
     pub fn active(&self) -> bool {
-        matches!(self.current, Some(PreventSleep::System | PreventSleep::Display))
+        SUPPORTED && matches!(self.current, Some(PreventSleep::System | PreventSleep::Display))
     }
 }
 
@@ -66,7 +70,7 @@ impl ScreenSaverGuard {
     }
 
     pub fn active(&self) -> bool {
-        self.on.load(Ordering::Relaxed)
+        SUPPORTED && self.on.load(Ordering::Relaxed)
     }
 }
 
