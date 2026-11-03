@@ -183,6 +183,14 @@ struct ZmodemRun {
     silent: bool,
 }
 
+/// A ZMODEM upload (`rz` on the server) and what the screen shows of it.
+struct UploadRun {
+    upload: zmodem::Upload,
+    /// Files already listed on the screen.
+    listed: usize,
+    drawn: Option<Instant>,
+}
+
 pub struct Session {
     pub id: u64,
     charset: Charset,
@@ -258,6 +266,10 @@ pub struct Session {
     zmodem_pick: Option<ZmodemPick>,
     /// The app has to ask for the folder of `zmodem_pick` (see [`Session::take_zmodem_question`]).
     zmodem_question: bool,
+    /// A ZMODEM upload in progress: the output goes to it instead of the screen.
+    zmodem_up: Option<UploadRun>,
+    /// The app has to ask for the files of `zmodem_up` (see [`Session::take_upload_question`]).
+    upload_question: bool,
     /// `ping` running at the prompt (until it ends or Ctrl+C).
     ping: Option<PingRun>,
 }
@@ -327,6 +339,8 @@ impl Session {
             zmodem_ask: false,
             zmodem_pick: None,
             zmodem_question: false,
+            zmodem_up: None,
+            upload_question: false,
             ping: None,
         }
     }
@@ -650,6 +664,12 @@ impl Session {
             self.send_raw(reply);
             self.zmodem_show();
         }
+        if let Some(run) = &mut self.zmodem_up {
+            let reply = run.upload.tick(Instant::now());
+            changed |= !reply.is_empty() || run.upload.outcome().is_some();
+            self.send_raw(reply);
+            self.upload_show();
+        }
         // The SFTP browser's "terminal's folder" button.
         if self.sftp.as_mut().is_some_and(|b| std::mem::take(&mut b.follow_requested)) {
             self.follow_shell_dir(true);
@@ -713,7 +733,7 @@ impl Session {
                 }
                 SessionEvent::Closed(reason) => {
                     if self.end_zmodem() {
-                        self.notice(t("연결이 끊겨 ZMODEM 받기를 중단했습니다", "The connection closed; the ZMODEM download stopped"), "31");
+                        self.notice(t("연결이 끊겨 ZMODEM 전송을 중단했습니다", "The connection closed; the ZMODEM transfer stopped"), "31");
                     }
                     self.state = SessionState::Closed;
                     self.connected_since = None;
@@ -768,6 +788,12 @@ impl Session {
             self.zmodem_show();
             return;
         }
+        if let Some(run) = &mut self.zmodem_up {
+            let reply = run.upload.feed(bytes, Instant::now());
+            self.send_raw(reply);
+            self.upload_show();
+            return;
+        }
         match self.zmodem_detector.scan(bytes) {
             None => {
                 self.terminal.feed(bytes);
@@ -796,18 +822,18 @@ impl Session {
                     self.begin_zmodem(dir, &bytes[rest..], &line);
                 }
             }
-            Some(Start::Upload { at, .. }) => {
-                // `rz` waits for files from us, which is not supported: stop it instead of
-                // leaving it waiting.
+            Some(Start::Upload { at, rest }) => {
+                // `rz` waits for files from us: the app asks which (the receiver waits a
+                // couple of minutes).
                 self.terminal.feed(&bytes[..at]);
-                self.send_raw(zmodem::CANCEL.to_vec());
-                self.notice(
-                    t(
-                        "서버의 rz (ZMODEM 보내기) 는 지원하지 않아 취소했습니다. 파일을 보내려면 SFTP 를 쓰세요.",
-                        "rz (ZMODEM upload) on the server is not supported and was cancelled. Use SFTP to send files.",
-                    ),
-                    "33",
-                );
+                self.login = None;
+                let line = t("ZMODEM 보내기: 보낼 파일을 고르세요 · Ctrl+C 로 취소", "ZMODEM upload: choose the files to send · Ctrl+C cancels");
+                self.terminal.feed_local(&format!("\r\n\x1b[36m[{}]\x1b[0m\r\n", printable(line)));
+                let (upload, reply) = zmodem::Upload::begin(&bytes[rest..], Instant::now());
+                self.zmodem_up = Some(UploadRun { upload, listed: 0, drawn: None });
+                self.upload_question = true;
+                self.send_raw(reply);
+                self.upload_show();
             }
         }
     }
@@ -820,6 +846,88 @@ impl Session {
         self.zmodem = Some(ZmodemRun { download, listed: 0, drawn: None, silent: false });
         self.send_raw(reply);
         self.zmodem_show();
+    }
+
+    /// Whether the app has to ask for the files of a ZMODEM upload that just started (once),
+    /// and answer with [`Session::zmodem_files_chosen`].
+    pub fn take_upload_question(&mut self) -> bool {
+        std::mem::take(&mut self.upload_question)
+    }
+
+    /// The files the user picked for the ZMODEM upload; none (or `None`) cancels it.
+    pub fn zmodem_files_chosen(&mut self, files: Option<Vec<PathBuf>>) {
+        let Some(run) = &mut self.zmodem_up else { return };
+        if !run.upload.choosing() {
+            return;
+        }
+        let files = files.unwrap_or_default();
+        if !files.is_empty() {
+            let count = files.len();
+            self.terminal.feed_local(&format!(
+                "\x1b[36m[{}]\x1b[0m\r\n",
+                printable(&tr!("ZMODEM: 파일 {count}개를 보냅니다", "ZMODEM: sending {count} file(s)"))
+            ));
+        }
+        let Some(run) = &mut self.zmodem_up else { return };
+        let reply = run.upload.choose(files, Instant::now());
+        self.send_raw(reply);
+        self.upload_show();
+    }
+
+    /// Shows how the ZMODEM upload goes (each file done, the file being sent) and wraps it up
+    /// when it is over.
+    fn upload_show(&mut self) {
+        let Some(run) = &mut self.zmodem_up else { return };
+        let mut text = String::new();
+        for sent in &run.upload.sent()[run.listed..] {
+            let (mark, path) = match sent {
+                zmodem::Sent::Done(path) => ("\x1b[32m✓\x1b[0m", path),
+                zmodem::Sent::Skipped(path) => ("\x1b[33m–\x1b[0m", path),
+            };
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let note = match sent {
+                zmodem::Sent::Done(path) => human_size(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)),
+                zmodem::Sent::Skipped(_) => t("서버가 건너뜀", "skipped by the server").into(),
+            };
+            text += &format!("\r\x1b[K  {mark} {} ({note})\r\n", printable(&name));
+            run.drawn = None;
+        }
+        run.listed = run.upload.sent().len();
+        if let Some(outcome) = run.upload.outcome().cloned() {
+            let done = run.upload.sent().iter().filter(|s| matches!(s, zmodem::Sent::Done(_))).count();
+            let rest = run.upload.take_passthrough();
+            self.zmodem_up = None;
+            self.upload_question = false;
+            self.terminal.feed_local(&format!("{text}\r\x1b[K"));
+            match outcome {
+                Outcome::Finished => self.notice(&tr!("ZMODEM 보내기 완료: 파일 {done}개", "ZMODEM upload done: {done} file(s)"), "32"),
+                Outcome::Cancelled => self.notice(
+                    &tr!("ZMODEM 보내기를 취소했습니다 (끝까지 보낸 파일 {done}개)", "ZMODEM upload cancelled ({done} file(s) sent completely)"),
+                    "33",
+                ),
+                Outcome::Failed(e) => self.notice(&tr!("ZMODEM 보내기 실패: {e}", "ZMODEM upload failed: {e}"), "31"),
+            }
+            if !rest.is_empty() {
+                self.output(&rest);
+            }
+            return;
+        }
+        let now = Instant::now();
+        if let Some(p) = run.upload.progress()
+            && run.drawn.is_none_or(|at| now.duration_since(at) >= ZMODEM_REDRAW)
+        {
+            run.drawn = Some(now);
+            let size = p.size.unwrap_or(0);
+            let amount = if size > 0 {
+                format!("{} / {} ({}%)", human_size(p.received), human_size(size), (p.received.min(size) * 100) / size)
+            } else {
+                human_size(p.received)
+            };
+            text += &format!("\r\x1b[K  ↑ {}  {amount}", printable(p.name));
+        }
+        if !text.is_empty() {
+            self.terminal.feed_local(&text);
+        }
     }
 
     /// Whether the app has to ask for the folder of a ZMODEM download that just started (once),
@@ -941,7 +1049,7 @@ impl Session {
 
     /// Whether a ZMODEM download is running (it needs regular [`Session::poll`]s).
     pub fn in_zmodem(&self) -> bool {
-        self.zmodem.is_some()
+        self.zmodem.is_some() || self.zmodem_up.is_some()
     }
 
     /// Shows how the ZMODEM download goes (each saved file, the file being received) and wraps
@@ -1000,7 +1108,8 @@ impl Session {
     /// file is deleted. Returns whether one was running.
     fn end_zmodem(&mut self) -> bool {
         self.zmodem_detector = zmodem::Detector::default();
-        let running = self.zmodem.take().is_some();
+        self.upload_question = false;
+        let running = self.zmodem.take().is_some() | self.zmodem_up.take().is_some();
         // Files received completely still wait for their folder; a cut transfer is dropped.
         if self.zmodem_pick.as_ref().is_some_and(|p| p.ended.is_none()) {
             self.zmodem_pick = None;
@@ -1065,6 +1174,14 @@ impl Session {
                 let reply = run.download.cancel(Instant::now());
                 self.send_raw(reply);
                 self.zmodem_show();
+            }
+            return;
+        }
+        if let Some(run) = &mut self.zmodem_up {
+            if bytes.contains(&0x03) || bytes.contains(&0x18) || bytes == [0x1b] {
+                let reply = run.upload.cancel(Instant::now());
+                self.send_raw(reply);
+                self.upload_show();
             }
             return;
         }
@@ -1386,6 +1503,43 @@ mod tests {
         assert_eq!(elapsed(Duration::from_secs(2 * 3600 + 5 * 60)), "2시간 5분");
     }
     use super::*;
+
+    fn shows(session: &mut Session, text: &str) -> bool {
+        let mut search = playterm_term::TextSearch::new(text).unwrap();
+        !session.terminal.all_matches(&mut search, 10).is_empty()
+    }
+
+    #[test]
+    fn rz_on_the_server_asks_for_files() {
+        let setup = TermSetup { palette: Palette::default(), scrollback: 100 };
+        let mut session = Session::local(1, 80, 24, &setup);
+        // What `rz` prints when it starts.
+        session.output(b"$ rz\r\nrz waiting to receive.**\x18B0100000023be50\r\n\x11");
+        assert!(session.in_zmodem());
+        assert!(session.take_upload_question());
+        assert!(!session.take_upload_question(), "asked once");
+        // Nothing picked: cancelled, and the shell's output is shown again.
+        session.zmodem_files_chosen(None);
+        session.output(b"\r\nuser@host:~$ ");
+        std::thread::sleep(Duration::from_millis(400));
+        session.poll(Path::new(""), false);
+        assert!(!session.in_zmodem());
+        assert!(shows(&mut session, "user@host"));
+
+        // Files picked, then Ctrl+C.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"abc").unwrap();
+        session.output(b"**\x18B0100000023be50\r\n\x11");
+        assert!(session.take_upload_question());
+        session.zmodem_files_chosen(Some(vec![dir.path().join("a.txt")]));
+        assert!(session.in_zmodem());
+        session.send_bytes(vec![0x03]);
+        session.output(b"\r\nback$ ");
+        std::thread::sleep(Duration::from_millis(400));
+        session.poll(Path::new(""), false);
+        assert!(!session.in_zmodem());
+        assert!(shows(&mut session, "back$"));
+    }
 
     #[test]
     fn server_text_cannot_run_escape_sequences() {
