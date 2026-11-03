@@ -39,7 +39,14 @@ const SHELL_DIR_ANSWER: &str = "/docs";
 impl server::Server for TestServer {
     type Handler = Self;
     fn new_client(&mut self, _: Option<SocketAddr>) -> Self {
-        self.clone()
+        // Channel ids are per connection: each connection keeps its own channel sets (a
+        // connection through a jump host would otherwise see the bastion's ids as its own).
+        Self {
+            channels: Arc::default(),
+            shells: Arc::default(),
+            scripts: Arc::default(),
+            ..self.clone()
+        }
     }
 }
 
@@ -292,6 +299,7 @@ impl Fixture {
             rows: 24,
             known_hosts: self.known_hosts.clone(),
             connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
+            jump: None,
         }
     }
 
@@ -418,6 +426,7 @@ fn silent_server_times_out() {
     let params = ConnectParams {
         port: silent.local_addr().unwrap().port(),
         connect_timeout: Duration::from_secs(1),
+        jump: None,
         ..fx.params()
     };
     let started = Instant::now();
@@ -539,6 +548,34 @@ fn key_files_authenticate_without_prompts() {
     let rsa_path = fx.write_key("id_rsa", &rsa);
     let h = fx.connect(ConnectParams { identity_file: Some(rsa_path), ..fx.params() });
     expect_connected(&h);
+}
+
+#[test]
+fn connects_through_jump_hosts() {
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("jump", &[&key]);
+    fx.trust_host();
+    let path = fx.write_key("id_ed25519", &key);
+    let direct = ConnectParams { identity_file: Some(path), ..fx.params() };
+
+    // The test server is its own bastion: SSH to it, then a direct-tcpip channel back to it
+    // carries the second SSH session.
+    let one_hop = ConnectParams { jump: Some(Box::new(direct.clone())), ..direct.clone() };
+    expect_connected(&fx.connect(one_hop.clone()));
+
+    // Two hops: A → B → target.
+    let two_hops = ConnectParams { jump: Some(Box::new(one_hop)), ..direct.clone() };
+    expect_connected(&fx.connect(two_hops));
+
+    // A target the bastion cannot reach is reported, not hung on.
+    let unreachable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = unreachable.local_addr().unwrap().port();
+    drop(unreachable);
+    let h = fx.connect(ConnectParams { port, jump: Some(Box::new(direct)), ..fx.params() });
+    match skip_notices(&h) {
+        SessionEvent::Closed(Some(reason)) => assert!(reason.contains(&port.to_string()), "{reason}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
 }
 
 #[test]

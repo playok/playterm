@@ -377,6 +377,67 @@ impl PlaytermApp {
     }
 
     fn open_session(&mut self, profile: &SessionProfile, password: Option<String>, name: Option<String>) {
+        let mut params = self.connect_params(profile, password);
+        params.jump = self.jump_params(profile, 0);
+        let log = profile.log.auto.then(|| LogPlan {
+            dir: logging::log_dir(&profile.log.dir),
+            mode: if profile.log.raw { LogMode::Raw } else { LogMode::Text { timestamps: profile.log.timestamps } },
+        });
+        let login = (profile.auto_login.enabled && !profile.auto_login.steps.is_empty()).then(|| LoginScript {
+            steps: profile.auto_login.steps.clone(),
+            user: profile.username.clone(),
+            password: params.password.clone().map(Zeroizing::new),
+        });
+        let site = self.store.get(&profile.id).map(|p| p.id.clone());
+        let tab_color = profile.tab_color;
+        let profile_charset = profile.charset;
+        let profile = Some(Box::new(profile.clone()));
+        self.open_spec(SessionSpec { params, charset: profile_charset, name, log, login, site, tab_color, profile });
+    }
+
+    /// The jump host `profile` goes through, if any: a saved SSH site named (or with the id)
+    /// `jump_host`, with its saved password when the vault is open and its own jump host, or
+    /// else `user@host:port` (the site's user and port 22 when left out), logging in with keys
+    /// or a prompt. Chains stop after a few hops, so a loop of sites cannot hang.
+    fn jump_params(&mut self, profile: &SessionProfile, depth: usize) -> Option<Box<ConnectParams>> {
+        const MAX_HOPS: usize = 4;
+        let text = profile.jump_host.trim();
+        if profile.protocol != Protocol::Ssh || text.is_empty() || depth >= MAX_HOPS {
+            return None;
+        }
+        let site = self
+            .store
+            .profiles()
+            .iter()
+            .find(|p| p.protocol == Protocol::Ssh && p.id != profile.id && (p.id == text || p.display_name() == text))
+            .cloned();
+        let mut params = match site {
+            Some(site) => {
+                let password = if site.save_password && self.vault.is_unlocked() { self.saved_password(&site) } else { None };
+                let mut params = self.connect_params(&site, password);
+                params.jump = self.jump_params(&site, depth + 1);
+                params
+            }
+            None => {
+                let address = crate::profile_form::split_address(text);
+                let bastion = SessionProfile {
+                    protocol: Protocol::Ssh,
+                    host: address.host,
+                    port: address.port.unwrap_or(22),
+                    username: address.user.unwrap_or_else(|| profile.username.clone()),
+                    use_agent: true,
+                    ..SessionProfile::default()
+                };
+                self.connect_params(&bastion, None)
+            }
+        };
+        // The jump host only carries the connection: no forwardings of its own.
+        params.forwards.clear();
+        Some(Box::new(params))
+    }
+
+    /// How to connect to `profile` (without its jump host).
+    fn connect_params(&self, profile: &SessionProfile, password: Option<String>) -> ConnectParams {
         let identity_file = (!profile.identity_file.is_empty()).then(|| expand_home(&profile.identity_file));
         // Like OpenSSH, the usual key files are tried when present.
         let default_identity_files = ["id_ed25519", "id_ecdsa", "id_rsa"]
@@ -384,7 +445,7 @@ impl PlaytermApp {
             .map(|name| expand_home(&format!("~/.ssh/{name}")))
             .filter(|p| p.is_file() && Some(p) != identity_file.as_ref())
             .collect();
-        let params = ConnectParams {
+        ConnectParams {
             protocol: profile.protocol,
             host: profile.host.clone(),
             port: profile.port,
@@ -404,21 +465,8 @@ impl PlaytermApp {
             rows: 24,
             known_hosts: self.known_hosts.clone(),
             connect_timeout: std::time::Duration::from_secs(self.settings.connect_timeout.into()),
-        };
-        let log = profile.log.auto.then(|| LogPlan {
-            dir: logging::log_dir(&profile.log.dir),
-            mode: if profile.log.raw { LogMode::Raw } else { LogMode::Text { timestamps: profile.log.timestamps } },
-        });
-        let login = (profile.auto_login.enabled && !profile.auto_login.steps.is_empty()).then(|| LoginScript {
-            steps: profile.auto_login.steps.clone(),
-            user: profile.username.clone(),
-            password: params.password.clone().map(Zeroizing::new),
-        });
-        let site = self.store.get(&profile.id).map(|p| p.id.clone());
-        let tab_color = profile.tab_color;
-        let profile_charset = profile.charset;
-        let profile = Some(Box::new(profile.clone()));
-        self.open_spec(SessionSpec { params, charset: profile_charset, name, log, login, site, tab_color, profile });
+            jump: None,
+        }
     }
 
     /// Connects a saved profile, unlocking the vault first if its password is stored there.

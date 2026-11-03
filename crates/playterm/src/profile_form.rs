@@ -355,6 +355,19 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
         });
         ui.end_row();
 
+        ui.label(t("점프 호스트", "Jump host"));
+        let jump = ui.add(
+            egui::TextEdit::singleline(&mut p.jump_host)
+                .hint_text(t("없음 · 사이트 이름 또는 user@host:port", "None · a site name or user@host:port"))
+                .desired_width(260.0),
+        )
+        .on_hover_text(t(
+            "이 서버를 거쳐 접속합니다 (OpenSSH 의 ProxyJump / -J). 저장된 사이트 이름을 쓰면 그 사이트의 키·저장된 비밀번호·점프 호스트를 씁니다.",
+            "Connects through this server (OpenSSH ProxyJump / -J). With a saved site's name, that site's key, saved password and jump host are used.",
+        ));
+        submit |= enter(ui, &jump);
+        ui.end_row();
+
         ui.label("");
         ui.checkbox(
             &mut p.use_agent,

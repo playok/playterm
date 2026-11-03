@@ -147,6 +147,9 @@ pub struct SessionProfile {
     /// A short word shown with the site's tabs, its connection line and the window title
     /// ("운영", "PROD"); empty for none.
     pub tab_label: String,
+    /// SSH: the jump host (bastion) to go through: a saved site's name, or `user@host:port`;
+    /// empty for a direct connection.
+    pub jump_host: String,
     /// Options for RDP sites.
     pub rdp: RdpSettings,
 }
@@ -173,6 +176,7 @@ impl Default for SessionProfile {
             keepalive: KeepAlive::default(),
             tab_color: None,
             tab_label: String::new(),
+            jump_host: String::new(),
             rdp: RdpSettings::default(),
         }
     }
