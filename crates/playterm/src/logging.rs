@@ -73,9 +73,10 @@ fn reveal_command(path: &Path, file: bool) -> (&'static str, Vec<std::ffi::OsStr
         let arg = if file { format!("/select,{}", path.display()).into() } else { path.as_os_str().to_owned() };
         ("explorer", vec![arg])
     } else if cfg!(target_os = "macos") {
-        let mut args: Vec<std::ffi::OsString> = if file { vec!["-R".into()] } else { Vec::new() };
-        args.push(path.as_os_str().to_owned());
-        ("open", args)
+        // Always reveal (-R: select in Finder), never open: a folder named like a bundle
+        // (`x.app`, e.g. downloaded over SFTP) would otherwise be launched, not shown.
+        let _ = file;
+        ("open", vec!["-R".into(), path.as_os_str().to_owned()])
     } else {
         // xdg-open cannot select a file: open its folder.
         let dir = if file { path.parent().unwrap_or(path) } else { path };
@@ -93,7 +94,9 @@ mod tests {
         let (program, args) = reveal_command(file, true);
         if cfg!(target_os = "macos") {
             assert_eq!((program, args), ("open", vec!["-R".into(), file.as_os_str().to_owned()]));
-            assert_eq!(reveal_command(Path::new("/tmp/x"), false).1, vec![std::ffi::OsString::from("/tmp/x")]);
+            // A folder is revealed too, not opened: `open x.app` would launch it.
+            let bundle = Path::new("/tmp/x/evil.app");
+            assert_eq!(reveal_command(bundle, false).1, vec!["-R".into(), bundle.as_os_str().to_owned()]);
         } else if cfg!(windows) {
             assert_eq!(program, "explorer");
             assert!(args[0].to_string_lossy().starts_with("/select,"));
