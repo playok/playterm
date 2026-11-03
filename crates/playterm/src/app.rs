@@ -223,6 +223,9 @@ pub struct PlaytermApp {
     zmodem_last: Option<PathBuf>,
     /// Open questions for the folder of a ZMODEM download: the tab, and the answer to come.
     zmodem_questions: Vec<(u64, mpsc::Receiver<Option<PathBuf>>)>,
+    /// Open questions for the files of a ZMODEM upload, and the folder they were last picked in.
+    upload_questions: Vec<(u64, mpsc::Receiver<Option<Vec<PathBuf>>>)>,
+    upload_last: Option<PathBuf>,
     /// Ctrl+wheel / pinch steps not yet turned into a whole font size step.
     zoom_accum: f32,
     /// Simultaneous input: typing in the active tab also goes to the other included tabs.
@@ -293,6 +296,8 @@ impl PlaytermApp {
             zmodem_dir: local_fs::zmodem_folder(&settings.zmodem_dir),
             zmodem_last: None,
             zmodem_questions: Vec::new(),
+            upload_questions: Vec::new(),
+            upload_last: None,
             settings,
             settings_path,
             settings_unsaved: None,
@@ -1701,8 +1706,8 @@ impl PlaytermApp {
             None => {
                 self.status = Some(
                     t(
-                        "파일을 올리려면 먼저 SFTP 탐색기(Ctrl+Shift+X)를 여세요",
-                        "Open the SFTP explorer (Ctrl+Shift+X) first to upload files",
+                        "파일을 올리려면 먼저 SFTP 탐색기(Ctrl+Shift+X)를 여세요 (SFTP 가 없는 장비는 서버에서 rz 를 실행하세요)",
+                        "Open the SFTP explorer (Ctrl+Shift+X) first to upload files (on devices without SFTP, run rz on the server)",
                     )
                     .into(),
                 )
@@ -1930,6 +1935,46 @@ impl PlaytermApp {
             }
             if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
                 session.zmodem_folder_chosen(dir);
+            }
+        }
+        self.zmodem_uploads(ctx);
+    }
+
+    /// Asks which files to send to the ZMODEM uploads (`rz`) that just started, and hands the
+    /// answers to their tabs.
+    fn zmodem_uploads(&mut self, ctx: &egui::Context) {
+        let start = self.upload_last.clone().filter(|dir| dir.is_dir()).unwrap_or_else(local_fs::home);
+        for session in &mut self.sessions {
+            if !session.take_upload_question() {
+                continue;
+            }
+            let title = tr!("ZMODEM 으로 보낼 파일 - {}", "Files to send with ZMODEM - {}", session.tab_title());
+            let (start, ctx) = (start.clone(), ctx.clone());
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(rfd::FileDialog::new().set_title(title).set_directory(&start).pick_files());
+                ctx.request_repaint();
+            });
+            self.upload_questions.push((session.id, rx));
+        }
+        let mut answers = Vec::new();
+        self.upload_questions.retain(|(id, rx)| match rx.try_recv() {
+            Ok(files) => {
+                answers.push((*id, files));
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                answers.push((*id, None));
+                false
+            }
+        });
+        for (id, files) in answers {
+            if let Some(dir) = files.as_ref().and_then(|f| f.first()).and_then(|f| f.parent()) {
+                self.upload_last = Some(dir.to_owned());
+            }
+            if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+                session.zmodem_files_chosen(files);
             }
         }
     }

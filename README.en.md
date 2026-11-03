@@ -15,7 +15,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **SSH extras**: key authentication (OpenSSH / PuTTY `.ppk`, Pageant, Windows OpenSSH agent), `-L` / `-R` / `-D` port forwarding, and an SFTP explorer panel beside the terminal
 - **Remote Desktop**: resolution that follows the tab size, shared clipboard, Unicode/IME input, and certificate pinning
 - **Password vault**: saved passwords are encrypted with a master password (Argon2id + XChaCha20-Poly1305)
-- **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads (`sz`)
+- **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads and uploads (`sz`/`rz`)
 - **Site manager**: folders, per-site tab colors, PuTTY and Xshell session import, and a `playterm>` command prompt in unconnected tabs
 - Korean / English UI, dark / light themes
 
@@ -24,7 +24,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 | Crate | Role |
 |---|---|
 | `crates/playterm-term` | Terminal emulation (alacritty_terminal), UTF-8/CP949 conversion, color palettes |
-| `crates/playterm-net` | SSH (russh) / Telnet / serial / RDP (IronRDP) transports, session event and command channels, ZMODEM receiving |
+| `crates/playterm-net` | SSH (russh) / Telnet / serial / RDP (IronRDP) transports, session event and command channels, ZMODEM receiving and sending |
 | `crates/playterm-config` | Site list (`sessions.toml`), password vault (`vault.toml`), settings (`settings.toml`) |
 | `crates/playterm-i18n` | Korean / English UI strings |
 | `crates/playterm` | GUI app (eframe/egui): rendering, keyboard/IME input, dialogs, updates |
@@ -313,7 +313,13 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
   After a cancel, the transfer data the server had already sent is dropped instead of filling the screen; only the shell prompt after it is shown.
 - Every data block is checked (16/32-bit CRC); a damaged part is received again from where it went wrong, and only complete files are kept (a file is written under a temporary name and renamed at the end).
   Cancelling or losing the connection deletes the file being received. File names from the server lose their path and characters Windows does not allow, so nothing is saved outside the folder.
-- ZCOMMAND, a server asking to run a command on this PC, is refused. `rz` on the server (sending from this PC) is not supported yet and is cancelled automatically; use SFTP to send files.
+- ZCOMMAND, a server asking to run a command on this PC, is refused.
+
+## ZMODEM uploads (rz)
+
+- Run `rz` on the server and a window asks for the files to send (several can be picked); closing it cancels. Use it to put files on devices without SFTP (network gear over Telnet or serial, embedded boards).
+- Each file shows its progress; **Ctrl+C** (or Ctrl+X, Esc) cancels. Files the server skips (e.g. one of that name exists) are marked.
+- When the server already has part of a file (`rz -r`), the rest is sent; after an error, sending goes on from where the server asks.
 
 ## Remote Desktop (RDP)
 

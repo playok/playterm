@@ -1,15 +1,20 @@
-//! Receiving files with ZMODEM: `sz file` run on the server sends files through the terminal
-//! connection (SSH, Telnet or serial), and they are saved into a folder on this PC.
+//! ZMODEM file transfers through the terminal connection (SSH, Telnet or serial): `sz file` run
+//! on the server sends files, which are saved into a folder on this PC, and `rz` takes files sent
+//! from this PC ([`Upload`]).
 //!
 //! [`Detector`] spots the start of a transfer in the output of the remote side; from there a
 //! [`Download`] takes all output until the transfer is over. It answers the sender, checks every
 //! header and data block (CRC-16 or CRC-32), asks for a resend from the last good position after
 //! an error, and writes each file under a temporary name first, so a broken transfer leaves no
-//! half file behind. Only receiving is supported; a command the sender asks to run (ZCOMMAND) is
-//! refused.
+//! half file behind. A command the sender asks to run (ZCOMMAND) is refused.
+//!
+//! An [`Upload`] offers the files the user picked one by one, starts each where the receiver
+//! asks (ZRPOS: from the start, after an error, or to resume a file it already has a part of),
+//! and streams the data in a window it keeps acknowledged (ZCRCQ), or stop-and-wait (ZCRCW) for
+//! a receiver that cannot take data while it writes.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -32,6 +37,7 @@ const ZRINIT: u8 = 1;
 const ZSINIT: u8 = 2;
 const ZACK: u8 = 3;
 const ZFILE: u8 = 4;
+const ZSKIP: u8 = 5;
 const ZNAK: u8 = 6;
 const ZABORT: u8 = 7;
 const ZFIN: u8 = 8;
@@ -61,6 +67,10 @@ const ZRUB1: u8 = b'm';
 const CANFDX: u8 = 0x01;
 const CANOVIO: u8 = 0x02;
 const CANFC32: u8 = 0x20;
+/// The receiver wants every control character escaped.
+const ESCCTL: u8 = 0x40;
+/// ZFILE ZF0: a binary file (no newline conversion).
+const ZCBIN: u8 = 1;
 
 /// Longest data block accepted (senders use up to 8 KiB).
 const MAX_BLOCK: usize = 16 * 1024;
@@ -355,6 +365,42 @@ fn bin_header(bytes: &[u8], wide: bool) -> Frame {
     if good { Frame::Header(Header { kind: bytes[0], data: [bytes[1], bytes[2], bytes[3], bytes[4]] }, wide) } else { Frame::BadHeader }
 }
 
+/// ZDLE-escapes `data` for the line: ZDLE, flow control, CR (a Telnet or terminal line may
+/// change it), DEL and 0xff (Telnet's IAC); with `ctl` every control character.
+fn escape(out: &mut Vec<u8>, data: &[u8], ctl: bool) {
+    for &b in data {
+        match b {
+            ZDLE | 0x10 | XON | XOFF | 0x90 | 0x91 | 0x93 | b'\r' | 0x8d => out.extend_from_slice(&[ZDLE, b ^ 0x40]),
+            0x7f => out.extend_from_slice(&[ZDLE, ZRUB0]),
+            0xff => out.extend_from_slice(&[ZDLE, ZRUB1]),
+            _ if ctl && b & 0x60 == 0 => out.extend_from_slice(&[ZDLE, b ^ 0x40]),
+            _ => out.push(b),
+        }
+    }
+}
+
+/// A header in binary form (the form a sender sends), with CRC-32 if `wide`.
+fn bin_frame(header: Header, wide: bool, ctl: bool) -> Vec<u8> {
+    let mut raw = vec![header.kind];
+    raw.extend_from_slice(&header.data);
+    let mut out = vec![ZPAD, ZDLE, if wide { ZBIN32 } else { ZBIN }];
+    let crc = if wide { (!crc32(!0, &raw)).to_le_bytes().to_vec() } else { crc16(0, &raw).to_be_bytes().to_vec() };
+    raw.extend(crc);
+    escape(&mut out, &raw, ctl);
+    out
+}
+
+/// A data block ending with `end` (ZCRCE, ZCRCG, ZCRCQ or ZCRCW).
+fn data_frame(data: &[u8], end: u8, wide: bool, ctl: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + data.len() / 8 + 8);
+    escape(&mut out, data, ctl);
+    out.extend_from_slice(&[ZDLE, end]);
+    let crc =
+        if wide { (!crc32(crc32(!0, data), &[end])).to_le_bytes().to_vec() } else { crc16(crc16(0, data), &[end]).to_be_bytes().to_vec() };
+    escape(&mut out, &crc, ctl);
+    out
+}
+
 // -- finding the start ------------------------------------------------------------------------
 
 /// The start of a hex header from the other side; `0` then means ZRQINIT (a sender), `1` ZRINIT
@@ -367,7 +413,7 @@ pub enum Start {
     /// `sz` on the server is sending files. `at` is where its first header begins in the chunk
     /// (0 if it began in an earlier one), `rest` where the output after its start begins.
     Download { at: usize, rest: usize },
-    /// `rz` on the server waits for files to be sent to it, which is not supported.
+    /// `rz` on the server waits for files to be sent to it (see [`Upload`]).
     Upload { at: usize, rest: usize },
 }
 
@@ -813,6 +859,463 @@ impl Drop for Download {
     }
 }
 
+// -- sending ----------------------------------------------------------------------------------
+
+/// Data per block sent (what `sz` sends; every receiver takes it).
+const SEND_BLOCK: usize = 1024;
+/// Streaming: a block asking for an acknowledgement (ZCRCQ) every this many bytes...
+const ACK_EVERY: u64 = 4 * 1024;
+/// ...and at most this much sent and not acknowledged.
+const WINDOW: u64 = 128 * 1024;
+/// Stop-and-wait (the receiver cannot take data while it writes): bytes per ZCRCW, unless it
+/// names its buffer size.
+const STOP_AND_WAIT: u64 = 8 * 1024;
+/// ZRPOS for the same position this many times in a row: the line is too bad, give up.
+const MAX_RESENDS: usize = 20;
+
+/// The first header of an upload (ZRINIT), which [`Detector`] found.
+const UPLOAD_START: &[u8] = b"**\x18B01";
+
+enum UpStage {
+    /// The receiver is waiting; the files are being picked ([`Upload::choose`]).
+    Choosing,
+    /// ZFILE sent: waiting for where to start (ZRPOS), or ZSKIP.
+    Offered,
+    /// Sending data.
+    Sending,
+    /// A block that waits for an acknowledgement (ZCRCW) was sent.
+    WaitAck,
+    /// ZEOF sent: waiting for the receiver to take the next file (ZRINIT).
+    Eof,
+    /// ZFIN sent: waiting for the receiver's ZFIN.
+    Fin,
+}
+
+struct Outgoing {
+    name: String,
+    path: PathBuf,
+    file: File,
+    size: u64,
+    /// Sent up to here...
+    pos: u64,
+    /// ...and the receiver has confirmed up to here.
+    acked: u64,
+    /// Since the last block that asked for an acknowledgement.
+    since_ack: u64,
+    /// The last ZRPOS and how many came in a row for it.
+    resends: (u64, usize),
+}
+
+/// What became of a file of an [`Upload`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Sent {
+    Done(PathBuf),
+    /// The receiver did not want it (e.g. it has a file of that name).
+    Skipped(PathBuf),
+}
+
+/// A ZMODEM upload in progress: `rz` on the server takes the files picked on this PC (see the
+/// module docs).
+pub struct Upload {
+    parser: Parser,
+    stage: UpStage,
+    /// The receiver takes CRC-32, wants control characters escaped, and how much data it takes
+    /// before it must be asked for an acknowledgement (0: any amount, while it writes).
+    crc32: bool,
+    escctl: bool,
+    streaming: bool,
+    buffer: u64,
+    queue: std::collections::VecDeque<PathBuf>,
+    file: Option<Outgoing>,
+    sent: Vec<Sent>,
+    outcome: Option<Outcome>,
+    passthrough: Vec<u8>,
+    cans: usize,
+    last_input: Instant,
+    last_retry: Instant,
+    /// The last header (and block) sent, sent again when the receiver is quiet or asks (ZNAK).
+    last_sent: Vec<u8>,
+    cancelling: Option<Instant>,
+    drain: Vec<u8>,
+}
+
+impl Upload {
+    /// Starts an upload with the output that came after the receiver's first header
+    /// ([`Detector`]). It waits for the files ([`Upload::choose`]); returns what to send.
+    pub fn begin(rest: &[u8], now: Instant) -> (Self, Vec<u8>) {
+        let mut upload = Self {
+            parser: Parser::new(),
+            stage: UpStage::Choosing,
+            crc32: false,
+            escctl: false,
+            streaming: true,
+            buffer: 0,
+            queue: Default::default(),
+            file: None,
+            sent: Vec::new(),
+            outcome: None,
+            passthrough: Vec::new(),
+            cans: 0,
+            last_input: now,
+            last_retry: now,
+            last_sent: Vec::new(),
+            cancelling: None,
+            drain: Vec::new(),
+        };
+        let mut reply = upload.feed(UPLOAD_START, now);
+        reply.extend(upload.feed(rest, now));
+        (upload, reply)
+    }
+
+    /// Whether the files are still to be picked.
+    pub fn choosing(&self) -> bool {
+        matches!(self.stage, UpStage::Choosing) && self.outcome.is_none() && self.cancelling.is_none()
+    }
+
+    /// The files to send, in order; none cancels. Returns what to send.
+    pub fn choose(&mut self, files: Vec<PathBuf>, now: Instant) -> Vec<u8> {
+        if !self.choosing() {
+            return Vec::new();
+        }
+        if files.is_empty() {
+            return self.cancel(now);
+        }
+        self.queue = files.into();
+        self.last_input = now;
+        self.last_retry = now;
+        let mut reply = Vec::new();
+        self.next_file(&mut reply);
+        reply
+    }
+
+    /// Takes output of the remote side. Returns what to send.
+    pub fn feed(&mut self, input: &[u8], now: Instant) -> Vec<u8> {
+        let mut reply = Vec::new();
+        for (i, &b) in input.iter().enumerate() {
+            if self.outcome.is_some() {
+                self.passthrough.extend_from_slice(&input[i..]);
+                break;
+            }
+            self.last_input = now;
+            if self.cancelling.is_some() {
+                self.drain(&input[i..]);
+                break;
+            }
+            self.byte(b, &mut reply);
+        }
+        self.pump(&mut reply);
+        reply
+    }
+
+    /// Sends more data if the window has room, repeats the last header when the receiver has
+    /// gone quiet, and gives up after a while. Returns what to send.
+    pub fn tick(&mut self, now: Instant) -> Vec<u8> {
+        let mut reply = Vec::new();
+        if self.outcome.is_some() {
+            return reply;
+        }
+        if let Some(since) = self.cancelling {
+            if now.duration_since(self.last_input) >= DRAIN_QUIET || now.duration_since(since) >= DRAIN_MAX {
+                self.end_cancel();
+            }
+            return reply;
+        }
+        if self.choosing() {
+            // The receiver waits as long as it likes (and gives up by itself).
+            return reply;
+        }
+        self.pump(&mut reply);
+        let quiet = now.duration_since(self.last_input);
+        if quiet >= GIVE_UP_AFTER {
+            self.fail(t("서버의 응답이 없어 중단했습니다", "The server stopped answering").into(), true, &mut reply);
+        } else if now.duration_since(self.last_input.max(self.last_retry)) >= RETRY_AFTER {
+            self.last_retry = now;
+            match (&self.stage, self.file.as_ref().map(|f| f.acked)) {
+                // Acknowledgements stopped coming: go on from the last one (a receiver that
+                // is further asks for its position).
+                (UpStage::Sending | UpStage::WaitAck, Some(acked)) => self.restart_at(acked, &mut reply),
+                _ => reply.extend_from_slice(&self.last_sent),
+            }
+        }
+        reply
+    }
+
+    /// Stops the upload (the user cancelled). Returns what tells the server to stop.
+    pub fn cancel(&mut self, now: Instant) -> Vec<u8> {
+        if self.outcome.is_none() && self.cancelling.is_none() {
+            self.file = None;
+            self.cancelling = Some(now);
+            self.last_input = now;
+        }
+        CANCEL.to_vec()
+    }
+
+    pub fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.as_ref()
+    }
+
+    /// Output that came after the transfer ended; it belongs on the screen.
+    pub fn take_passthrough(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.passthrough)
+    }
+
+    /// The files dealt with so far, in order.
+    pub fn sent(&self) -> &[Sent] {
+        &self.sent
+    }
+
+    /// The file being sent: how much of it the receiver has.
+    pub fn progress(&self) -> Option<Progress<'_>> {
+        self.file.as_ref().map(|f| Progress { name: &f.name, received: f.acked, size: Some(f.size) })
+    }
+
+    fn drain(&mut self, input: &[u8]) {
+        self.drain.extend_from_slice(input);
+        // The receiver's headers are text, so all of it after its last header's start.
+        if let Some(i) = self.drain.windows(2).rposition(|w| w == [ZPAD, ZDLE] || w == [ZDLE, ZDLE]) {
+            let end = self.drain[i..].iter().position(|&b| b == b'\n').map(|n| i + n + 1);
+            match end {
+                Some(end) => drop(self.drain.drain(..end)),
+                None => self.drain.drain(..i).for_each(drop),
+            }
+        }
+        if self.drain.len() > DRAIN_KEEP {
+            self.end_cancel();
+        }
+    }
+
+    fn end_cancel(&mut self) {
+        self.cancelling = None;
+        self.outcome = Some(Outcome::Cancelled);
+        let drain = std::mem::take(&mut self.drain);
+        let text: Vec<u8> = text_tail(&drain).iter().copied().filter(|&b| b != ZDLE && b != XON).collect();
+        self.passthrough = text;
+    }
+
+    fn byte(&mut self, b: u8, reply: &mut Vec<u8>) {
+        if b == ZDLE {
+            self.cans += 1;
+            if self.cans >= 5 {
+                self.fail(t("서버가 전송을 취소했습니다", "The server cancelled the transfer").into(), false, reply);
+                return;
+            }
+        } else {
+            self.cans = 0;
+        }
+        if matches!(self.stage, UpStage::Fin) && self.parser.idle() && b != ZPAD && !matches!(b & 0x7f, b'\r' | b'\n' | XON | XOFF) {
+            // The receiver is gone and its shell is back.
+            self.finish(reply);
+            self.passthrough.push(b);
+            return;
+        }
+        match self.parser.push(b) {
+            Some(Frame::Header(header, _)) => self.header(header, reply),
+            Some(Frame::BadHeader) if !matches!(self.stage, UpStage::Choosing) => reply.extend_from_slice(&self.last_sent),
+            _ => {}
+        }
+    }
+
+    fn header(&mut self, header: Header, reply: &mut Vec<u8>) {
+        match header.kind {
+            ZRINIT => {
+                let flags = header.data[3];
+                self.crc32 = flags & CANFC32 != 0;
+                self.escctl = flags & ESCCTL != 0;
+                self.buffer = u16::from_le_bytes([header.data[0], header.data[1]]) as u64;
+                self.streaming = self.buffer == 0 && flags & CANFDX != 0 && flags & CANOVIO != 0;
+                match self.stage {
+                    UpStage::Eof => {
+                        if let Some(file) = self.file.take() {
+                            self.sent.push(Sent::Done(file.path));
+                        }
+                        self.next_file(reply);
+                    }
+                    // It did not get the offer, or the end.
+                    UpStage::Offered | UpStage::Fin => reply.extend_from_slice(&self.last_sent),
+                    _ => {}
+                }
+            }
+            ZRPOS => {
+                let pos = header.position() as u64;
+                if !matches!(self.stage, UpStage::Offered | UpStage::Sending | UpStage::WaitAck | UpStage::Eof) {
+                    return;
+                }
+                let Some(file) = &mut self.file else { return };
+                if pos > file.size {
+                    self.fail(tr!("서버가 파일 크기를 넘는 위치({pos})를 요청했습니다", "The server asked for a position ({pos}) past the end of the file"), true, reply);
+                    return;
+                }
+                if !matches!(self.stage, UpStage::Offered) {
+                    file.resends = if file.resends.0 == pos { (pos, file.resends.1 + 1) } else { (pos, 1) };
+                    if file.resends.1 > MAX_RESENDS {
+                        self.fail(t("오류가 계속되어 중단했습니다", "Too many errors on the line").into(), true, reply);
+                        return;
+                    }
+                }
+                self.restart_at(pos, reply);
+            }
+            ZACK => {
+                let pos = header.position() as u64;
+                if let Some(file) = &mut self.file
+                    && pos <= file.pos
+                {
+                    file.acked = file.acked.max(pos);
+                    if matches!(self.stage, UpStage::WaitAck) && pos == file.pos {
+                        self.stage = UpStage::Sending;
+                        self.send(bin_frame(Header::at(ZDATA, pos), self.crc32, self.escctl), reply);
+                    }
+                }
+            }
+            ZSKIP => {
+                if matches!(self.stage, UpStage::Offered | UpStage::Sending | UpStage::WaitAck | UpStage::Eof)
+                    && let Some(file) = self.file.take()
+                {
+                    self.sent.push(Sent::Skipped(file.path));
+                    self.next_file(reply);
+                }
+            }
+            ZFIN => {
+                if matches!(self.stage, UpStage::Fin) {
+                    self.finish(reply);
+                }
+            }
+            ZNAK => reply.extend_from_slice(&self.last_sent),
+            ZABORT | ZCAN | ZFERR => self.fail(t("서버가 전송을 중단했습니다", "The server stopped the transfer").into(), false, reply),
+            _ => {}
+        }
+    }
+
+    /// Offers the next file, or ends the session when there is none.
+    fn next_file(&mut self, reply: &mut Vec<u8>) {
+        if let Some(path) = self.queue.pop_front() {
+            let opened = File::open(&path).and_then(|file| {
+                let meta = file.metadata()?;
+                if meta.is_dir() {
+                    return Err(io::Error::other(t("폴더는 보낼 수 없습니다", "a folder cannot be sent")));
+                }
+                Ok((file, meta))
+            });
+            let (file, meta) = match opened {
+                Ok(f) => f,
+                Err(e) => {
+                    let name = path.display().to_string();
+                    self.fail(tr!("{name} 을(를) 열 수 없습니다: {e}", "Cannot open {name}: {e}"), true, reply);
+                    return;
+                }
+            };
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+            let size = meta.len();
+            let mtime = meta.modified().ok().and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+            let left_bytes: u64 = size + self.queue.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum::<u64>();
+            let mut info = name.as_bytes().to_vec();
+            info.push(0);
+            info.extend_from_slice(format!("{size} {mtime:o} 100644 0 {} {left_bytes}", self.queue.len() + 1).as_bytes());
+            info.push(0);
+            let frame = [
+                bin_frame(Header { kind: ZFILE, data: [0, 0, 0, ZCBIN] }, self.crc32, self.escctl),
+                data_frame(&info, ZCRCW, self.crc32, self.escctl),
+            ]
+            .concat();
+            self.file = Some(Outgoing { name, path, file, size, pos: 0, acked: 0, since_ack: 0, resends: (0, 0) });
+            self.stage = UpStage::Offered;
+            self.send(frame, reply);
+            return;
+        }
+        self.stage = UpStage::Fin;
+        self.send(Header::new(ZFIN).hex(), reply);
+    }
+
+    /// Sends the data from `pos` on (where the receiver asked).
+    fn restart_at(&mut self, pos: u64, reply: &mut Vec<u8>) {
+        let Some(file) = &mut self.file else { return };
+        if let Err(e) = file.file.seek(SeekFrom::Start(pos)) {
+            let name = file.name.clone();
+            self.fail(tr!("{name} 을(를) 읽을 수 없습니다: {e}", "Cannot read {name}: {e}"), true, reply);
+            return;
+        }
+        file.pos = pos;
+        file.acked = pos;
+        file.since_ack = 0;
+        self.stage = UpStage::Sending;
+        self.send(bin_frame(Header::at(ZDATA, pos), self.crc32, self.escctl), reply);
+    }
+
+    /// Sends data while the window has room; at the end of the file, ZEOF.
+    fn pump(&mut self, reply: &mut Vec<u8>) {
+        if !matches!(self.stage, UpStage::Sending) || self.outcome.is_some() || self.cancelling.is_some() {
+            return;
+        }
+        let (wide, ctl, streaming) = (self.crc32, self.escctl, self.streaming);
+        let window = if streaming { WINDOW } else if self.buffer > 0 { self.buffer.min(STOP_AND_WAIT) } else { STOP_AND_WAIT };
+        let Some(file) = &mut self.file else { return };
+        let mut buf = vec![0u8; SEND_BLOCK];
+        loop {
+            if streaming && file.pos - file.acked >= WINDOW {
+                return;
+            }
+            let want = (SEND_BLOCK as u64).min(file.size - file.pos).min(window.saturating_sub(file.since_ack).max(1)) as usize;
+            let mut got = 0;
+            while got < want {
+                match file.file.read(&mut buf[got..want]) {
+                    Ok(0) => break,
+                    Ok(n) => got += n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => {
+                        let name = file.name.clone();
+                        self.fail(tr!("{name} 을(를) 읽을 수 없습니다: {e}", "Cannot read {name}: {e}"), true, reply);
+                        return;
+                    }
+                }
+            }
+            file.pos += got as u64;
+            file.since_ack += got as u64;
+            // A file that shrank while being sent ends where its data ends.
+            let at_end = file.pos >= file.size || got < want;
+            if at_end {
+                file.size = file.pos;
+                reply.extend(data_frame(&buf[..got], ZCRCE, wide, ctl));
+                let eof = bin_frame(Header::at(ZEOF, file.pos), wide, ctl);
+                self.stage = UpStage::Eof;
+                self.send(eof, reply);
+                return;
+            }
+            if !streaming && file.since_ack >= window {
+                file.since_ack = 0;
+                reply.extend(data_frame(&buf[..got], ZCRCW, wide, ctl));
+                self.stage = UpStage::WaitAck;
+                // Repeated from the last acknowledged position if it gets lost.
+                self.last_sent = bin_frame(Header::at(ZDATA, file.acked), wide, ctl);
+                return;
+            }
+            let end = if file.since_ack >= ACK_EVERY {
+                file.since_ack = 0;
+                ZCRCQ
+            } else {
+                ZCRCG
+            };
+            reply.extend(data_frame(&buf[..got], end, wide, ctl));
+        }
+    }
+
+    fn finish(&mut self, reply: &mut Vec<u8>) {
+        reply.extend_from_slice(b"OO");
+        self.outcome = Some(Outcome::Finished);
+    }
+
+    fn send(&mut self, bytes: Vec<u8>, reply: &mut Vec<u8>) {
+        reply.extend_from_slice(&bytes);
+        self.last_sent = bytes;
+    }
+
+    fn fail(&mut self, message: String, tell_receiver: bool, reply: &mut Vec<u8>) {
+        self.file = None;
+        self.outcome = Some(Outcome::Failed(message));
+        if tell_receiver {
+            reply.extend_from_slice(CANCEL);
+        }
+    }
+}
+
 /// The end of `bytes` that reads as text (printable ASCII, UTF-8, line ends, escape
 /// sequences, echoed CAN), without the binary data before it.
 fn text_tail(bytes: &[u8]) -> &[u8] {
@@ -943,42 +1446,16 @@ mod tests {
 
     // A small ZMODEM sender, to drive the receiver.
 
-    fn escape(out: &mut Vec<u8>, data: &[u8]) {
-        for &b in data {
-            match b {
-                ZDLE | 0x10 | XON | XOFF | 0x90 | 0x91 | 0x93 => out.extend_from_slice(&[ZDLE, b ^ 0x40]),
-                0x7f => out.extend_from_slice(&[ZDLE, ZRUB0]),
-                0xff => out.extend_from_slice(&[ZDLE, ZRUB1]),
-                _ => out.push(b),
-            }
-        }
-    }
-
     fn hex(kind: u8, data: [u8; 4]) -> Vec<u8> {
         Header { kind, data }.hex()
     }
 
     fn bin(kind: u8, pos: u32, wide: bool) -> Vec<u8> {
-        let mut raw = vec![kind];
-        raw.extend_from_slice(&pos.to_le_bytes());
-        let mut out = vec![ZPAD, ZDLE, if wide { ZBIN32 } else { ZBIN }];
-        let crc = if wide { (!crc32(!0, &raw)).to_le_bytes().to_vec() } else { crc16(0, &raw).to_be_bytes().to_vec() };
-        raw.extend(crc);
-        escape(&mut out, &raw);
-        out
+        bin_frame(Header::at(kind, pos as u64), wide, false)
     }
 
     fn block(data: &[u8], end: u8, wide: bool) -> Vec<u8> {
-        let mut out = Vec::new();
-        escape(&mut out, data);
-        out.extend_from_slice(&[ZDLE, end]);
-        let crc = if wide {
-            (!crc32(crc32(!0, data), &[end])).to_le_bytes().to_vec()
-        } else {
-            crc16(crc16(0, data), &[end]).to_be_bytes().to_vec()
-        };
-        escape(&mut out, &crc);
-        out
+        data_frame(data, end, wide, false)
     }
 
     /// The headers in what the receiver sent.
@@ -1192,6 +1669,275 @@ mod tests {
         download.feed(&hex(ZFIN, [0; 4]), start);
         download.tick(start + OO_WAIT);
         assert_eq!(download.outcome(), Some(&Outcome::Finished));
+    }
+
+    // -- sending --
+
+    /// Runs `upload` against `download` (this module's own receiver) until both are over;
+    /// `damage` may change what the sender sends on its way.
+    fn exchange(upload: &mut Upload, download: &mut Download, first: Vec<u8>, mut damage: impl FnMut(&mut Vec<u8>)) {
+        let mut now = Instant::now();
+        let mut to_receiver = first;
+        for _ in 0..100_000 {
+            damage(&mut to_receiver);
+            let mut to_sender = Vec::new();
+            for chunk in to_receiver.chunks(700) {
+                to_sender.extend(download.feed(chunk, now));
+            }
+            to_sender.extend(download.tick(now));
+            to_receiver = upload.feed(&to_sender, now);
+            to_receiver.extend(upload.tick(now));
+            if upload.outcome().is_some() && download.outcome().is_some() {
+                return;
+            }
+            if to_receiver.is_empty() && to_sender.is_empty() {
+                // Nothing moves: let time pass (retries).
+                now += Duration::from_secs(1);
+            }
+        }
+        panic!("the transfer did not end");
+    }
+
+    /// An upload to this module's receiver: `rz` answered by a [`Download`].
+    fn start_upload(dir: &Path) -> (Upload, Download) {
+        let now = Instant::now();
+        let (download, rinit) = Download::begin(dir.to_owned(), b"000000000000\r\n", now);
+        let Some(Start::Upload { rest, .. }) = Detector::default().scan(&rinit) else { panic!("no ZRINIT in {rinit:?}") };
+        let (upload, reply) = Upload::begin(&rinit[rest..], now);
+        assert!(reply.is_empty() && upload.choosing());
+        (upload, download)
+    }
+
+    #[test]
+    fn sends_files_to_the_receiver() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let big = all_bytes(300_000);
+        let control: Vec<u8> = (0..=255u8).cycle().take(5000).collect();
+        for (name, data) in [("big.bin", &big[..]), ("empty", &[][..]), ("control.bin", &control[..])] {
+            std::fs::write(src.path().join(name), data).unwrap();
+        }
+        let (mut upload, mut download) = start_upload(dst.path());
+        let first = upload.choose(["big.bin", "empty", "control.bin"].map(|n| src.path().join(n)).to_vec(), Instant::now());
+        exchange(&mut upload, &mut download, first, |_| {});
+        assert_eq!(upload.outcome(), Some(&Outcome::Finished));
+        assert_eq!(download.outcome(), Some(&Outcome::Finished));
+        assert_eq!(upload.sent().len(), 3);
+        assert_eq!(std::fs::read(dst.path().join("big.bin")).unwrap(), big);
+        assert_eq!(std::fs::read(dst.path().join("empty")).unwrap(), b"");
+        assert_eq!(std::fs::read(dst.path().join("control.bin")).unwrap(), control);
+    }
+
+    #[test]
+    fn damaged_data_is_sent_again() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let data = all_bytes(200_000);
+        std::fs::write(src.path().join("a.bin"), &data).unwrap();
+        let (mut upload, mut download) = start_upload(dst.path());
+        let first = upload.choose(vec![src.path().join("a.bin")], Instant::now());
+        // Every few rounds a byte of the data is changed on the way, and some are lost.
+        let mut round = 0;
+        exchange(&mut upload, &mut download, first, |bytes| {
+            round += 1;
+            if bytes.len() > 5000 && round % 3 == 0 {
+                bytes[2500] ^= 0x55;
+            }
+            if bytes.len() > 9000 && round % 7 == 0 {
+                bytes.drain(4000..4100);
+            }
+        });
+        assert_eq!(upload.outcome(), Some(&Outcome::Finished));
+        assert_eq!(std::fs::read(dst.path().join("a.bin")).unwrap(), data);
+    }
+
+    #[test]
+    fn upload_cancels_and_fails_cleanly() {
+        let dst = tempfile::tempdir().unwrap();
+        // Nothing picked: the receiver is told to stop.
+        let (mut upload, _) = start_upload(dst.path());
+        let now = Instant::now();
+        assert_eq!(upload.choose(Vec::new(), now), CANCEL);
+        upload.feed(b"\r\n$ ", now);
+        upload.tick(now + DRAIN_QUIET);
+        assert_eq!(upload.outcome(), Some(&Outcome::Cancelled));
+        assert_eq!(upload.take_passthrough(), b"\r\n$ ");
+
+        // A file that cannot be read.
+        let (mut upload, _) = start_upload(dst.path());
+        assert!(upload.choose(vec![dst.path().join("missing")], now).ends_with(CANCEL));
+        assert!(matches!(upload.outcome(), Some(Outcome::Failed(_))));
+
+        // The receiver skips a file it has (ZSKIP): the next one goes.
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("a"), b"aaa").unwrap();
+        std::fs::write(src.path().join("b"), b"bbb").unwrap();
+        let (mut upload, _) = start_upload(dst.path());
+        upload.choose(vec![src.path().join("a"), src.path().join("b")], now);
+        let reply = upload.feed(&hex(ZSKIP, [0; 4]), now);
+        assert_eq!(headers(&reply), [(ZFILE, u32::from_le_bytes([0, 0, 0, ZCBIN]))]);
+        assert_eq!(upload.sent(), [Sent::Skipped(src.path().join("a"))]);
+        assert_eq!(upload.progress().unwrap().name, "b");
+
+        // A quiet receiver is asked again, then given up.
+        let start = Instant::now();
+        assert!(upload.tick(start + RETRY_AFTER).windows(1).count() > 0);
+        assert!(upload.tick(start + GIVE_UP_AFTER).ends_with(CANCEL));
+        assert!(matches!(upload.outcome(), Some(Outcome::Failed(_))));
+    }
+
+    #[test]
+    fn upload_resumes_where_the_receiver_asks() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("a"), all_bytes(10_000)).unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let (mut upload, _) = start_upload(dst.path());
+        let now = Instant::now();
+        upload.choose(vec![src.path().join("a")], now);
+        // The receiver has 6000 bytes already.
+        let reply = upload.feed(&hex(ZRPOS, 6000u32.to_le_bytes()), now);
+        let mut parser = Parser::new();
+        let mut data = Vec::new();
+        let mut found = Vec::new();
+        for &b in &reply {
+            match parser.push(b) {
+                Some(Frame::Header(h, wide)) => {
+                    found.push((h.kind, h.position()));
+                    if h.kind == ZDATA {
+                        parser.expect_data(wide);
+                    }
+                }
+                Some(Frame::Block(block, end)) => {
+                    data.extend(block);
+                    if end == ZCRCG || end == ZCRCQ {
+                        parser.expect_data(true);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(found, [(ZDATA, 6000), (ZEOF, 10_000)]);
+        assert_eq!(data, all_bytes(10_000)[6000..]);
+    }
+
+    /// `rz` / `sz` of lrzsz, when installed.
+    fn lrzsz(program: &str, args: &[&str], dir: &Path) -> Option<std::process::Child> {
+        use std::process::{Command, Stdio};
+        let child = Command::new(program)
+            .args(args)
+            .current_dir(dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+        match child {
+            Ok(child) => Some(child),
+            Err(_) => {
+                eprintln!("{program} is not installed: skipped");
+                None
+            }
+        }
+    }
+
+    /// The output of a child process, as it comes.
+    fn reader(child: &mut std::process::Child) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        use std::io::Read;
+        let mut out = child.stdout.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            while let Ok(n) = out.read(&mut buf) {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        rx
+    }
+
+    #[test]
+    fn sends_to_lrzsz_rz() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let big = all_bytes(1_000_000);
+        std::fs::write(src.path().join("big.bin"), &big).unwrap();
+        std::fs::write(src.path().join("small.txt"), b"hello\r\n\x18\x11\x13\xff").unwrap();
+        // A part received earlier: `rz -r` asks to go on from its end.
+        std::fs::write(dst.path().join("big.bin"), &big[..300_000]).unwrap();
+        let Some(mut rz) = lrzsz("rz", &["-r"], dst.path()) else { return };
+        let output = reader(&mut rz);
+        let mut stdin = rz.stdin.take().unwrap();
+        let mut detector = Detector::default();
+        let mut upload: Option<Upload> = None;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            let chunk = output.recv_timeout(Duration::from_millis(50)).unwrap_or_default();
+            let now = Instant::now();
+            let reply = match &mut upload {
+                None => match detector.scan(&chunk) {
+                    Some(Start::Upload { rest, .. }) => {
+                        let (mut up, mut reply) = Upload::begin(&chunk[rest..], now);
+                        reply.extend(up.choose(vec![src.path().join("big.bin"), src.path().join("small.txt")], now));
+                        upload = Some(up);
+                        reply
+                    }
+                    _ => Vec::new(),
+                },
+                Some(up) => [up.feed(&chunk, now), up.tick(now)].concat(),
+            };
+            if !reply.is_empty() {
+                stdin.write_all(&reply).unwrap();
+            }
+            if upload.as_ref().is_some_and(|u| u.outcome().is_some()) {
+                break;
+            }
+        }
+        drop(stdin);
+        let status = rz.wait().unwrap();
+        let upload = upload.expect("rz sent no ZRINIT");
+        assert_eq!(upload.outcome(), Some(&Outcome::Finished));
+        assert!(status.success(), "rz: {status}");
+        assert_eq!(std::fs::read(dst.path().join("big.bin")).unwrap(), big);
+        assert_eq!(std::fs::read(dst.path().join("small.txt")).unwrap(), b"hello\r\n\x18\x11\x13\xff");
+    }
+
+    #[test]
+    fn receives_from_lrzsz_sz() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let data = all_bytes(500_000);
+        std::fs::write(src.path().join("a.bin"), &data).unwrap();
+        let Some(mut sz) = lrzsz("sz", &["a.bin"], src.path()) else { return };
+        let output = reader(&mut sz);
+        let mut stdin = sz.stdin.take().unwrap();
+        let mut detector = Detector::default();
+        let mut download: Option<Download> = None;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            let chunk = output.recv_timeout(Duration::from_millis(50)).unwrap_or_default();
+            let now = Instant::now();
+            let reply = match &mut download {
+                None => match detector.scan(&chunk) {
+                    Some(Start::Download { rest, .. }) => {
+                        let (down, reply) = Download::begin(dst.path().to_owned(), &chunk[rest..], now);
+                        download = Some(down);
+                        reply
+                    }
+                    _ => Vec::new(),
+                },
+                Some(down) => [down.feed(&chunk, now), down.tick(now)].concat(),
+            };
+            if !reply.is_empty() {
+                let _ = stdin.write_all(&reply);
+            }
+            if download.as_ref().is_some_and(|d| d.outcome().is_some()) {
+                break;
+            }
+        }
+        drop(stdin);
+        sz.wait().unwrap();
+        assert_eq!(download.expect("sz sent no ZRQINIT").outcome(), Some(&Outcome::Finished));
+        assert_eq!(std::fs::read(dst.path().join("a.bin")).unwrap(), data);
     }
 
     #[test]
