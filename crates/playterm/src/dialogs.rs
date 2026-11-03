@@ -556,5 +556,16 @@ pub fn secret_field(ui: &egui::Ui, field: &egui::Response) {
     }
     if field.has_focus() {
         ui.ctx().output_mut(|o| o.ime = None);
+        // Caps Lock turns a typed password into another one: say so inside the field (its
+        // right end, so the layout around it stays as it is).
+        if crate::status_bar::lock_keys().map(|(caps, _)| caps).unwrap_or(false) {
+            ui.painter().text(
+                field.rect.right_center() - egui::vec2(6.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                t("⇪ CapsLock 켜짐", "⇪ Caps Lock on"),
+                egui::TextStyle::Small.resolve(ui.style()),
+                ui.visuals().warn_fg_color,
+            );
+        }
     }
 }
