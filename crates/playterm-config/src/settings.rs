@@ -149,6 +149,20 @@ pub struct AppSettings {
     pub check_updates: bool,
     /// A release version the user chose to skip ("Skip this version"); not offered again.
     pub skipped_update: String,
+    /// Saved sites connected to lately, newest first (their ids), for the start screen.
+    pub recent_sites: Vec<String>,
+}
+
+impl AppSettings {
+    /// Recent sites kept.
+    pub const MAX_RECENT: usize = 8;
+
+    /// Puts site `id` first among the recent ones.
+    pub fn remember_site(&mut self, id: &str) {
+        self.recent_sites.retain(|r| r != id);
+        self.recent_sites.insert(0, id.to_owned());
+        self.recent_sites.truncate(Self::MAX_RECENT);
+    }
 }
 
 impl AppSettings {
@@ -219,12 +233,26 @@ impl Default for AppSettings {
             zmodem_ask: true,
             check_updates: true,
             skipped_update: String::new(),
+            recent_sites: Vec::new(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn recent_sites_newest_first_without_repeats() {
+        let mut s = AppSettings::default();
+        for id in ["a", "b", "a", "c"] {
+            s.remember_site(id);
+        }
+        assert_eq!(s.recent_sites, ["c", "a", "b"]);
+        for i in 0..20 {
+            s.remember_site(&i.to_string());
+        }
+        assert_eq!(s.recent_sites.len(), AppSettings::MAX_RECENT);
+    }
     use super::*;
 
     #[test]
