@@ -400,8 +400,29 @@ impl PlaytermApp {
         let site = self.store.get(&profile.id).map(|p| p.id.clone());
         let tab_color = profile.tab_color;
         let profile_charset = profile.charset;
+        let after_connect = self.after_connect_macro(profile);
         let profile = Some(Box::new(profile.clone()));
-        self.open_spec(SessionSpec { params, charset: profile_charset, name, log, login, site, tab_color, profile });
+        self.open_spec(SessionSpec { params, charset: profile_charset, name, log, login, site, tab_color, profile, after_connect });
+    }
+
+    /// The macro `profile` runs once connected, read for running; a missing or broken one is
+    /// reported and left out.
+    fn after_connect_macro(&mut self, profile: &SessionProfile) -> Option<(String, Vec<crate::macros::Step>)> {
+        let name = profile.after_connect_macro.trim();
+        if name.is_empty() || profile.protocol == Protocol::Rdp {
+            return None;
+        }
+        let Some(m) = self.settings.macros.iter().find(|m| m.name == name) else {
+            self.status = Some(tr!("연결 후 매크로 '{name}' 가 없어 실행하지 않습니다", "The macro '{name}' to run after connecting does not exist"));
+            return None;
+        };
+        match crate::macros::parse(&m.script) {
+            Ok(steps) => Some((m.name.clone(), steps)),
+            Err(e) => {
+                self.status = Some(tr!("연결 후 매크로 '{name}' 를 실행할 수 없습니다: {e}", "Cannot run the macro '{name}' after connecting: {e}"));
+                None
+            }
+        }
     }
 
     /// The jump host `profile` goes through, if any: a saved SSH site named (or with the id)
@@ -884,6 +905,7 @@ impl PlaytermApp {
         }
         let vault = &self.vault;
         let keys_free = !self.dock.has_focus() && self.modal.is_none();
+        manager.macros = self.settings.macros.iter().map(|m| m.name.clone()).collect();
         let result = manager.show(ctx, &self.store, &|p| has_secret(vault, p), keys_free);
         let target = self.dialog_target;
         match result {
@@ -1085,6 +1107,12 @@ impl PlaytermApp {
 
     /// Runs macro `k` in the active tab and the tabs receiving simultaneous input.
     fn run_macro(&mut self, k: usize) {
+        self.run_macro_in(k, false);
+    }
+
+    /// Runs macro `k` in the active tab and the tabs receiving simultaneous input, or with
+    /// `to_all` in every connected tab included in simultaneous input (the command bar's choice).
+    fn run_macro_in(&mut self, k: usize, to_all: bool) {
         let Some(m) = self.settings.macros.get(k) else { return };
         let steps = match crate::macros::parse(&m.script) {
             Ok(steps) => steps,
@@ -1095,7 +1123,15 @@ impl PlaytermApp {
         };
         let name = m.name.clone();
         let mut targets = vec![self.active];
-        targets.extend(self.broadcast_targets());
+        if to_all {
+            targets.extend(
+                (0..self.sessions.len())
+                    .filter(|&i| i != self.active)
+                    .filter(|&i| self.sessions[i].in_broadcast && self.sessions[i].state == SessionState::Connected),
+            );
+        } else {
+            targets.extend(self.broadcast_targets());
+        }
         for i in targets {
             if let Some(session) = self.sessions.get_mut(i) {
                 session.run_macro(&name, steps.clone());
@@ -2171,9 +2207,15 @@ impl eframe::App for PlaytermApp {
 
         if self.settings.compose_bar {
             let connected = self.sessions.iter().filter(|s| s.state == SessionState::Connected).count();
-            let send = egui::Panel::bottom("compose").show(ui, |ui| self.compose.show(ui, connected)).inner;
-            if let Some(send) = send {
-                self.send_composed(send);
+            let names: Vec<String> = self.settings.macros.iter().map(|m| m.name.clone()).collect();
+            let action = egui::Panel::bottom("compose").show(ui, |ui| self.compose.show(ui, connected, &names)).inner;
+            match action {
+                Some(compose_bar::ComposeAction::Send(send)) => self.send_composed(send),
+                Some(compose_bar::ComposeAction::Macro { k, to_all }) => self.run_macro_in(k, to_all),
+                Some(compose_bar::ComposeAction::ManageMacros) => {
+                    self.modal = Some(Modal::Macros(Box::new(crate::macros::MacroDialog::new(&self.settings.macros))))
+                }
+                None => {}
             }
         }
 

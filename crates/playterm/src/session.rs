@@ -104,6 +104,8 @@ pub struct SessionSpec {
     pub tab_color: Option<TabColor>,
     /// The profile the connection was opened from, to open it again in a new window.
     pub profile: Option<Box<SessionProfile>>,
+    /// The site's macro run once connected (and logged in): its name and steps.
+    pub after_connect: Option<(String, Vec<macros::Step>)>,
 }
 
 /// Mouse reporting state (application mouse modes).
@@ -271,6 +273,9 @@ pub struct Session {
     zmodem_up: Option<UploadRun>,
     /// A macro typing into this tab (Tools → Macros).
     macro_run: Option<MacroRun>,
+    /// The site's macro after connecting, and whether it is still to run on this connection.
+    after_connect: Option<(String, Vec<macros::Step>)>,
+    after_connect_pending: bool,
     /// The app has to ask for the files of `zmodem_up` (see [`Session::take_upload_question`]).
     upload_question: bool,
     /// `ping` running at the prompt (until it ends or Ctrl+C).
@@ -344,6 +349,8 @@ impl Session {
             zmodem_question: false,
             zmodem_up: None,
             macro_run: None,
+            after_connect: None,
+            after_connect_pending: false,
             upload_question: false,
             ping: None,
         }
@@ -352,7 +359,7 @@ impl Session {
     /// Connects this tab (from the prompt, or as a new tab), keeping the screen contents.
     pub fn start(&mut self, spec: SessionSpec, net: &NetRuntime, waker: Waker) {
         self.start_screen = false;
-        let SessionSpec { mut params, charset, name, log, login, site, tab_color, profile } = spec;
+        let SessionSpec { mut params, charset, name, log, login, site, tab_color, profile, after_connect } = spec;
         if let Some(remote) = &self.remote {
             remote.handle.close();
         }
@@ -378,6 +385,9 @@ impl Session {
         self.log_plan = log.clone();
         self.login = login.clone().map(LoginRunner::new);
         self.login_script = login;
+        self.macro_run = None;
+        self.after_connect_pending = after_connect.is_some();
+        self.after_connect = after_connect;
         self.site = site;
         self.tab_color = tab_color;
         self.profile = profile;
@@ -553,6 +563,8 @@ impl Session {
         self.auth = None;
         self.requests.clear();
         self.login = self.login_script.clone().map(LoginRunner::new);
+        self.macro_run = None;
+        self.after_connect_pending = self.after_connect.is_some();
         self.rx_bytes = 0;
         self.tx_bytes = 0;
     }
@@ -600,6 +612,7 @@ impl Session {
             site: self.site.clone(),
             tab_color: self.tab_color,
             profile: self.profile.clone(),
+            after_connect: self.after_connect.clone(),
         })
     }
 
@@ -667,6 +680,14 @@ impl Session {
             changed |= !reply.is_empty() || run.download.outcome().is_some();
             self.send_raw(reply);
             self.zmodem_show();
+        }
+        // The site's macro, once connected and the automatic login is through.
+        if self.after_connect_pending && self.state == SessionState::Connected && self.login.is_none() {
+            self.after_connect_pending = false;
+            if let Some((name, steps)) = self.after_connect.clone() {
+                self.run_macro(&name, steps);
+                changed = true;
+            }
         }
         changed |= self.macro_step();
         if let Some(run) = &mut self.zmodem_up {
@@ -1131,9 +1152,14 @@ impl Session {
         if self.state != SessionState::Connected || self.remote.is_none() {
             return;
         }
+        // The prompt already on the screen counts for a first @wait (read before the notice
+        // below moves the cursor).
+        let prompt = self.terminal.cursor_line_text();
         let line = tr!("매크로 '{name}' 실행 · 키를 누르면 중지", "Macro '{name}' running · press a key to stop");
         self.notice(&line, "36");
-        self.macro_run = Some(MacroRun::new(name.to_owned(), steps));
+        let mut run = MacroRun::new(name.to_owned(), steps);
+        run.output(&prompt);
+        self.macro_run = Some(run);
         self.macro_step();
     }
 
@@ -1171,11 +1197,30 @@ impl Session {
         for action in actions {
             match action {
                 macros::Action::Send(text) => {
-                    if let Some(remote) = &self.remote {
-                        let bytes = self.terminal.encode_input(&text);
-                        self.tx_bytes += bytes.len() as u64;
-                        remote.handle.send(bytes);
+                    let Some(remote) = &self.remote else { continue };
+                    // {user} and {password}: this connection's (the site's saved password, or
+                    // the one typed at the prompt). Never shown, never in the macro's file.
+                    let mut text = Zeroizing::new(text.replace("{user}", &remote.params.username));
+                    if text.contains("{password}") {
+                        let Some(password) = remote.params.password.clone().or_else(|| {
+                            self.login_script.as_ref().and_then(|l| l.password.as_ref().map(|p| p.to_string()))
+                        }) else {
+                            self.macro_run = None;
+                            self.notice(
+                                &tr!(
+                                    "매크로 '{name}' 중단: {{password}} 에 쓸 비밀번호가 없습니다 (저장된 비밀번호도, 입력한 비밀번호도 없음)",
+                                    "Macro '{name}' stopped: no password for {{password}} (none saved or typed)"
+                                ),
+                                "31",
+                            );
+                            return true;
+                        };
+                        let password = Zeroizing::new(password);
+                        text = Zeroizing::new(text.replace("{password}", &password));
                     }
+                    let bytes = Zeroizing::new(self.terminal.encode_input(&text));
+                    self.tx_bytes += bytes.len() as u64;
+                    remote.handle.send(bytes.to_vec());
                 }
                 macros::Action::Done => {
                     self.macro_run = None;
@@ -1620,7 +1665,11 @@ mod tests {
 
     /// A tab connected over Telnet to a fake device on this PC: it shows `router#` and answers
     /// each line with `out:<line>` and the prompt again. Returns the tab and the lines it got.
-    fn device_tab(prompt_delay: Duration) -> (Session, NetRuntime, std::sync::mpsc::Receiver<String>) {
+    fn device_tab(
+        prompt_delay: Duration,
+        password: Option<&str>,
+        after_connect: Option<(String, Vec<macros::Step>)>,
+    ) -> (Session, NetRuntime, std::sync::mpsc::Receiver<String>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1644,8 +1693,8 @@ mod tests {
             protocol: Protocol::Telnet,
             host: "127.0.0.1".into(),
             port,
-            username: String::new(),
-            password: None,
+            username: "admin".into(),
+            password: password.map(str::to_owned),
             identity_file: None,
             default_identity_files: Vec::new(),
             use_agent: false,
@@ -1671,6 +1720,7 @@ mod tests {
             site: None,
             tab_color: None,
             profile: None,
+            after_connect,
         };
         let setup = TermSetup { palette: Palette::default(), scrollback: 100 };
         let mut session = Session::connect(1, spec, &net, std::sync::Arc::new(|| {}), &setup);
@@ -1681,7 +1731,7 @@ mod tests {
     fn poll_until(session: &mut Session, done: impl Fn(&mut Session) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !done(session) {
-            assert!(Instant::now() < deadline, "timed out");
+            assert!(Instant::now() < deadline, "timed out ({:?}, macro {:?})", session.state, session.macro_name());
             session.poll(Path::new(""), false);
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -1689,7 +1739,7 @@ mod tests {
 
     #[test]
     fn macros_type_and_wait_for_the_prompt() {
-        let (mut session, _net, lines) = device_tab(Duration::from_millis(150));
+        let (mut session, _net, lines) = device_tab(Duration::from_millis(150), None, None);
         let steps = macros::parse("terminal length 0\n@wait #\nshow version\n@wait router#\n@send exi\n@send t\n@enter").unwrap();
         let start = Instant::now();
         session.run_macro("check", steps);
@@ -1711,8 +1761,27 @@ mod tests {
         // Typing stops a running macro.
         session.run_macro("long", macros::parse("a\n@sleep 5\nb").unwrap());
         assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "a");
-        session.send_bytes(b"x".to_vec());
+        session.send_bytes(b"x\r".to_vec());
         assert!(session.macro_name().is_none());
+
+        // {password} with no password known: stopped before typing anything.
+        assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "x", "what was typed went through");
+        session.run_macro("pw", macros::parse("enable\n@wait #\n{password}").unwrap());
+        poll_until(&mut session, |s| s.macro_name().is_none());
+        assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "enable");
+        assert!(lines.recv_timeout(Duration::from_millis(400)).is_err());
+    }
+
+    #[test]
+    fn a_site_macro_runs_once_connected() {
+        let steps = macros::parse("@wait #\nhello {user}\n@wait #\n{password}").unwrap();
+        let (mut session, _net, lines) = device_tab(Duration::ZERO, Some("s3cret"), Some(("site".into(), steps)));
+        poll_until(&mut session, |s| s.macro_name().is_none() && !s.after_connect_pending);
+        assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "hello admin");
+        assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "s3cret");
+        assert!(shows(&mut session, "'site'"));
+        // Its spec carries the macro, so a reconnect runs it again.
+        assert!(session.spec().unwrap().after_connect.is_some());
     }
 
     #[test]

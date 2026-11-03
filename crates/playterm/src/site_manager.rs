@@ -134,6 +134,8 @@ pub struct SiteManager {
     /// Asked for while open (the sidebar, a menu): gone to on the next frame, after asking about
     /// unsaved changes.
     pending: Option<Next>,
+    /// Names of the saved macros, for "macro after connecting" (set by the app).
+    pub macros: Vec<String>,
 }
 
 /// Whether the vault (probably) holds a password for a site.
@@ -651,7 +653,7 @@ impl SiteManager {
             .max_height(BODY_HEIGHT - 70.0)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                submit = form.ui(ui, &FormOptions { meta: true, save_password: true, folders });
+                submit = form.ui(ui, &FormOptions { meta: true, save_password: true, folders, macros: &self.macros });
             });
         ui.separator();
 

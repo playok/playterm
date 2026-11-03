@@ -1,6 +1,6 @@
 //! Command input bar under the terminal: write a command (or several lines) and send it to the
 //! current tab or to all connected tabs. Enter sends, Shift+Enter starts a new line, ↑/↓ recall
-//! earlier input.
+//! earlier input. Its Macros button runs a saved macro in the same tabs.
 
 use eframe::egui::{self, Key, Modifiers};
 use playterm_i18n::{t, tr};
@@ -8,6 +8,15 @@ use playterm_i18n::{t, tr};
 use crate::icon;
 
 const MAX_HISTORY: usize = 100;
+
+/// What the bar asks for.
+pub enum ComposeAction {
+    Send(Send),
+    /// Run saved macro `k` in the tabs the bar sends to (`to_all` as in [`Send`]).
+    Macro { k: usize, to_all: bool },
+    /// Open "Manage macros".
+    ManageMacros,
+}
 
 /// A message to type into the tabs.
 pub struct Send {
@@ -33,8 +42,10 @@ impl ComposeBar {
         self.focus_requested = true;
     }
 
-    /// `connected`: number of connected tabs (for the "all tabs" choice).
-    pub fn show(&mut self, ui: &mut egui::Ui, connected: usize) -> Option<Send> {
+    /// `connected`: number of connected tabs (for the "all tabs" choice); `macros`: the names of
+    /// the saved macros.
+    pub fn show(&mut self, ui: &mut egui::Ui, connected: usize, macros: &[String]) -> Option<ComposeAction> {
+        let mut action = None;
         let id = ui.make_persistent_id("compose-input");
         let focused = ui.memory(|m| m.has_focus(id));
         let mut send = false;
@@ -53,7 +64,7 @@ impl ComposeBar {
         }
 
         ui.horizontal(|ui| {
-            let controls = 230.0;
+            let controls = 320.0;
             let width = (ui.available_width() - controls).max(120.0);
             // The full hint would wrap (and make the bar taller) when the side panels leave
             // little room; the short one says just enough.
@@ -96,10 +107,26 @@ impl ComposeBar {
                 send = true;
                 edit.request_focus();
             }
+            ui.menu_button(t("매크로", "Macros"), |ui| {
+                for (k, name) in macros.iter().enumerate() {
+                    if ui.button(name).clicked() {
+                        action = Some(ComposeAction::Macro { k, to_all: self.to_all });
+                    }
+                }
+                if macros.is_empty() {
+                    ui.weak(t("저장된 매크로가 없습니다", "No macros saved"));
+                }
+                ui.separator();
+                if ui.button(t("매크로 관리…", "Manage macros…")).clicked() {
+                    action = Some(ComposeAction::ManageMacros);
+                }
+            })
+            .response
+            .on_hover_text(t("저장된 매크로를 보낼 탭(현재 탭 / 모든 탭)에서 실행합니다", "Runs a saved macro in the tabs the bar sends to (this tab / all tabs)"));
         });
 
         if !send {
-            return None;
+            return action;
         }
         let text = std::mem::take(&mut self.text);
         self.history_pos = None;
@@ -109,7 +136,7 @@ impl ComposeBar {
                 self.history.remove(0);
             }
         }
-        Some(Send { text, to_all: self.to_all })
+        Some(ComposeAction::Send(Send { text, to_all: self.to_all }))
     }
 
     fn history_step(&mut self, back: bool) {

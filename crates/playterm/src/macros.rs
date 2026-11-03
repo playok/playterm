@@ -11,6 +11,11 @@
 //! @send y               typed without Enter
 //! @enter                Enter alone
 //! @@reload              a line that starts with @ (typed as "@reload")
+//! @if error             the lines up to @else / @end run only if "error" came in the output
+//! @ifnot OK             since the last line typed (or did not come); blocks can nest
+//! @else
+//! @end
+//! @stop                 end here; @fail text: end here as failed, saying so
 //! ```
 //!
 //! A macro holds no passwords: it is plain text in the settings file.
@@ -35,6 +40,14 @@ pub enum Step {
     Wait(String),
     Sleep(Duration),
     Timeout(Duration),
+    /// Go on if `text` came (or with `negate`, did not come) in the output since the last line
+    /// typed; else go to step `skip_to` (after the matching @else or @end).
+    If { text: String, negate: bool, skip_to: usize },
+    /// The end of an @if's first part: go to step `skip_to` (after the @end).
+    Else { skip_to: usize },
+    End,
+    /// End the macro here: done, or with `Some(message)` failed.
+    Stop(Option<String>),
 }
 
 fn seconds(arg: &str, line: usize) -> Result<Duration, String> {
@@ -49,6 +62,8 @@ fn seconds(arg: &str, line: usize) -> Result<Duration, String> {
 /// Reads a macro's text into steps, or says which line is wrong.
 pub fn parse(script: &str) -> Result<Vec<Step>, String> {
     let mut steps = Vec::new();
+    // Open @if blocks: the step of the @if, and of its @else once seen.
+    let mut open: Vec<(usize, Option<usize>, usize)> = Vec::new();
     for (i, raw) in script.lines().enumerate() {
         let line = i + 1;
         let text = raw.trim_end_matches('\r');
@@ -64,21 +79,60 @@ pub fn parse(script: &str) -> Result<Vec<Step>, String> {
             continue;
         };
         let (word, arg) = directive.split_once(char::is_whitespace).unwrap_or((directive, ""));
-        let step = match word.to_ascii_lowercase().as_str() {
-            "wait" if !arg.trim().is_empty() => Step::Wait(arg.trim().to_owned()),
-            "wait" => return Err(tr!("{line}번째 줄: @wait 다음에 기다릴 글자를 쓰세요", "Line {line}: @wait needs the text to wait for")),
+        let needs_text = |what: &str| {
+            if arg.trim().is_empty() {
+                Err(tr!("{line}번째 줄: @{what} 다음에 글자를 쓰세요", "Line {line}: @{what} needs some text"))
+            } else {
+                Ok(arg.trim().to_owned())
+            }
+        };
+        let word = word.to_ascii_lowercase();
+        let step = match word.as_str() {
+            "wait" => Step::Wait(needs_text("wait")?),
             "sleep" => Step::Sleep(seconds(arg, line)?),
             "timeout" => Step::Timeout(seconds(arg, line)?),
             "send" => Step::Send(arg.to_owned()),
             "enter" => Step::Send("\r".into()),
+            "if" | "ifnot" => {
+                open.push((steps.len(), None, line));
+                Step::If { text: needs_text(&word)?, negate: word == "ifnot", skip_to: 0 }
+            }
+            "else" => match open.last_mut() {
+                Some((_, els @ None, _)) => {
+                    *els = Some(steps.len());
+                    Step::Else { skip_to: 0 }
+                }
+                _ => return Err(tr!("{line}번째 줄: 짝이 되는 @if 가 없는 @else", "Line {line}: @else without its @if")),
+            },
+            "end" => {
+                let Some((at_if, at_else, _)) = open.pop() else {
+                    return Err(tr!("{line}번째 줄: 짝이 되는 @if 가 없는 @end", "Line {line}: @end without its @if"));
+                };
+                let after_end = steps.len() + 1;
+                let after_else = at_else.map_or(after_end, |e| e + 1);
+                if let Step::If { skip_to, .. } = &mut steps[at_if] {
+                    *skip_to = after_else;
+                }
+                if let Some(e) = at_else
+                    && let Step::Else { skip_to } = &mut steps[e]
+                {
+                    *skip_to = after_end;
+                }
+                Step::End
+            }
+            "stop" => Step::Stop(None),
+            "fail" => Step::Stop(Some(if arg.trim().is_empty() { t("@fail", "@fail").to_owned() } else { arg.trim().to_owned() })),
             _ => {
                 return Err(tr!(
-                    "{line}번째 줄: 모르는 명령 @{word} (@wait, @sleep, @timeout, @send, @enter; 글자 @ 로 시작하는 줄은 @@)",
-                    "Line {line}: unknown @{word} (@wait, @sleep, @timeout, @send, @enter; a line starting with @ is written @@)"
+                    "{line}번째 줄: 모르는 명령 @{word} (@wait, @sleep, @timeout, @send, @enter, @if, @ifnot, @else, @end, @stop, @fail; 글자 @ 로 시작하는 줄은 @@)",
+                    "Line {line}: unknown @{word} (@wait, @sleep, @timeout, @send, @enter, @if, @ifnot, @else, @end, @stop, @fail; a line starting with @ is written @@)"
                 ));
             }
         };
         steps.push(step);
+    }
+    if let Some((_, _, line)) = open.last() {
+        return Err(tr!("{line}번째 줄의 @if 에 @end 가 없습니다", "The @if on line {line} has no @end"));
     }
     if !steps.iter().any(|s| matches!(s, Step::Send(_))) {
         return Err(t("보낼 줄이 없습니다", "There is nothing to type").into());
@@ -99,8 +153,10 @@ pub struct MacroRun {
     pub name: String,
     steps: Vec<Step>,
     next: usize,
-    /// Output since the last line typed (or the last @wait that matched), for @wait.
+    /// Output since the last line typed, in lower case (matching ignores case), for @wait and
+    /// @if; @wait looks only after `wait_from`, where the last @wait matched.
     seen: String,
+    wait_from: usize,
     timeout: Duration,
     waiting_since: Option<Instant>,
     sleep_until: Option<Instant>,
@@ -108,18 +164,28 @@ pub struct MacroRun {
 
 impl MacroRun {
     pub fn new(name: String, steps: Vec<Step>) -> Self {
-        Self { name, steps, next: 0, seen: String::new(), timeout: DEFAULT_TIMEOUT, waiting_since: None, sleep_until: None }
+        Self {
+            name,
+            steps,
+            next: 0,
+            seen: String::new(),
+            wait_from: 0,
+            timeout: DEFAULT_TIMEOUT,
+            waiting_since: None,
+            sleep_until: None,
+        }
     }
 
     /// Output of the remote side (as text).
     pub fn output(&mut self, text: &str) {
-        self.seen.push_str(text);
+        self.seen.push_str(&text.to_lowercase());
         if self.seen.len() > SEEN_MAX {
             let mut cut = self.seen.len() - SEEN_MAX / 2;
             while !self.seen.is_char_boundary(cut) {
                 cut += 1;
             }
             self.seen.drain(..cut);
+            self.wait_from = self.wait_from.saturating_sub(cut);
         }
     }
 
@@ -127,10 +193,12 @@ impl MacroRun {
     pub fn step(&mut self, now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
         while let Some(step) = self.steps.get(self.next) {
+            let mut next = self.next + 1;
             match step {
                 Step::Send(text) => {
                     actions.push(Action::Send(text.clone()));
                     self.seen.clear();
+                    self.wait_from = 0;
                 }
                 Step::Timeout(d) => self.timeout = *d,
                 Step::Sleep(d) => {
@@ -140,35 +208,46 @@ impl MacroRun {
                     }
                     self.sleep_until = None;
                 }
-                Step::Wait(text) => {
-                    let found = self.seen.to_lowercase().find(&text.to_lowercase()).map(|at| at + text.len());
-                    match found {
-                        Some(end) => {
-                            // The next @wait looks only after this match.
-                            let end = (end..=self.seen.len()).find(|&i| self.seen.is_char_boundary(i)).unwrap_or(self.seen.len());
-                            self.seen.drain(..end);
-                            self.waiting_since = None;
+                Step::Wait(text) => match self.seen[self.wait_from..].find(&text.to_lowercase()) {
+                    Some(at) => {
+                        self.wait_from += at + text.to_lowercase().len();
+                        self.waiting_since = None;
+                    }
+                    None => {
+                        let since = *self.waiting_since.get_or_insert(now);
+                        if now.duration_since(since) >= self.timeout {
+                            let secs = self.timeout.as_secs_f64();
+                            actions.push(Action::Failed(tr!(
+                                "'{text}' 이(가) {secs}초 안에 나오지 않았습니다",
+                                "'{text}' did not come within {secs} s"
+                            )));
+                            self.next = self.steps.len();
                         }
-                        None => {
-                            let since = *self.waiting_since.get_or_insert(now);
-                            if now.duration_since(since) >= self.timeout {
-                                let secs = self.timeout.as_secs_f64();
-                                actions.push(Action::Failed(tr!(
-                                    "'{text}' 이(가) {secs}초 안에 나오지 않았습니다",
-                                    "'{text}' did not come within {secs} s"
-                                )));
-                                self.next = self.steps.len();
-                            }
-                            return actions;
-                        }
+                        return actions;
+                    }
+                },
+                Step::If { text, negate, skip_to } => {
+                    if self.seen.contains(&text.to_lowercase()) == *negate {
+                        next = *skip_to;
                     }
                 }
+                Step::Else { skip_to } => next = *skip_to,
+                Step::End => {}
+                Step::Stop(failure) => {
+                    self.next = self.steps.len();
+                    actions.push(match failure {
+                        Some(message) => Action::Failed(message.clone()),
+                        None => Action::Done,
+                    });
+                    return actions;
+                }
             }
-            self.next += 1;
+            self.next = next;
         }
         actions.push(Action::Done);
         actions
     }
+
 
     /// When it next has something to do by itself (a pause or a time limit ending).
     pub fn wake_at(&self) -> Option<Instant> {
@@ -278,11 +357,13 @@ impl MacroDialog {
                             "줄마다 입력하고 Enter · @wait 글자: 출력에 나올 때까지 기다림\n\
                              @timeout 초: 기다리는 시간(기본 30) · @sleep 초: 잠깐 멈춤\n\
                              @send 글자: Enter 없이 입력 · @enter: Enter 만 · # 주석 · @@: @ 로 시작하는 줄\n\
-                             비밀번호는 넣지 마세요 (설정 파일에 그대로 저장됩니다).",
+                             @if 글자 / @ifnot 글자 … @else … @end: 마지막 입력 뒤 출력에 따라 · @stop · @fail 메시지\n\
+                             {user} {password}: 그 탭의 사용자·비밀번호 (비밀번호를 직접 적지 마세요).",
                             "Each line is typed with Enter · @wait text: wait until it comes in the output\n\
                              @timeout s: how long to wait (default 30) · @sleep s: pause\n\
                              @send text: type without Enter · @enter: Enter alone · # comment · @@: a line starting with @\n\
-                             Do not put passwords here (the settings file keeps them as they are).",
+                             @if text / @ifnot text … @else … @end: by the output since the last line · @stop · @fail message\n\
+                             {user} {password}: the tab's user and password (do not write passwords here).",
                         ))
                         .small()
                         .weak(),
@@ -385,6 +466,32 @@ mod tests {
             });
             out.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn branches_on_the_output() {
+        let script = "show int\n@wait #\n@if down\nno shutdown\n@else\n@ifnot UP\n@fail neither\n@end\n@end\nexit";
+        let run = |output: &str| {
+            let mut run = MacroRun::new("m".into(), parse(script).unwrap());
+            let now = Instant::now();
+            let mut sent: Vec<String> = sends(&run.step(now)).iter().map(|s| s.to_string()).collect();
+            run.output(output);
+            let actions = run.step(now);
+            sent.extend(sends(&actions).iter().map(|s| s.to_string()));
+            let failed = actions.iter().find_map(|a| match a {
+                Action::Failed(m) => Some(m.clone()),
+                _ => None,
+            });
+            (sent, failed)
+        };
+        assert_eq!(run("Gi0/1 is down\r\nrouter#"), (vec!["show int\r".into(), "no shutdown\r".into(), "exit\r".into()], None));
+        assert_eq!(run("Gi0/1 is up\r\nrouter#"), (vec!["show int\r".into(), "exit\r".into()], None));
+        assert_eq!(run("router#"), (vec!["show int\r".into()], Some("neither".into())));
+
+        assert!(parse("a\n@if x\nb").is_err(), "no @end");
+        assert!(parse("a\n@end").is_err());
+        assert!(parse("a\n@if x\n@else\n@else\n@end").is_err());
+        assert!(matches!(MacroRun::new("m".into(), parse("a\n@stop\nb").unwrap()).step(Instant::now()).as_slice(), [Action::Send(_), Action::Done]));
     }
 
     #[test]
