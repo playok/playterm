@@ -279,6 +279,7 @@ mod tests {
             zmodem_ask: false,
             check_updates: false,
             skipped_update: "0.3.0".into(),
+            recent_sites: vec!["w1".into()],
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);
