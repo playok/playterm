@@ -154,6 +154,17 @@ pub struct AppSettings {
     /// macOS: Option+key is sent as Meta (ESC and the key), like Alt elsewhere. Off: Option
     /// types the character macOS gives it (é, ©, …).
     pub option_as_meta: bool,
+    /// Named command sequences run in a tab (Tools → Macros), in menu order.
+    pub macros: Vec<Macro>,
+}
+
+/// A macro: lines to type, with `@wait`, `@sleep`, … steps between them (see the app's
+/// `macros` module). Holds no passwords.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Macro {
+    pub name: String,
+    pub script: String,
 }
 
 impl AppSettings {
@@ -238,6 +249,7 @@ impl Default for AppSettings {
             skipped_update: String::new(),
             recent_sites: Vec::new(),
             option_as_meta: true,
+            macros: Vec::new(),
         }
     }
 }
@@ -285,6 +297,7 @@ mod tests {
             skipped_update: "0.3.0".into(),
             recent_sites: vec!["w1".into()],
             option_as_meta: false,
+            macros: vec![Macro { name: "점검".into(), script: "show version\n@wait #\nshow ip int brief".into() }],
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);

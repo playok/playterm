@@ -82,6 +82,10 @@ pub enum Command {
     CheckUpdates,
     /// The dialog of the newer release found earlier.
     ShowUpdate,
+    /// Run macro `k` (of the settings) in the active tab and the tabs receiving simultaneous input.
+    RunMacro(usize),
+    StopMacro,
+    Macros,
 }
 
 /// What the menus need to know to enable and check their items.
@@ -101,6 +105,7 @@ pub struct MenuState<'a> {
     pub paste_hint: &'static str,
     /// A newer release that was found and not installed or skipped.
     pub update: Option<String>,
+    pub macros: &'a [playterm_config::Macro],
 }
 
 /// Adds a menu item; a click records `command` and closes the menu.
@@ -237,6 +242,19 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 st.sftp_panel,
                 Command::ToggleSftpPanel,
             );
+            ui.menu_button(t("매크로", "Macros"), |ui| {
+                let connected = active.is_some_and(|s| s.state == crate::session::SessionState::Connected);
+                for (k, m) in st.macros.iter().enumerate() {
+                    item(ui, out, &m.name, "", connected, Command::RunMacro(k));
+                }
+                if st.macros.is_empty() {
+                    ui.weak(t("저장된 매크로가 없습니다", "No macros saved"));
+                }
+                ui.separator();
+                let running = active.is_some_and(|s| s.macro_name().is_some());
+                item(ui, out, t("실행 중인 매크로 중지", "Stop the running macro"), "", running, Command::StopMacro);
+                item(ui, out, t("매크로 관리…", "Manage macros…"), "", true, Command::Macros);
+            });
             ui.separator();
             match st.vault {
                 VaultState::Missing => {

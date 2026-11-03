@@ -138,6 +138,7 @@ enum Modal {
     Licenses(Box<LicensesDialog>),
     Settings(Box<SettingsDialog>),
     Import(Box<ImportDialog>),
+    Macros(Box<crate::macros::MacroDialog>),
 }
 
 /// Font size changes from zooming are saved once they have settled for this long.
@@ -1082,6 +1083,26 @@ impl PlaytermApp {
         }
     }
 
+    /// Runs macro `k` in the active tab and the tabs receiving simultaneous input.
+    fn run_macro(&mut self, k: usize) {
+        let Some(m) = self.settings.macros.get(k) else { return };
+        let steps = match crate::macros::parse(&m.script) {
+            Ok(steps) => steps,
+            Err(e) => {
+                self.status = Some(tr!("매크로 '{}' 를 실행할 수 없습니다: {e}", "Cannot run macro '{}': {e}", m.name));
+                return;
+            }
+        };
+        let name = m.name.clone();
+        let mut targets = vec![self.active];
+        targets.extend(self.broadcast_targets());
+        for i in targets {
+            if let Some(session) = self.sessions.get_mut(i) {
+                session.run_macro(&name, steps.clone());
+            }
+        }
+    }
+
     /// Repeats input typed in the active tab in the other receiving tabs.
     fn broadcast_input(&mut self, inputs: &[UserInput]) {
         if inputs.is_empty() {
@@ -1374,6 +1395,17 @@ impl PlaytermApp {
             Command::ZoomOut => self.set_font_size(self.settings.font_size.ceil() - 1.0),
             Command::ZoomReset => self.set_font_size(AppSettings::DEFAULT_FONT_SIZE),
             Command::Settings => self.modal = Some(Modal::Settings(Box::new(SettingsDialog::new(&self.settings)))),
+            Command::RunMacro(k) => self.run_macro(k),
+            Command::StopMacro => {
+                let mut targets = vec![self.active];
+                targets.extend(self.broadcast_targets());
+                for i in targets {
+                    if let Some(session) = self.sessions.get_mut(i) {
+                        session.stop_macro();
+                    }
+                }
+            }
+            Command::Macros => self.modal = Some(Modal::Macros(Box::new(crate::macros::MacroDialog::new(&self.settings.macros)))),
             Command::Shortcuts => self.modal = Some(Modal::Shortcuts),
             Command::About => self.modal = Some(Modal::About),
             Command::EditSite(id) => self.open_site_manager(Some(&id), false, None),
@@ -1419,6 +1451,14 @@ impl PlaytermApp {
                     self.modal = Some(Modal::Licenses(dialog));
                 }
             }
+            Modal::Macros(mut dialog) => match dialog.show(ctx) {
+                crate::macros::MacroDialogResult::Open => self.modal = Some(Modal::Macros(dialog)),
+                crate::macros::MacroDialogResult::Cancel => {}
+                crate::macros::MacroDialogResult::Save(macros) => {
+                    self.settings.macros = macros;
+                    self.save_settings();
+                }
+            },
             Modal::Settings(mut dialog) => match dialog.show(ctx) {
                 SettingsResult::Open => self.modal = Some(Modal::Settings(dialog)),
                 SettingsResult::Changed(s) => {
@@ -1630,6 +1670,7 @@ impl PlaytermApp {
             copy_hint: clip_keys::copy_hint(&self.settings.clipboard),
             paste_hint: clip_keys::paste_hint(&self.settings.clipboard),
             update: self.updater.pending().map(|v| v.to_string()),
+            macros: &self.settings.macros,
         };
         if let Some(command) = menu::menu_bar(ui, &state) {
             let ctx = ui.ctx().clone();
@@ -2019,6 +2060,10 @@ impl eframe::App for PlaytermApp {
             if session.in_zmodem() {
                 // Timeouts of the transfer, also while nothing arrives.
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+            if let Some(at) = session.macro_wake() {
+                // A macro's pause or time limit ends.
+                ctx.request_repaint_after(at.saturating_duration_since(Instant::now()) + Duration::from_millis(5));
             }
             if let Some(text) = session.clipboard_store.take() {
                 // A program on the remote side set the clipboard (OSC 52). Only the tab the
