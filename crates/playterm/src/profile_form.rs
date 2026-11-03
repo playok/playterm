@@ -231,6 +231,10 @@ fn rdp_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
     ui.label("");
     ui.checkbox(&mut rdp.clipboard, t("클립보드 공유 (복사·붙여넣기)", "Share the clipboard (copy and paste)"));
     ui.end_row();
+
+    ui.label("");
+    ui.checkbox(&mut rdp.sound, t("원격 컴퓨터의 소리를 이 PC 에서 재생", "Play the remote computer's sound on this PC"));
+    ui.end_row();
 }
 
 /// Swatches to pick the site's tab color, "none" first.
