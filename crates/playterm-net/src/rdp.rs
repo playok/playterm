@@ -74,11 +74,13 @@ pub struct RdpSettings {
     pub height: u16,
     /// Share the clipboard with the remote desktop.
     pub clipboard: bool,
+    /// Play the remote desktop's sound on this PC (as mstsc's "Play on this computer").
+    pub sound: bool,
 }
 
 impl Default for RdpSettings {
     fn default() -> Self {
-        Self { width: 0, height: 0, clipboard: true }
+        Self { width: 0, height: 0, clipboard: true, sound: true }
     }
 }
 
@@ -596,7 +598,7 @@ fn connector_config(params: &ConnectParams, password: &str) -> anyhow::Result<ir
         hardware_id: None,
         request_data: None,
         autologon: false,
-        enable_audio_playback: false,
+        enable_audio_playback: params.rdp.sound,
         enable_audio_capture: false,
         performance_flags: PerformanceFlags::default(),
         license_cache: None,
@@ -614,6 +616,30 @@ trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite> AsyncReadWrite for T {}
 type Upgraded = TokioFramed<Box<dyn AsyncReadWrite + Unpin + Send + Sync>>;
 
+/// The connection sequence with the channels `params` asks for: display control, and the
+/// clipboard and sound when they are on.
+fn client_connector(
+    params: &ConnectParams,
+    password: &str,
+    clipboard: Option<&(dyn CliprdrBackendFactory + Send)>,
+    client_addr: std::net::SocketAddr,
+) -> anyhow::Result<ClientConnector> {
+    let drdynvc = DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+    let mut connector = ClientConnector::new(connector_config(params, password)?, client_addr).with_static_channel(drdynvc);
+    if let Some(factory) = clipboard {
+        connector.attach_static_channel(ironrdp_cliprdr::Cliprdr::new(factory.build_cliprdr_backend()));
+    }
+    if params.rdp.sound {
+        // The audio output channel (rdpsnd), played through the system's default output with
+        // the uncompressed (PCM) formats every server offers. The output device opens when the
+        // server starts playing, so a PC without one connects all the same.
+        connector.attach_static_channel(ironrdp_rdpsnd::client::Rdpsnd::new(Box::new(
+            ironrdp_rdpsnd_native::cpal::RdpsndBackend::new(),
+        )));
+    }
+    Ok(connector)
+}
+
 /// TCP, TLS (with the certificate check) and the connection sequence up to the active session.
 async fn connect(
     params: &ConnectParams,
@@ -628,11 +654,7 @@ async fn connect(
     let client_addr = stream.local_addr()?;
     let mut framed = TokioFramed::new(stream);
 
-    let drdynvc = DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
-    let mut connector = ClientConnector::new(connector_config(params, password)?, client_addr).with_static_channel(drdynvc);
-    if let Some(factory) = clipboard {
-        connector.attach_static_channel(ironrdp_cliprdr::Cliprdr::new(factory.build_cliprdr_backend()));
-    }
+    let mut connector = client_connector(params, password, clipboard, client_addr)?;
 
     let should_upgrade = match ironrdp_tokio::connect_begin(&mut framed, &mut connector).await {
         Ok(s) => s,
@@ -914,6 +936,67 @@ fn clipboard_message(stage: &mut ActiveStage, message: ClipboardMessage) -> anyh
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sound_asks_for_the_audio_channel() {
+        let addr: std::net::SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        let mut params = ConnectParams {
+            protocol: crate::Protocol::Rdp,
+            host: "pc".into(),
+            port: 3389,
+            username: "u".into(),
+            password: None,
+            identity_file: None,
+            default_identity_files: Vec::new(),
+            use_agent: false,
+            agent_pipe: None,
+            forwards: Vec::new(),
+            serial: Default::default(),
+            keepalive: Default::default(),
+            rdp: RdpSettings::default(),
+            desktop: (1024, 768),
+            term_type: String::new(),
+            cols: 80,
+            rows: 24,
+            known_hosts: std::env::temp_dir().join("playterm-rdp-test-known"),
+            connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
+            jump: None,
+            x11: None,
+        };
+        assert!(params.rdp.sound, "on by default, as mstsc");
+        let on = client_connector(&params, "pw", None, addr).unwrap();
+        assert!(on.config.enable_audio_playback);
+        assert!(on.static_channels.get_by_type::<ironrdp_rdpsnd::client::Rdpsnd>().is_some());
+        params.rdp.sound = false;
+        let off = client_connector(&params, "pw", None, addr).unwrap();
+        assert!(!off.config.enable_audio_playback, "the server is told not to send sound");
+        assert!(off.static_channels.get_by_type::<ironrdp_rdpsnd::client::Rdpsnd>().is_none());
+    }
+
+    /// Plays a second of silence through this PC's default output, as the server's sound
+    /// would arrive (run by hand: `cargo test -p playterm-net -- --ignored plays_pcm`).
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn plays_pcm_through_the_default_output() {
+        use ironrdp_rdpsnd::client::RdpsndClientHandler as _;
+        use ironrdp_rdpsnd::pdu::{AudioFormat, WaveFormat};
+        let mut backend = ironrdp_rdpsnd_native::cpal::RdpsndBackend::new();
+        assert!(backend.get_formats().iter().any(|f| f.format == WaveFormat::PCM), "PCM is offered");
+        let format = AudioFormat {
+            format: WaveFormat::PCM,
+            n_channels: 2,
+            n_samples_per_sec: 44_100,
+            n_avg_bytes_per_sec: 44_100 * 4,
+            n_block_align: 4,
+            bits_per_sample: 16,
+            data: None,
+        };
+        for _ in 0..10 {
+            backend.wave(&format, 0, std::borrow::Cow::Owned(vec![0u8; 44_100 * 4 / 10]));
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        backend.close();
+    }
 
     #[test]
     fn server_desktop_sizes_are_bounded() {
