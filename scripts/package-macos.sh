@@ -8,8 +8,12 @@
 #   RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh   # a toolchain other than the default
 #
 # The app is signed ad hoc unless $MACOS_SIGN_IDENTITY names a "Developer ID Application"
-# certificate in the keychain; it is then signed with the hardened runtime and a timestamp,
-# ready for notarization (xcrun notarytool submit <zip> --wait, then xcrun stapler staple).
+# certificate in the keychain; it is then signed with the hardened runtime and a timestamp.
+# With $MACOS_NOTARY_APPLE_ID, $MACOS_NOTARY_TEAM_ID and $MACOS_NOTARY_PASSWORD (an app-specific
+# password) too, each app is notarized (xcrun notarytool submit --wait), the ticket stapled to it
+# and Gatekeeper's verdict checked, before it is zipped again. The app needs no entitlements under
+# the hardened runtime (no JIT, no unsigned libraries; network and serial ports need none outside
+# the App Sandbox).
 # An app signed ad hoc and downloaded from the internet is stopped by Gatekeeper on first run
 # (right-click → Open, or System Settings → Privacy & Security → Open Anyway).
 #
@@ -25,6 +29,34 @@ version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
 [ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
 
 targets=${*:-arm64 x64}
+
+notarize=
+if [ -n "${MACOS_NOTARY_APPLE_ID:-}${MACOS_NOTARY_TEAM_ID:-}${MACOS_NOTARY_PASSWORD:-}" ]; then
+    [ -n "${MACOS_NOTARY_APPLE_ID:-}" ] && [ -n "${MACOS_NOTARY_TEAM_ID:-}" ] && [ -n "${MACOS_NOTARY_PASSWORD:-}" ] ||
+        { echo "notarization needs MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID and MACOS_NOTARY_PASSWORD" >&2; exit 1; }
+    [ -n "${MACOS_SIGN_IDENTITY:-}" ] ||
+        { echo "notarization needs a Developer ID signature (MACOS_SIGN_IDENTITY)" >&2; exit 1; }
+    notarize=1
+fi
+
+# notarize_app <app> <zip>: has Apple notarize the zipped app, staples the ticket to the app and
+# checks that Gatekeeper accepts it.
+notarize_app() {
+    echo "== notarizing $(basename "$2")"
+    result=$(xcrun notarytool submit "$2" --apple-id "$MACOS_NOTARY_APPLE_ID" --team-id "$MACOS_NOTARY_TEAM_ID" \
+        --password "$MACOS_NOTARY_PASSWORD" --wait --timeout 1h --output-format plist)
+    status=$(printf '%s' "$result" | plutil -extract status raw -o - -)
+    if [ "$status" != Accepted ]; then
+        id=$(printf '%s' "$result" | plutil -extract id raw -o - - 2>/dev/null || true)
+        echo "notarization: $status" >&2
+        [ -n "$id" ] && xcrun notarytool log "$id" --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" --password "$MACOS_NOTARY_PASSWORD" >&2
+        exit 1
+    fi
+    xcrun stapler staple "$1"
+    xcrun stapler validate "$1"
+    spctl --assess --type execute --verbose=2 "$1"
+}
 # Oldest macOS the app runs on (also the Rust minimum for Apple silicon).
 min_macos=11.0
 export MACOSX_DEPLOYMENT_TARGET=$min_macos
@@ -126,6 +158,12 @@ for arch in $targets; do
     rm -f "$dist/$zip"
     # ditto keeps the bundle's symbolic links and extended attributes (the signature).
     ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/$zip"
+    if [ -n "$notarize" ]; then
+        notarize_app "$app" "$dist/$zip"
+        # Again, with the ticket in the app (it then opens without asking Apple first).
+        rm -f "$dist/$zip"
+        ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/$zip"
+    fi
     echo "== $zip ($(lipo -archs "$app/Contents/MacOS/playterm"))"
     zips="$zips $zip"
 done

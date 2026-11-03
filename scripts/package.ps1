@@ -4,6 +4,12 @@
 #   pwsh scripts\package.ps1 -Targets x64    # x64 only
 #   pwsh scripts\package.ps1 -Upx            # executables compressed with UPX
 #   pwsh scripts\package.ps1 -Sign           # SHA256SUMS.txt must be signed (fails without a key)
+#   pwsh scripts\package.ps1 -CodeSign       # playterm.exe code-signed (fails without a certificate)
+#
+# -CodeSign signs each playterm.exe with signtool (SHA-256, RFC 3161 timestamp) after UPX, so the
+# signature covers the compressed file: the certificate is a .pfx in $env:WINDOWS_CERT_PFX_FILE
+# or base64 in $env:WINDOWS_CERT_PFX, its password in $env:WINDOWS_CERT_PASSWORD, the timestamp
+# server $env:WINDOWS_TIMESTAMP_URL (default DigiCert's). signtool comes from the Windows SDK.
 #
 # SHA256SUMS.txt is signed (SHA256SUMS.txt.sig, Ed25519, by crates/playterm-sign) whenever the
 # private key is given in $env:PLAYTERM_SIGNING_KEY (hex) or $env:PLAYTERM_SIGNING_KEY_FILE; the
@@ -23,7 +29,8 @@ param(
     [ValidateSet("arm64", "x64")]
     [string[]]$Targets = @("arm64", "x64"),
     [switch]$Upx,
-    [switch]$Sign
+    [switch]$Sign,
+    [switch]$CodeSign
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
@@ -112,10 +119,47 @@ $triples = @{ arm64 = "aarch64-pc-windows-msvc"; x64 = "x86_64-pc-windows-msvc" 
 $dist = Join-Path $root "dist"
 New-Item -ItemType Directory -Force $dist | Out-Null
 
+# signtool.exe of the newest Windows SDK (x64 tools; they sign ARM64 files too).
+function Get-SignTool {
+    $found = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($found) { return $found.Source }
+    $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+    $tool = Get-ChildItem -Path $kits -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like "*\x64\signtool.exe" } |
+        Sort-Object FullName -Descending | Select-Object -First 1
+    if (-not $tool) { throw "-CodeSign: signtool.exe not found (install the Windows SDK)" }
+    return $tool.FullName
+}
+
+# The certificate for -CodeSign as a file (a temporary one for $env:WINDOWS_CERT_PFX).
+function Get-CodeSignCert {
+    if ($env:WINDOWS_CERT_PFX_FILE) {
+        if (-not (Test-Path -LiteralPath $env:WINDOWS_CERT_PFX_FILE -PathType Leaf)) { throw "-CodeSign: $env:WINDOWS_CERT_PFX_FILE not found" }
+        return @{ Path = $env:WINDOWS_CERT_PFX_FILE; Temporary = $false }
+    }
+    if (-not $env:WINDOWS_CERT_PFX) { throw "-CodeSign: set WINDOWS_CERT_PFX (base64) or WINDOWS_CERT_PFX_FILE" }
+    $path = Join-Path ([IO.Path]::GetTempPath()) ("playterm-cert-" + [guid]::NewGuid() + ".pfx")
+    [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX))
+    return @{ Path = $path; Temporary = $true }
+}
+
+function Invoke-CodeSign([string]$SignTool, [hashtable]$Cert, [string]$Exe) {
+    $url = if ($env:WINDOWS_TIMESTAMP_URL) { $env:WINDOWS_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+    $arguments = @("sign", "/fd", "SHA256", "/tr", $url, "/td", "SHA256", "/f", $Cert.Path)
+    if ($env:WINDOWS_CERT_PASSWORD) { $arguments += @("/p", $env:WINDOWS_CERT_PASSWORD) }
+    & $SignTool @arguments $Exe | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $Exe" }
+    & $SignTool verify /pa $Exe | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "signtool verify failed for $Exe" }
+}
+
 # Before any build, so a missing or bad UPX stops the run early.
 $upxExe = if ($Upx) { Get-Upx } else { $null }
 # UPX takes default options from $env:UPX (e.g. -k leaves a backup file that would be zipped).
 Remove-Item Env:UPX -ErrorAction SilentlyContinue
+# Likewise for code signing: no certificate or signtool stops the run before building.
+$signTool = if ($CodeSign) { Get-SignTool } else { $null }
+$cert = if ($CodeSign) { Get-CodeSignCert } else { $null }
 
 $sums = @()
 foreach ($arch in $Targets) {
@@ -137,6 +181,10 @@ foreach ($arch in $Targets) {
         if ((Invoke-Upx $upxExe @("--best", "-q", $exe)) -ne 0) { throw "UPX failed for $arch" }
         if ((Invoke-Upx $upxExe @("-t", "-q", $exe)) -ne 0) { throw "UPX test failed for $arch" }
         Write-Host ("   UPX: {0:N1} MB -> {1:N1} MB" -f ($before / 1MB), ((Get-Item $exe).Length / 1MB))
+    }
+    if ($signTool) {
+        Write-Host "   code signing"
+        Invoke-CodeSign $signTool $cert (Join-Path $stage "playterm.exe")
     }
     $extra = @(Get-ChildItem $stage | Where-Object { $_.Name -notin (@("playterm.exe") + $docs) })
     if ($extra) { throw "unexpected files in the package: $($extra.Name -join ', ')" }
@@ -165,4 +213,5 @@ if ($haveKey) {
 } else {
     Write-Host "   SHA256SUMS.txt not signed (no PLAYTERM_SIGNING_KEY): the in-app updater will not install these packages"
 }
+if ($cert -and $cert.Temporary) { Remove-Item -Force -LiteralPath $cert.Path -ErrorAction SilentlyContinue }
 Write-Host "done: $dist"
