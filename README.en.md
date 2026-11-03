@@ -306,7 +306,8 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
 
 ## Macros
 
-**Tools → Macros** runs a named sequence of commands in the current tab, and with simultaneous input on in the tabs that receive it.
+**Tools → Macros**, or **Macros** in the command input bar (Ctrl+Shift+M), runs a named sequence of commands in the current tab, and with
+simultaneous input on in the tabs that receive it (from the command bar: in the tabs it sends to).
 **Manage macros…** creates and edits them.
 
 ```text
@@ -317,10 +318,19 @@ show running-config
 @timeout 60           ← seconds the next @wait steps wait (default 30); past it the macro stops and says so
 @sleep 1.5            ← pause (seconds)
 @send y               ← type without Enter,  @enter ← Enter alone,  @@… ← a line that starts with '@'
+@if down              ← if 'down' came in the output since the last line typed (@ifnot: did not), up to @else / @end
+no shutdown
+@else
+@fail already up      ← end here as failed, saying so (@stop: just end)
+@end
+enable
+@wait Password:
+{password}            ← the tab's password ({user}: its user): saved in the vault or typed when connecting
 ```
 
 - A running macro is shown in the terminal; a key press or **Tools → Macros → Stop the running macro** stops it.
-- Macros are kept as they are in the settings file (`settings.toml`): do not put passwords in them.
+- The **Macro after connecting** of a site runs once it is connected and the automatic login is done (again on reconnecting).
+- Macros are kept as they are in the settings file (`settings.toml`): write `{password}` instead of a password.
 
 ## ZMODEM downloads (sz)
 

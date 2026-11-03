@@ -330,6 +330,34 @@ fn validate_keepalive(k: &KeepAlive) -> Result<KeepAlive, String> {
     Ok(k)
 }
 
+/// The macro a site runs once connected (and logged in automatically, if it does).
+fn after_connect_row(ui: &mut egui::Ui, p: &mut SessionProfile, macros: &[String]) {
+    ui.label(t("연결 후 매크로", "Macro after connecting"));
+    let none = t("없음", "None");
+    let current = p.after_connect_macro.clone();
+    let shown = if current.is_empty() {
+        none.to_owned()
+    } else if macros.contains(&current) {
+        current.clone()
+    } else {
+        tr!("{current} (없는 매크로)", "{current} (no such macro)")
+    };
+    egui::ComboBox::from_id_salt("after-connect-macro")
+        .selected_text(shown)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut p.after_connect_macro, String::new(), none);
+            for name in macros {
+                ui.selectable_value(&mut p.after_connect_macro, name.clone(), name);
+            }
+        })
+        .response
+        .on_hover_text(t(
+            "연결되고 자동 로그인이 끝나면 이 매크로를 실행합니다 (도구 → 매크로 → 매크로 관리 에서 만듭니다). 매크로의 {user}, {password} 는 이 사이트의 사용자와 비밀번호입니다.",
+            "Runs this macro once connected and the automatic login is done (create macros in Tools → Macros → Manage macros). {user} and {password} in it are this site's user and password.",
+        ));
+    ui.end_row();
+}
+
 /// Which optional parts of the form to show.
 /// The rows most connections leave as they are: key file and agent (SSH), the remote desktop
 /// settings, encoding and terminal type. Returns whether Enter was pressed in one of them.
@@ -434,6 +462,8 @@ pub struct FormOptions<'a> {
     pub save_password: bool,
     /// Existing folders offered in the folder picker.
     pub folders: &'a [String],
+    /// Names of the macros a site can run once connected.
+    pub macros: &'a [String],
 }
 
 /// Editable text form of a [`ForwardRule`] (ports stay strings while typing).
@@ -674,6 +704,9 @@ impl ProfileForm {
 
             if opts.meta {
                 submit |= advanced_rows(ui, p);
+                if p.protocol != Protocol::Rdp {
+                    after_connect_row(ui, p, opts.macros);
+                }
             }
         });
 

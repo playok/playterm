@@ -150,6 +150,8 @@ pub struct SessionProfile {
     /// SSH: the jump host (bastion) to go through: a saved site's name, or `user@host:port`;
     /// empty for a direct connection.
     pub jump_host: String,
+    /// A macro (by name, Tools → Macros) run once connected and logged in; empty: none.
+    pub after_connect_macro: String,
     /// Options for RDP sites.
     pub rdp: RdpSettings,
 }
@@ -177,6 +179,7 @@ impl Default for SessionProfile {
             tab_color: None,
             tab_label: String::new(),
             jump_host: String::new(),
+            after_connect_macro: String::new(),
             rdp: RdpSettings::default(),
         }
     }

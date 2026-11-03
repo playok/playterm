@@ -39,7 +39,7 @@ impl QuickConnect {
             ui.heading(t("빠른 연결", "Quick Connect"));
             ui.add_space(8.0);
             let mut submit =
-                self.form.ui(ui, &FormOptions { meta: false, save_password: false, folders: &[] });
+                self.form.ui(ui, &FormOptions { meta: false, save_password: false, folders: &[], macros: &[] });
             ui.add_space(8.0);
             let (main, cancel) = ui
                 .horizontal(|ui| {
