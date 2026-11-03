@@ -15,7 +15,7 @@ use crate::compose_bar::{self, ComposeBar};
 use crate::console::Request;
 use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultMode, VaultResult};
 use crate::dock::{BROADCAST_COLOR, Dock};
-use crate::import_dialog::{ImportDialog, ImportResult};
+use crate::import_dialog::{ImportDialog, ImportResult, ImportSource};
 use crate::logging::{self, LogPlan};
 use crate::menu::{self, Command, MenuState};
 use crate::power::{ScreenSaverGuard, SleepGuard};
@@ -1063,7 +1063,12 @@ impl PlaytermApp {
                 self.open_site_manager(selected.as_deref(), false, None);
             }
             Command::NewSite => self.open_site_manager(None, true, None),
-            Command::ImportPutty => self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store)))),
+            Command::ImportPutty => {
+                self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::Putty))));
+            }
+            Command::ImportXshell => {
+                self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::Xshell))));
+            }
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
 
             Command::Copy => {
@@ -1297,7 +1302,7 @@ impl PlaytermApp {
                 }
                 SettingsResult::Cancel(original) => self.apply_settings(ctx, original),
             },
-            Modal::Import(mut dialog) => match dialog.show(ctx) {
+            Modal::Import(mut dialog) => match dialog.show(ctx, &self.store) {
                 ImportResult::Open => self.modal = Some(Modal::Import(dialog)),
                 ImportResult::Cancel => {}
                 ImportResult::Import(profiles) => {

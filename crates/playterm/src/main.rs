@@ -34,6 +34,7 @@ mod template_dialog;
 mod toast;
 mod update;
 mod view;
+mod xshell;
 
 use std::sync::Arc;
 
