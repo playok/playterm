@@ -331,6 +331,89 @@ fn validate_keepalive(k: &KeepAlive) -> Result<KeepAlive, String> {
 }
 
 /// Which optional parts of the form to show.
+/// The rows most connections leave as they are: key file and agent (SSH), the remote desktop
+/// settings, encoding and terminal type. Returns whether Enter was pressed in one of them.
+fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
+    let enter = |ui: &egui::Ui, r: &egui::Response| r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let ssh = p.protocol == Protocol::Ssh;
+    let rdp = p.protocol == Protocol::Rdp;
+    let mut submit = false;
+    if ssh {
+        ui.label(t("키 파일", "Key file"));
+        ui.horizontal(|ui| {
+            let key = ui.add(
+                egui::TextEdit::singleline(&mut p.identity_file)
+                    .hint_text(t("없음 (에이전트·기본 키 사용)", "None (agent and default keys)"))
+                    .desired_width(220.0),
+            );
+            submit |= enter(ui, &key);
+            if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
+                && let Some(path) = pick_key_file(&p.identity_file)
+            {
+                p.identity_file = path.display().to_string();
+            }
+        });
+        ui.end_row();
+
+        ui.label("");
+        ui.checkbox(
+            &mut p.use_agent,
+            tr!("SSH 에이전트 사용 ({})", "Use the SSH agent ({})", crate::platform::ssh_agents()),
+        );
+        ui.end_row();
+    }
+
+    if rdp {
+        rdp_rows(ui, &mut p.rdp);
+    } else {
+        ui.label(t("인코딩", "Encoding"));
+        egui::ComboBox::from_id_salt("charset").selected_text(p.charset.to_string()).show_ui(ui, |ui| {
+            for c in Charset::ALL {
+                ui.selectable_value(&mut p.charset, c, c.to_string());
+            }
+        });
+        ui.end_row();
+
+        ui.label(t("터미널 타입", "Terminal type"));
+        ui.text_edit_singleline(&mut p.term_type);
+        ui.end_row();
+    }
+    submit
+}
+
+/// What `user@host:port` typed or pasted into the host field holds. A bare IPv6 address
+/// (`fe80::1`) is a host, not host and port; `[fe80::1]:2222` has a port.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Address {
+    pub user: Option<String>,
+    pub host: String,
+    pub port: Option<u16>,
+}
+
+pub fn split_address(text: &str) -> Address {
+    let text = text.trim();
+    let (user, rest) = match text.rsplit_once('@') {
+        Some((u, h)) if !u.is_empty() => (Some(u.to_owned()), h),
+        _ => (None, text),
+    };
+    let (host, port) = if let Some(inner) = rest.strip_prefix('[') {
+        // [v6] or [v6]:port
+        match inner.split_once(']') {
+            Some((h, after)) => (h.to_owned(), after.strip_prefix(':').and_then(|p| p.parse().ok())),
+            None => (rest.to_owned(), None),
+        }
+    } else if rest.matches(':').count() == 1 {
+        let (h, p) = rest.split_once(':').unwrap_or((rest, ""));
+        match p.parse::<u16>() {
+            Ok(port) if port > 0 => (h.to_owned(), Some(port)),
+            _ => (rest.to_owned(), None),
+        }
+    } else {
+        (rest.to_owned(), None)
+    };
+    Address { user, host, port }
+}
+
 pub struct FormOptions<'a> {
     /// Name and folder fields (session editor).
     pub meta: bool,
@@ -494,7 +577,23 @@ impl ProfileForm {
                 submit |= serial_rows(ui, &mut p.serial, &mut self.baud, ports, &mut self.focus_requested);
             } else {
                 ui.label(t("호스트", "Host"));
-                let host = ui.add(egui::TextEdit::singleline(&mut p.host).hint_text(t("example.com 또는 IP", "example.com or IP")));
+                let host = ui.add(
+                    egui::TextEdit::singleline(&mut p.host)
+                        .hint_text(t("example.com, IP 또는 user@host:port", "example.com, IP or user@host:port")),
+                );
+                if host.changed() {
+                    // user@host:port pasted or typed: fill in the user and port fields.
+                    let address = split_address(&p.host);
+                    if let Some(user) = address.user {
+                        p.username = user;
+                    }
+                    if let Some(port) = address.port {
+                        self.port = port.to_string();
+                    }
+                    if address.host != p.host {
+                        p.host = address.host;
+                    }
+                }
                 if !self.focus_requested {
                     host.request_focus();
                     self.focus_requested = true;
@@ -548,51 +647,28 @@ impl ProfileForm {
                 }
             }
 
-            if ssh {
-                ui.label(t("키 파일", "Key file"));
-                ui.horizontal(|ui| {
-                    let key = ui.add(
-                        egui::TextEdit::singleline(&mut p.identity_file)
-                            .hint_text(t("없음 (에이전트·기본 키 사용)", "None (agent and default keys)"))
-                            .desired_width(220.0),
-                    );
-                    submit |= enter(ui, &key);
-                    if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
-                        && let Some(path) = pick_key_file(&p.identity_file)
-                    {
-                        p.identity_file = path.display().to_string();
-                    }
-                });
-                ui.end_row();
-
-                ui.label("");
-                ui.checkbox(
-                    &mut p.use_agent,
-                    tr!("SSH 에이전트 사용 ({})", "Use the SSH agent ({})", crate::platform::ssh_agents()),
-                );
-                ui.end_row();
-            }
-
-            if rdp {
-                rdp_rows(ui, &mut p.rdp);
-            } else {
-                ui.label(t("인코딩", "Encoding"));
-                egui::ComboBox::from_id_salt("charset").selected_text(p.charset.to_string()).show_ui(ui, |ui| {
-                    for c in Charset::ALL {
-                        ui.selectable_value(&mut p.charset, c, c.to_string());
-                    }
-                });
-                ui.end_row();
-
-                ui.label(t("터미널 타입", "Terminal type"));
-                ui.text_edit_singleline(&mut p.term_type);
-                ui.end_row();
+            if opts.meta {
+                submit |= advanced_rows(ui, p);
             }
         });
 
-        if self.profile.protocol == Protocol::Ssh {
+        if opts.meta {
+            if self.profile.protocol == Protocol::Ssh {
+                ui.add_space(4.0);
+                self.forwards_ui(ui);
+            }
+        } else {
+            // Quick connect: what most connections leave as it is, folded away.
             ui.add_space(4.0);
-            self.forwards_ui(ui);
+            egui::CollapsingHeader::new(t("고급 설정", "Advanced")).id_salt("quick-advanced").show(ui, |ui| {
+                egui::Grid::new("profile-form-advanced").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                    submit |= advanced_rows(ui, &mut self.profile);
+                });
+                if self.profile.protocol == Protocol::Ssh {
+                    ui.add_space(4.0);
+                    self.forwards_ui(ui);
+                }
+            });
         }
         // A remote desktop has no text to log or prompts to answer.
         if opts.meta && self.profile.protocol != Protocol::Rdp {
@@ -832,6 +908,24 @@ fn validate_auto_login(a: &AutoLogin) -> Result<AutoLogin, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn splits_pasted_addresses() {
+        let a = |user: Option<&str>, host: &str, port: Option<u16>| Address {
+            user: user.map(str::to_owned),
+            host: host.to_owned(),
+            port,
+        };
+        assert_eq!(split_address("web01"), a(None, "web01", None));
+        assert_eq!(split_address(" deploy@web01 "), a(Some("deploy"), "web01", None));
+        assert_eq!(split_address("web01:2222"), a(None, "web01", Some(2222)));
+        assert_eq!(split_address("deploy@10.0.0.5:2222"), a(Some("deploy"), "10.0.0.5", Some(2222)));
+        assert_eq!(split_address("fe80::1"), a(None, "fe80::1", None), "bare IPv6: no port");
+        assert_eq!(split_address("root@[fe80::1]:2222"), a(Some("root"), "fe80::1", Some(2222)));
+        assert_eq!(split_address("[::1]"), a(None, "::1", None));
+        assert_eq!(split_address("host:abc"), a(None, "host:abc", None), "not a port: left as typed");
+        assert_eq!(split_address("@host"), a(None, "@host", None));
+    }
     use super::*;
 
     #[test]
