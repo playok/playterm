@@ -21,5 +21,5 @@ pub use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 pub use charset::{Charset, InputEncoder, OutputDecoder};
 pub use log::{LogMode, SessionLog};
 pub use palette::{Palette, THEMES, Theme};
-pub use search::{SearchDirection, SearchMatch, TextSearch};
+pub use search::{SearchDirection, SearchMatch, SearchOptions, TextSearch};
 pub use terminal::{Terminal, TerminalEvent};

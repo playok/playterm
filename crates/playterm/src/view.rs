@@ -100,7 +100,15 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     // sits inside it with a margin, so the first column does not touch the border.
     let area = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(area, Sense::click_and_drag());
-    let rect = text_rect(area);
+    // The find bar takes a strip of its own at the top: it never covers output.
+    let (bar_strip, grid_area) = match session.search {
+        Some(_) => {
+            let (strip, rest) = area.split_top_bottom_at_y(area.top() + search_bar::HEIGHT);
+            (Some(strip), rest)
+        }
+        None => (None, area),
+    };
+    let rect = text_rect(grid_area);
 
     if response.clicked() || (autofocus && ui.memory(|m| m.focused().is_none())) {
         response.request_focus();
@@ -176,8 +184,8 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
         None => Vec::new(),
     };
     paint(ui, session, area, rect, cell, focused, style, &matches);
-    if let Some(bar) = session.search.as_mut()
-        && let BarAction::Close = bar.show(ui, &mut session.terminal, rect)
+    if let (Some(bar), Some(strip)) = (session.search.as_mut(), bar_strip)
+        && let BarAction::Close = bar.show(ui, &mut session.terminal, strip)
     {
         session.search = None;
     }
