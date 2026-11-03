@@ -8,6 +8,8 @@ use playterm_i18n::{t, tr};
 use playterm_net::{ForwardKind, ForwardRule, Protocol, SerialFlow, SerialParity, SerialSettings};
 use playterm_term::Charset;
 
+use crate::import_dialog::ImportedSession;
+
 pub const SESSIONS_KEY: &str = r"Software\SimonTatham\PuTTY\Sessions";
 
 /// The registry key to read: PuTTY's, or `PLAYTERM_PUTTY_KEY` (for testing).
@@ -22,16 +24,6 @@ pub enum RegValue {
 }
 
 pub type Values = HashMap<String, RegValue>;
-
-/// One saved PuTTY session and what it becomes here.
-#[derive(Clone, Debug)]
-pub struct PuttySession {
-    pub name: String,
-    /// The site, or why it cannot be imported.
-    pub profile: Result<SessionProfile, String>,
-    /// Settings that were not carried over or need attention.
-    pub notes: Vec<String>,
-}
 
 /// Session names are stored with `%XX` escapes of the bytes of the name in the system code
 /// page (CP949 on Korean Windows), or UTF-8 in newer versions.
@@ -105,7 +97,7 @@ fn charset(code_page: &str) -> Charset {
 }
 
 /// Converts the registry values of one session.
-pub fn convert(name: &str, values: &Values) -> PuttySession {
+pub fn convert(name: &str, values: &Values) -> ImportedSession {
     let text = |key: &str| match values.get(key) {
         Some(RegValue::Str(s)) => s.trim().to_owned(),
         _ => String::new(),
@@ -121,7 +113,7 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
         "serial" => Protocol::Serial,
         other => {
             let reason = tr!("{other} 프로토콜은 지원하지 않습니다", "The {other} protocol is not supported");
-            return PuttySession { name: name.to_owned(), profile: Err(reason), notes };
+            return ImportedSession { name: name.to_owned(), folder: String::new(), profile: Err(reason), notes };
         }
     };
     let mut p = SessionProfile { name: name.to_owned(), protocol, ..Default::default() };
@@ -135,7 +127,7 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
         let line = text("SerialLine");
         if line.is_empty() {
             let reason = t("시리얼 포트가 비어 있습니다", "The serial port is empty").into();
-            return PuttySession { name: name.to_owned(), profile: Err(reason), notes };
+            return ImportedSession { name: name.to_owned(), folder: String::new(), profile: Err(reason), notes };
         }
         let mut s = SerialSettings { port: line.to_uppercase(), ..Default::default() };
         s.baud = number("SerialSpeed").filter(|&b| b > 0).unwrap_or(s.baud);
@@ -166,7 +158,7 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
         p.host = s.port.clone();
         p.port = 0;
         p.serial = s;
-        return PuttySession { name: name.to_owned(), profile: Ok(p), notes };
+        return ImportedSession { name: name.to_owned(), folder: String::new(), profile: Ok(p), notes };
     }
 
     let mut host = text("HostName");
@@ -180,7 +172,7 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
     }
     if host.is_empty() {
         let reason = t("호스트가 비어 있습니다", "The host is empty").into();
-        return PuttySession { name: name.to_owned(), profile: Err(reason), notes };
+        return ImportedSession { name: name.to_owned(), folder: String::new(), profile: Err(reason), notes };
     }
     p.host = host;
     p.port = number("PortNumber").and_then(|n| u16::try_from(n).ok()).filter(|&n| n > 0).unwrap_or(protocol.default_port());
@@ -200,12 +192,12 @@ pub fn convert(name: &str, values: &Values) -> PuttySession {
         p.use_agent = number("TryAgent").unwrap_or(1) != 0;
         p.forwards = parse_forwards(&text("PortForwardings"), &mut notes);
     }
-    PuttySession { name: name.to_owned(), profile: Ok(p), notes }
+    ImportedSession { name: name.to_owned(), folder: String::new(), profile: Ok(p), notes }
 }
 
 /// Reads and converts every session under `key` (`Default Settings` is skipped).
-pub fn load(key: &str) -> Result<Vec<PuttySession>, String> {
-    let mut sessions: Vec<PuttySession> = registry::read_sessions(key)?
+pub fn load(key: &str) -> Result<Vec<ImportedSession>, String> {
+    let mut sessions: Vec<ImportedSession> = registry::read_sessions(key)?
         .into_iter()
         .map(|(raw, values)| (unescape(&raw), values))
         .filter(|(name, _)| name != "Default Settings")

@@ -17,6 +17,7 @@ pub enum Command {
     SiteManager,
     NewSite,
     ImportPutty,
+    ImportXshell,
     Quit,
 
     Copy,
@@ -168,18 +169,21 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
         ui.input(|inp| (inp.viewport().maximized.unwrap_or(false), inp.viewport().fullscreen.unwrap_or(false)));
 
     egui::MenuBar::new().ui(ui, |ui| {
-        ui.menu_button(t("파일", "File"), |ui| {
+        ui.menu_button(t("파일(F)", "File"), |ui| {
             item(ui, out, t("새 탭", "New tab"), "Ctrl+Shift+N", true, Command::NewTab);
             item(ui, out, t("새 창", "New window"), "", true, Command::NewWindow);
             item(ui, out, t("빠른 연결…", "Quick Connect…"), "Ctrl+Shift+T", true, Command::QuickConnect);
             item(ui, out, t("사이트 관리…", "Site Manager…"), "Ctrl+Shift+S", true, Command::SiteManager);
             item(ui, out, t("새 사이트…", "New site…"), "", true, Command::NewSite);
-            item(ui, out, t("PuTTY 세션 가져오기…", "Import PuTTY sessions…"), "", true, Command::ImportPutty);
+            ui.menu_button(t("가져오기", "Import"), |ui| {
+                item(ui, out, t("PuTTY 세션…", "PuTTY sessions…"), "", true, Command::ImportPutty);
+                item(ui, out, t("Xshell 세션…", "Xshell sessions…"), "", true, Command::ImportXshell);
+            });
             ui.separator();
             item(ui, out, t("끝내기", "Exit"), "Alt+F4", true, Command::Quit);
         });
 
-        ui.menu_button(t("편집", "Edit"), |ui| {
+        ui.menu_button(t("편집(E)", "Edit"), |ui| {
             let has_selection = active.is_some_and(|s| s.terminal.has_selection());
             item(ui, out, t("복사", "Copy"), st.copy_hint, has_selection, Command::Copy);
             item(ui, out, t("붙여넣기", "Paste"), st.paste_hint, active.is_some(), Command::Paste);
@@ -189,7 +193,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("스크롤백 지우기", "Clear scrollback"), "", active.is_some(), Command::ClearScrollback);
         });
 
-        ui.menu_button(t("보기", "View"), |ui| {
+        ui.menu_button(t("보기(V)", "View"), |ui| {
             check(ui, out, t("사이트 목록", "Site list"), "Ctrl+Shift+B", st.show_sidebar, Command::ToggleSidebar);
             check(ui, out, t("상태 표시줄", "Status bar"), "", st.show_status_bar, Command::ToggleStatusBar);
             check(
@@ -207,7 +211,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("기본 크기", "Default size"), "Ctrl+0", true, Command::ZoomReset);
         });
 
-        ui.menu_button(t("도구", "Tools"), |ui| {
+        ui.menu_button(t("도구(T)", "Tools"), |ui| {
             match active {
                 Some(s) => session_items(ui, out, i, s),
                 None => {
@@ -249,7 +253,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("설정…", "Settings…"), "", true, Command::Settings);
         });
 
-        ui.menu_button(t("탭", "Tab"), |ui| {
+        ui.menu_button(t("탭(A)", "Tab"), |ui| {
             item(ui, out, t("새 탭", "New tab"), "Ctrl+Shift+N", true, Command::NewTab);
             ui.separator();
             item(ui, out, t("다음 탭", "Next tab"), "Ctrl+Tab", n > 1, Command::NextTab);
@@ -286,7 +290,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             }
         });
 
-        ui.menu_button(t("창", "Window"), |ui| {
+        ui.menu_button(t("창(W)", "Window"), |ui| {
             item(ui, out, t("최소화", "Minimize"), "", true, Command::Minimize);
             let label = if maximized { t("이전 크기로", "Restore") } else { t("최대화", "Maximize") };
             item(ui, out, label, "", !fullscreen, Command::ToggleMaximize);
@@ -294,7 +298,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             check(ui, out, t("항상 위에 표시", "Always on top"), "", st.always_on_top, Command::ToggleAlwaysOnTop);
         });
 
-        ui.menu_button(t("도움말", "Help"), |ui| {
+        ui.menu_button(t("도움말(H)", "Help"), |ui| {
             item(ui, out, t("단축키", "Keyboard shortcuts"), "", true, Command::Shortcuts);
             ui.separator();
             item(ui, out, t("playterm 정보", "About playterm"), "", true, Command::About);

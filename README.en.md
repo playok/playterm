@@ -16,7 +16,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **Remote Desktop**: resolution that follows the tab size, shared clipboard, Unicode/IME input, and certificate pinning
 - **Password vault**: saved passwords are encrypted with a master password (Argon2id + XChaCha20-Poly1305)
 - **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads (`sz`)
-- **Site manager**: folders, per-site tab colors, PuTTY session import, and a `playterm>` command prompt in unconnected tabs
+- **Site manager**: folders, per-site tab colors, PuTTY and Xshell session import, and a `playterm>` command prompt in unconnected tabs
 - Korean / English UI, dark / light themes
 
 ## Layout
@@ -155,9 +155,14 @@ Connection commands connect in that tab, and the prompt comes back when the conn
   - Moving to another site or closing the window with unsaved changes asks whether to save them.
   - Double-clicking a site connects it and closes the window.
 - The site list on the left of the main window (Ctrl+Shift+B) is for quick access. [Manage] or right-click → Edit opens the Site Manager.
-- **File → Import PuTTY sessions**: pick sessions saved by PuTTY (in the registry) and import them as sites.
+- **File → Import → PuTTY sessions**: pick sessions saved by PuTTY (in the registry) and import them as sites.
   Host, port, user, key file, encoding, terminal type, port forwarding and serial settings are carried over; sites that already exist are unchecked by default.
   PuTTY does not store passwords, so none are imported. rlogin/raw sessions are skipped.
+- **File → Import → Xshell sessions**: reads the `.xsh` files in Xshell's sessions folder (`Documents\NetSarang Computer\<version>\Xshell\Sessions`,
+  or `%APPDATA%\NetSarang\Xshell\Sessions` for Xshell 5) and imports them as sites. Pick **Other folder…** when it is not found or lives elsewhere.
+  Xshell's subfolders are kept inside the import folder. Host, port, user, encoding and terminal type of SSH, Telnet and serial sessions are
+  carried over; passwords Xshell saved (encrypted), user keys kept inside Xshell and port forwardings are not, and the list says so. Check serial
+  settings after the import.
 - **Tab color**: give each site a color (red, orange, yellow, green, teal, blue, purple, pink, gray) under "Tab color" in the Site Manager. Its tabs
   are tinted (a bar at the bottom and a light background) and the site list shows the color too — handy for marking production servers red, say.
   An open tab can be recolored by itself: right-click the tab → **Tab color** (or Tab menu → Tab color).
