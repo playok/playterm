@@ -760,11 +760,21 @@ impl PlaytermApp {
             SidebarAction::Delete(id) => self.modal = Some(Modal::ConfirmDelete(id)),
             SidebarAction::LockVault => self.lock_vault(),
             SidebarAction::UnlockVault => self.unlock_vault(),
+            SidebarAction::SetUpVault => self.set_up_vault(),
         }
     }
 
     fn unlock_vault(&mut self) {
         self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, ""), Pending::Unlock));
+    }
+
+    /// Sets the master password before any password is saved (the sidebar's "Set up").
+    fn set_up_vault(&mut self) {
+        let reason = t(
+            "사이트 비밀번호를 저장해 두면 접속할 때 다시 묻지 않습니다.",
+            "With site passwords saved, connecting does not ask for them again.",
+        );
+        self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Create, reason), Pending::Unlock));
     }
 
     /// Shows the site manager, if open, and applies its outcome.
@@ -1169,6 +1179,7 @@ impl PlaytermApp {
             Command::OpenLogFolder => logging::reveal(&logging::default_log_dir()),
             Command::LockVault => self.lock_vault(),
             Command::UnlockVault => self.unlock_vault(),
+            Command::SetUpVault => self.set_up_vault(),
 
             Command::Activate(i) if i < n => self.active = i,
             Command::Activate(_) => {}

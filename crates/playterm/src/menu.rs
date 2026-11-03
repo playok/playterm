@@ -43,6 +43,7 @@ pub enum Command {
     RevealLog(usize),
     OpenLogFolder,
     LockVault,
+    SetUpVault,
     UnlockVault,
 
     Activate(usize),
@@ -228,13 +229,13 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             ui.separator();
             match st.vault {
                 VaultState::Missing => {
-                    item(ui, out, t("비밀번호 볼트 없음", "No password vault"), "", false, Command::UnlockVault)
+                    item(ui, out, t("저장된 비밀번호 설정…", "Set up saved passwords…"), "", true, Command::SetUpVault)
                 }
                 VaultState::Locked => {
-                    item(ui, out, t("비밀번호 볼트 잠금 해제…", "Unlock password vault…"), "", true, Command::UnlockVault)
+                    item(ui, out, t("저장된 비밀번호 잠금 해제…", "Unlock saved passwords…"), "", true, Command::UnlockVault)
                 }
                 VaultState::Unlocked => {
-                    item(ui, out, t("비밀번호 볼트 잠그기", "Lock password vault"), "", true, Command::LockVault)
+                    item(ui, out, t("저장된 비밀번호 잠그기", "Lock saved passwords"), "", true, Command::LockVault)
                 }
             }
             if crate::power::SUPPORTED {
