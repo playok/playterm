@@ -11,6 +11,7 @@ use egui_tiles::{Behavior, Container, ContainerKind, SimplificationOptions, TabS
 use playterm_config::TemplateLayout;
 use playterm_i18n::t;
 
+use crate::icon::{self, MaterialIcon};
 use crate::menu::{self, Command};
 use crate::rdp_view;
 use crate::session::{Session, SessionState};
@@ -18,6 +19,28 @@ use crate::view::{self, ViewOutput, ViewStyle};
 
 /// Tab title color of sessions receiving simultaneous input.
 pub const BROADCAST_COLOR: Color32 = Color32::from_rgb(230, 140, 30);
+
+/// How a tab shows its connection state: a shape as well as a color, so the states stay
+/// apart without telling red from green, and a word in the tooltip.
+struct StateMark {
+    icon: MaterialIcon,
+    color: Color32,
+    label: &'static str,
+}
+
+impl StateMark {
+    fn of(state: &SessionState) -> Self {
+        let (icon, color, label) = match state {
+            SessionState::Local => (icon::STATE_LOCAL, Color32::from_rgb(140, 140, 140), t("로컬 프롬프트", "Local prompt")),
+            SessionState::Connecting => {
+                (icon::STATE_CONNECTING, Color32::from_rgb(220, 180, 40), t("연결 중…", "Connecting…"))
+            }
+            SessionState::Connected => (icon::STATE_CONNECTED, Color32::from_rgb(60, 190, 90), t("연결됨", "Connected")),
+            SessionState::Closed => (icon::STATE_CLOSED, Color32::from_rgb(200, 70, 70), t("연결 끊김", "Disconnected")),
+        };
+        Self { icon, color, label }
+    }
+}
 
 /// The docking layout of the session tabs.
 pub struct Dock {
@@ -283,20 +306,22 @@ impl Behavior<u64> for DockView<'_> {
         let receiving = self.broadcast && s.in_broadcast && s.state == SessionState::Connected;
 
         let font = TextStyle::Button.resolve(ui.style());
-        let dot_color = match s.state {
-            SessionState::Local => Color32::from_rgb(140, 140, 140),
-            SessionState::Connecting => Color32::from_rgb(220, 180, 40),
-            SessionState::Connected => Color32::from_rgb(60, 190, 90),
-            SessionState::Closed => Color32::from_rgb(200, 70, 70),
-        };
+        let mark = StateMark::of(&s.state);
         let text_color = if receiving {
             BROADCAST_COLOR
+        } else if s.state == SessionState::Closed && !state.active {
+            // A closed tab in the background takes no input: its title steps back. (The tab on
+            // show keeps a readable title on its highlight; its icon says it is closed.)
+            ui.visuals().weak_text_color()
         } else if state.active {
             ui.visuals().strong_text_color()
         } else {
             ui.visuals().text_color()
         };
-        let mut parts = vec![(RichText::new("● ").color(dot_color), font.clone())];
+        let mut parts = vec![
+            (mark.icon.rich_text().color(mark.color), font.clone()),
+            (RichText::new(" "), font.clone()),
+        ];
         if s.is_logging() {
             parts.push((RichText::new("REC ").color(Color32::from_rgb(220, 60, 60)), TextStyle::Small.resolve(ui.style())));
         }
@@ -373,7 +398,11 @@ impl Behavior<u64> for DockView<'_> {
                 }
             }
         });
-        response.on_hover_text(t("끌어서 옆이나 위아래로 놓으면 화면을 나눠 봅니다", "Drag beside, above or below another tab to split the view"))
+        response.on_hover_text(format!(
+            "{}\n{}",
+            mark.label,
+            t("끌어서 옆이나 위아래로 놓으면 화면을 나눠 봅니다", "Drag beside, above or below another tab to split the view")
+        ))
     }
 
     fn tab_bar_height(&self, style: &egui::Style) -> f32 {
@@ -476,5 +505,22 @@ mod tests {
         dock.apply_arrange(&[1, 2], TemplateLayout::Tabs);
         dock.apply_arrange(&[1], TemplateLayout::Grid);
         assert_eq!(shape(&dock), "Tabs(1 2)");
+    }
+}
+
+#[cfg(test)]
+mod state_mark_tests {
+    use super::*;
+
+    #[test]
+    fn every_state_has_its_own_shape() {
+        let states = [SessionState::Local, SessionState::Connecting, SessionState::Connected, SessionState::Closed];
+        let marks: Vec<StateMark> = states.iter().map(StateMark::of).collect();
+        for (i, a) in marks.iter().enumerate() {
+            for b in &marks[i + 1..] {
+                assert_ne!(a.icon.codepoint, b.icon.codepoint, "{} / {}", a.label, b.label);
+                assert_ne!(a.label, b.label);
+            }
+        }
     }
 }
