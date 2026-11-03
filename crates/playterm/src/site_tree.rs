@@ -102,6 +102,25 @@ pub fn folder<R>(ui: &mut egui::Ui, folder: &Folder, salt: &str, add_body: impl 
     response
 }
 
+/// Width of the tab-color bar before a site.
+pub const COLOR_BAR: f32 = 4.0;
+
+/// The start of a site row: room where a folder row has its expand arrow, then the tab-color
+/// bar (its space kept when the site has no color). So every site's badge and name line up,
+/// at the top level and inside folders, under the folder icons of their level.
+pub fn row_lead(ui: &mut egui::Ui, color: Option<Color32>) {
+    // A folder row's icon comes after its expand button (the indent) and the header's margin
+    // (2 px); the badge here comes after this space, the bar and one item spacing. Measured on
+    // both trees (item spacing 8 in the sidebar, 4 in the site manager).
+    let spacing = ui.spacing().item_spacing.x;
+    let arrow = (ui.spacing().indent + 2.0 - COLOR_BAR - spacing).max(0.0);
+    ui.add_space(arrow);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(COLOR_BAR, 16.0), egui::Sense::hover());
+    if let Some(color) = color {
+        ui.painter().rect_filled(rect, 1.0, color);
+    }
+}
+
 /// The color and short name of a connection type.
 fn kind(protocol: Protocol) -> (&'static str, Color32) {
     match protocol {
