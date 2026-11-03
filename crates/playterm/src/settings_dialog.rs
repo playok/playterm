@@ -93,6 +93,7 @@ impl SettingsDialog {
                 self.sleep_row(ui);
                 self.timeout_row(ui);
                 self.zmodem_row(ui);
+                self.update_row(ui);
                 self.clipboard_rows(ui);
             });
             ui.add_space(8.0);
@@ -348,6 +349,18 @@ impl SettingsDialog {
             .on_hover_text(t(
                 "sz 로 받기가 시작되면 저장할 폴더를 묻습니다 (위의 폴더에서 시작).\n고르는 동안에도 임시 폴더에 받고, 받기와 선택이 모두 끝나면 고른 폴더로 옮깁니다.\n창을 취소하면 받기를 취소하고 받은 파일을 지웁니다.",
                 "When sz starts sending, a window asks where to save (starting at the folder above).\nThe files are received into a temporary folder meanwhile and moved to the chosen one when both are done.\nCancelling the window cancels the download and deletes what was received.",
+            ));
+        ui.end_row();
+    }
+
+    fn update_row(&mut self, ui: &mut egui::Ui) {
+        ui.label(t("업데이트", "Updates"));
+        ui.checkbox(&mut self.draft.check_updates, t("시작할 때 새 버전 확인", "Check for a new version at start-up"))
+            .on_hover_text(t(
+                "GitHub 의 최신 릴리스를 확인해 새 버전이 있으면 알려 줍니다. 설치는 확인을 받은 뒤에만 합니다.
+도움말 → 업데이트 확인 으로 언제든 직접 확인할 수 있습니다.",
+                "Looks up the latest release on GitHub and tells you about a new version. Nothing is installed without asking.
+Help → Check for updates checks at any time.",
             ));
         ui.end_row();
     }

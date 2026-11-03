@@ -3,6 +3,12 @@
 #   pwsh scripts\package.ps1                 # ARM64 + x64
 #   pwsh scripts\package.ps1 -Targets x64    # x64 only
 #   pwsh scripts\package.ps1 -Upx            # executables compressed with UPX
+#   pwsh scripts\package.ps1 -Sign           # SHA256SUMS.txt must be signed (fails without a key)
+#
+# SHA256SUMS.txt is signed (SHA256SUMS.txt.sig, Ed25519, by crates/playterm-sign) whenever the
+# private key is given in $env:PLAYTERM_SIGNING_KEY (hex) or $env:PLAYTERM_SIGNING_KEY_FILE; the
+# in-app updater installs only signed releases. The signature is then checked against the public
+# key built into the app (crates/playterm/src/update.rs), so a wrong key stops the run.
 #
 # Requires the x64 Rust target (rustup target add x86_64-pc-windows-msvc) and, on ARM64
 # hosts, LLVM/clang (winget install LLVM.LLVM) for the crypto library.
@@ -16,7 +22,8 @@
 param(
     [ValidateSet("arm64", "x64")]
     [string[]]$Targets = @("arm64", "x64"),
-    [switch]$Upx
+    [switch]$Upx,
+    [switch]$Sign
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
@@ -143,5 +150,19 @@ foreach ($arch in $Targets) {
     $sums += "$hash  $(Split-Path $zip -Leaf)"
     Write-Host ("   {0} ({1:N1} MB)" -f (Split-Path $zip -Leaf), ((Get-Item $zip).Length / 1MB))
 }
-$sums | Set-Content (Join-Path $dist "SHA256SUMS.txt") -Encoding ascii
+$sumsFile = Join-Path $dist "SHA256SUMS.txt"
+$sums | Set-Content $sumsFile -Encoding ascii
+Remove-Item -Force "$sumsFile.sig" -ErrorAction SilentlyContinue
+$haveKey = [bool]($env:PLAYTERM_SIGNING_KEY -or $env:PLAYTERM_SIGNING_KEY_FILE)
+if ($Sign -and -not $haveKey) { throw "-Sign: set PLAYTERM_SIGNING_KEY or PLAYTERM_SIGNING_KEY_FILE" }
+if ($haveKey) {
+    Write-Host "== Signing SHA256SUMS.txt"
+    cargo run --release --locked -q -p playterm-sign -- sign $sumsFile
+    if ($LASTEXITCODE -ne 0) { throw "signing failed" }
+    $public = (Select-String -Path "crates\playterm\src\update.rs" -Pattern 'const PUBLIC_KEY: &str = "([0-9a-f]{64})"').Matches[0].Groups[1].Value
+    cargo run --release --locked -q -p playterm-sign -- verify $sumsFile $public
+    if ($LASTEXITCODE -ne 0) { throw "the signing key does not match PUBLIC_KEY in crates\playterm\src\update.rs" }
+} else {
+    Write-Host "   SHA256SUMS.txt not signed (no PLAYTERM_SIGNING_KEY): the in-app updater will not install these packages"
+}
 Write-Host "done: $dist"

@@ -28,6 +28,7 @@ use crate::site_manager::{SiteManager, SiteManagerResult};
 use crate::licenses::LicensesDialog;
 use crate::template_dialog::{TemplateDialog, TemplateResult};
 use crate::view::UserInput;
+use crate::update::{self, Updater};
 use crate::{clip_keys, clipboard, fonts, local_fs, status_bar, view};
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
@@ -211,6 +212,8 @@ pub struct PlaytermApp {
     view_px: (u16, u16),
     /// The tabs and how they are docked (split side by side or above each other).
     dock: Dock,
+    /// New releases on GitHub.
+    updater: Updater,
 }
 
 impl PlaytermApp {
@@ -274,7 +277,12 @@ impl PlaytermApp {
             compose: ComposeBar::default(),
             view_px: (1280, 800),
             dock: Dock::default(),
+            updater: Updater::default(),
         };
+        // Development builds (cargo run) are not replaced by releases unless asked.
+        if app.settings.check_updates && !cfg!(debug_assertions) {
+            app.updater.check(&cc.egui_ctx, false);
+        }
         for profile in initial {
             // A saved site (opened in a new window) connects as one: with its vault password.
             if app.store.get(&profile.id).is_some() {
@@ -1238,6 +1246,8 @@ impl PlaytermApp {
             Command::Shortcuts => self.modal = Some(Modal::Shortcuts),
             Command::About => self.modal = Some(Modal::About),
             Command::Licenses => self.modal = Some(Modal::Licenses(Box::default())),
+            Command::CheckUpdates => self.updater.check(ctx, true),
+            Command::ShowUpdate => self.updater.reopen(),
         }
     }
 
@@ -1415,6 +1425,21 @@ impl PlaytermApp {
         false
     }
 
+    fn update_dialog(&mut self, ctx: &egui::Context) {
+        let connected = self.sessions.iter().filter(|s| s.state == SessionState::Connected).count();
+        match self.updater.show(ctx, connected) {
+            None => {}
+            Some(update::Action::Skip(version)) => {
+                self.settings.skipped_update = version;
+                self.save_settings();
+            }
+            Some(update::Action::Restart(exe)) => match std::process::Command::new(&exe).spawn() {
+                Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                Err(e) => self.status = Some(tr!("{} 를 시작할 수 없습니다: {e}", "Cannot start {}: {e}", exe.display())),
+            },
+        }
+    }
+
     /// App shortcuts, consumed before the terminal sees the key events.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let keys = self.settings.clipboard;
@@ -1468,6 +1493,7 @@ impl PlaytermApp {
             sftp_panel: self.sftp_panel,
             copy_hint: clip_keys::copy_hint(&self.settings.clipboard),
             paste_hint: clip_keys::paste_hint(&self.settings.clipboard),
+            update: self.updater.pending().map(|v| v.to_string()),
         };
         if let Some(command) = menu::menu_bar(ui, &state) {
             let ctx = ui.ctx().clone();
@@ -1781,16 +1807,22 @@ impl eframe::App for PlaytermApp {
         self.sleep_guard.set(if connected { self.settings.prevent_sleep } else { PreventSleep::Off });
         self.screensaver_guard.set(self.settings.prevent_screensaver);
 
+        self.updater.poll(&self.settings.skipped_update);
         let prompt_open = self.show_session_prompts(&ctx);
         if !prompt_open {
-            if self.modal.is_none() && self.site_manager.is_none() {
+            if self.modal.is_none() && self.site_manager.is_none() && !self.updater.is_open() {
                 self.shortcuts(&ctx);
             }
             // App modals are shown after the site manager so they stack above it.
             self.show_site_manager(&ctx);
             self.show_modal(&ctx);
+            // Waits for other dialogs (one found at start-up does not cover a login prompt).
+            if self.modal.is_none() && self.site_manager.is_none() {
+                self.update_dialog(&ctx);
+            }
         }
-        let modal_open = prompt_open || self.modal.is_some() || self.site_manager.is_some();
+        let modal_open =
+            prompt_open || self.modal.is_some() || self.site_manager.is_some() || self.updater.is_open();
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));

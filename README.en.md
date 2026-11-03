@@ -27,7 +27,8 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 | `crates/playterm-net` | SSH (russh) / Telnet / serial / RDP (IronRDP) transports, session event and command channels, ZMODEM receiving |
 | `crates/playterm-config` | Site list (`sessions.toml`), password vault (`vault.toml`), settings (`settings.toml`) |
 | `crates/playterm-i18n` | Korean / English UI strings |
-| `crates/playterm` | GUI app (eframe/egui): rendering, keyboard/IME input, dialogs |
+| `crates/playterm` | GUI app (eframe/egui): rendering, keyboard/IME input, dialogs, updates |
+| `crates/playterm-sign` | Signs release checksums (for release builds) |
 
 ## Building
 
@@ -52,7 +53,12 @@ Both scripts put LLVM (clang) on PATH by themselves and build with `--locked`, s
 ### GitHub releases (automatic build)
 
 Pushing a tag that starts with `v` runs GitHub Actions (`.github/workflows/release.yml`): clippy → tests → x64 and ARM64 packages (UPX-compressed),
-uploaded with `SHA256SUMS.txt` to that tag's release. The tag must match the version in `Cargo.toml`.
+uploaded with `SHA256SUMS.txt` and its signature `SHA256SUMS.txt.sig` to that tag's release. The tag must match the version in `Cargo.toml`.
+
+The in-app updater installs only releases with a valid signature, so a tag build needs the signing private key (hex) in the repository secret
+`PLAYTERM_SIGNING_KEY`. Make a key with `cargo run -p playterm-sign -- keygen > keyfile` (the public key it prints goes into `PUBLIC_KEY` in
+`crates/playterm/src/update.rs`) and store it with `gh secret set PLAYTERM_SIGNING_KEY < keyfile`. Keep the private key safe, outside the repository.
+If it is lost, make a new key and release a version with the new `PUBLIC_KEY`; users of earlier versions then have to download that one by hand.
 
 ```powershell
 git tag v0.1.0
@@ -326,6 +332,16 @@ A further factor asked after the password (a one-time code, say) never gets the 
 **Locking** the vault also takes the passwords back from the open tabs; reconnecting such a tab asks to unlock the vault first. Resetting the vault
 with 'Forgot the master password?' keeps the old file as `vault.toml.bak`.
 
+## Updates
+
+At start-up playterm looks up the latest release on GitHub and tells you about a new version (turn it off in **Tools → Settings → Updates**;
+**Help → Check for updates** checks at any time). **Update** downloads the zip for this PC (x64 / ARM64), compares it with the release's
+`SHA256SUMS.txt` and replaces `playterm.exe` only if that file's Ed25519 signature matches the public key built into the app. Only versions newer than
+the running one are installed (the version is part of the signed file name). The running exe is moved aside to `playterm.exe.old`, deleted at the next
+start, and the new version takes effect when playterm restarts (**Restart now**, or later). After **Later**, **⬆ New version** at the right of the
+menu bar opens the dialog again; **Skip this version** stops offering that version. An exe in a folder without write access (such as
+`Program Files`) cannot be updated: download the new version from the releases page.
+
 ## Configuration files
 
 `%APPDATA%\playterm\config\` (change it with the `PLAYTERM_CONFIG_DIR` environment variable — for portable use)
@@ -333,7 +349,7 @@ with 'Forgot the master password?' keeps the old file as `vault.toml.bak`.
 | File | Contents |
 |---|---|
 | `sessions.toml` | Saved sites and templates (no passwords) |
-| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder and asking for it |
+| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder and asking for it, update check / skipped version |
 | `vault.toml` | Saved passwords, encrypted with the master password → Argon2id → XChaCha20-Poly1305. Each password is stored with the target it was saved for (protocol, user, host, port), also encrypted: if a site in `sessions.toml` is pointed elsewhere, its password is not sent (changes made in playterm carry it along). Several windows do not delete each other's saved passwords |
 | `known_hosts` | SSH host keys. If a known host's key changes — even to a key of another type — the connection is refused (protection against man-in-the-middle attacks). Key types on record are asked for first |
 | `known_rdp_hosts` | RDP server certificate fingerprints. A changed certificate is refused |

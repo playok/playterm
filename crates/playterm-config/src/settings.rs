@@ -145,6 +145,10 @@ pub struct AppSettings {
     /// Ask for the folder each time a ZMODEM download starts (`zmodem_dir` is where the
     /// question starts).
     pub zmodem_ask: bool,
+    /// Look for a new release on GitHub at start-up.
+    pub check_updates: bool,
+    /// A release version the user chose to skip ("Skip this version"); not offered again.
+    pub skipped_update: String,
 }
 
 impl AppSettings {
@@ -204,6 +208,8 @@ impl Default for AppSettings {
             site_view: SiteView::Tree,
             zmodem_dir: String::new(),
             zmodem_ask: true,
+            check_updates: true,
+            skipped_update: String::new(),
         }
     }
 }
@@ -234,6 +240,8 @@ mod tests {
             site_view: SiteView::Grid,
             zmodem_dir: "D:\\받은 파일".into(),
             zmodem_ask: false,
+            check_updates: false,
+            skipped_update: "0.3.0".into(),
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);
