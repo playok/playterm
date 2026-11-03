@@ -43,7 +43,8 @@ const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
     (KeyboardShortcut::new(CTRL_SHIFT, Key::B), Shortcut::Sidebar),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::F), Shortcut::Find),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::I), Shortcut::Broadcast),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::E), Shortcut::Sftp),
+    // Ctrl+Shift+E opened the SFTP window, which the side panel replaced.
+    (KeyboardShortcut::new(CTRL_SHIFT, Key::E), Shortcut::SftpPanel),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::X), Shortcut::SftpPanel),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::M), Shortcut::ComposeBar),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::Tab), Shortcut::PrevTab),
@@ -69,7 +70,6 @@ enum Shortcut {
     Sidebar,
     Find,
     Broadcast,
-    Sftp,
     SftpPanel,
     ComposeBar,
     PrevTab,
@@ -1126,11 +1126,6 @@ impl PlaytermApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
             }
 
-            Command::Sftp(i) => {
-                if let Some(s) = self.sessions.get_mut(i) {
-                    s.open_sftp();
-                }
-            }
             Command::ToggleSftpPanel => {
                 self.sftp_panel = !self.sftp_panel;
                 // Opening the panel goes to where the user is in the terminal.
@@ -1466,7 +1461,6 @@ impl PlaytermApp {
                 Shortcut::Sidebar => Command::ToggleSidebar,
                 Shortcut::Find => Command::Find,
                 Shortcut::Broadcast => Command::ToggleBroadcast,
-                Shortcut::Sftp => Command::Sftp(i),
                 Shortcut::SftpPanel => Command::ToggleSftpPanel,
                 Shortcut::ComposeBar => Command::ToggleComposeBar,
                 Shortcut::PrevTab => Command::PrevTab,
@@ -1531,9 +1525,9 @@ impl PlaytermApp {
                 }
             }
             if self.sessions.get(self.active).is_some_and(|s| s.can_sftp())
-                && ui.button("SFTP").on_hover_text(t("파일 브라우저 (Ctrl+Shift+E)", "File browser (Ctrl+Shift+E)")).clicked()
+                && ui.button("SFTP").on_hover_text(t("SFTP 탐색기 (Ctrl+Shift+X)", "SFTP explorer (Ctrl+Shift+X)")).clicked()
             {
-                action = Some(Command::Sftp(self.active));
+                action = Some(Command::ToggleSftpPanel);
             }
             if self.sessions.get(self.active).is_some_and(|s| s.state == SessionState::Closed) {
                 ui.separator();
@@ -1586,13 +1580,13 @@ impl PlaytermApp {
             return;
         }
         let panel = self.sftp_panel;
-        match self.sessions.get_mut(self.active).and_then(|s| s.sftp.as_mut()).filter(|b| b.open || panel) {
+        match self.sessions.get_mut(self.active).and_then(|s| s.sftp.as_mut()).filter(|_| panel) {
             Some(browser) => browser.upload_paths(paths),
             None => {
                 self.status = Some(
                     t(
-                        "파일을 올리려면 먼저 SFTP 탐색기(Ctrl+Shift+X)나 SFTP 창(Ctrl+Shift+E)을 여세요",
-                        "Open the SFTP explorer (Ctrl+Shift+X) or the SFTP window (Ctrl+Shift+E) first to upload files",
+                        "파일을 올리려면 먼저 SFTP 탐색기(Ctrl+Shift+X)를 여세요",
+                        "Open the SFTP explorer (Ctrl+Shift+X) first to upload files",
                     )
                     .into(),
                 )
@@ -1865,10 +1859,9 @@ impl eframe::App for PlaytermApp {
         self.sftp_panel = self.sftp_panel && sftp_panel;
 
         for session in &mut self.sessions {
-            let title = session.tab_title();
             if let Some(browser) = &mut session.sftp {
                 browser.poll();
-                browser.show(&ctx, session.id, &title);
+                browser.show(&ctx, session.id);
                 if browser.has_running_transfers() {
                     // Progress arrives at most every 100 ms; keep the bars moving.
                     ctx.request_repaint_after(std::time::Duration::from_millis(100));

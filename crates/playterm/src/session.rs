@@ -205,8 +205,6 @@ pub struct Session {
     sftp_start: Option<String>,
     /// A question for the shell's directory is out; `true` if the user asked (reports failure).
     shell_dir_request: Option<bool>,
-    /// Open the window when the requested SFTP channel arrives (not just for the side panel).
-    sftp_window: bool,
     /// Why SFTP could not be opened on this connection; the side panel does not retry by itself.
     sftp_error: Option<String>,
     /// Auto-log settings of the profile, kept so duplicates log to their own file.
@@ -294,7 +292,6 @@ impl Session {
             sftp_pending: false,
             sftp_start: None,
             shell_dir_request: None,
-            sftp_window: false,
             sftp_error: None,
             log_plan: None,
             login_script: None,
@@ -643,12 +640,9 @@ impl Session {
                     self.sftp_pending = false;
                     match result {
                         Ok(conn) => {
-                            let mut browser = SftpBrowser::new(conn, self.sftp_start.take());
-                            browser.open = std::mem::take(&mut self.sftp_window);
-                            self.sftp = Some(browser);
+                            self.sftp = Some(SftpBrowser::new(conn, self.sftp_start.take()));
                         }
                         Err(e) => {
-                            self.sftp_window = false;
                             self.notice(&tr!("SFTP 열기 실패: {e}", "Could not open SFTP: {e}"), "31");
                             self.sftp_error = Some(e);
                         }
@@ -667,7 +661,6 @@ impl Session {
                     self.sftp_start = None;
                     self.shell_dir_request = None;
                     self.sftp_pending = false;
-                    self.sftp_window = false;
                     self.sftp_error = None;
                     self.terminal.reset_modes();
                     match reason {
@@ -1267,19 +1260,6 @@ impl Session {
         self.prompt();
     }
 
-    /// Opens the SFTP window (asking the server for SFTP first if needed), at the shell's
-    /// current directory.
-    pub fn open_sftp(&mut self) {
-        if let Some(browser) = &mut self.sftp {
-            browser.open = true;
-            self.follow_shell_dir(false);
-        } else if self.can_sftp() {
-            self.sftp_window = true;
-            self.sftp_error = None;
-            self.request_sftp();
-        }
-    }
-
     /// Asks for the shell's current directory; the SFTP browser goes there once it is known.
     /// `asked`: the user asked for it, so a failure is reported.
     pub fn follow_shell_dir(&mut self, asked: bool) {
@@ -1291,8 +1271,8 @@ impl Session {
         }
     }
 
-    /// Starts SFTP for the side panel, without the window. Does nothing after a failure on
-    /// this connection until [`Self::retry_sftp`].
+    /// Starts SFTP for the side panel. Does nothing after a failure on this connection until
+    /// [`Self::retry_sftp`].
     pub fn ensure_sftp(&mut self) {
         if self.sftp.is_none() && self.sftp_error.is_none() && self.can_sftp() {
             self.request_sftp();

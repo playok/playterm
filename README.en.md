@@ -12,7 +12,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **SSH, Telnet, serial and RDP** side by side in one window
 - **Split view**: drag tabs to the edges to see several sessions at once
 - **Connect many at once**: Ctrl/Shift+click sites to open them together, or save them as a **template** (tabs, columns, rows or grid) and open it with a double-click
-- **SSH extras**: key authentication (OpenSSH / PuTTY `.ppk`, Pageant, Windows OpenSSH agent), `-L` / `-R` / `-D` port forwarding, and an SFTP file browser beside the terminal
+- **SSH extras**: key authentication (OpenSSH / PuTTY `.ppk`, Pageant, Windows OpenSSH agent), `-L` / `-R` / `-D` port forwarding, and an SFTP explorer panel beside the terminal
 - **Remote Desktop**: resolution that follows the tab size, shared clipboard, Unicode/IME input, and certificate pinning
 - **Password vault**: saved passwords are encrypted with a master password (Argon2id + XChaCha20-Poly1305)
 - **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads (`sz`)
@@ -277,23 +277,22 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
 
 ## SFTP and port forwarding
 
-- In an SSH tab, **Ctrl+Shift+E** (or [SFTP] in the tab bar / the tab's right-click menu) → file browser.
-- **SFTP explorer (side panel)**: Tools → SFTP explorer or **Ctrl+Shift+X**. A panel slides out from the right of the window, beside the terminal, and shows
+- **SFTP explorer (side panel)**: Tools → SFTP explorer, [SFTP] in the tab bar, or **Ctrl+Shift+X** (Ctrl+Shift+E works too). A panel slides out from the right of the window, beside the terminal, and shows
   the remote files of the current tab (it follows when you switch tabs).
   Upload / upload folder / download / new folder / delete buttons, double-click to open a folder or download a file, drag files in from Explorer to upload.
   Drag the left edge of the panel to change its width.
 - Downloads go to a partial file next to the target (`.name.….part`) that replaces it once complete, so a failed or cancelled download leaves an
   existing file as it was. Names from the server that cannot be used on this PC or could point outside the folder (`..`, `\`, `:`, device names
   such as `CON`, ...) are refused with a message.
-- The SFTP window and the explorer panel open at the **current directory of the terminal's shell**; **[Terminal's folder]** goes back there any time.
+- The SFTP explorer opens at the **current directory of the terminal's shell**; **[Terminal's folder]** goes back there any time.
   playterm opens another, invisible channel on the same SSH connection and reads the shell process's directory (`/proc/<shell>/cwd`): no shell
   setup is needed and nothing is typed into the terminal. Nested shells (`bash` in `bash`) are followed. It works on Linux servers; when the
   directory cannot be found (another OS, a shell of another user after `sudo`, ...) SFTP opens at the login directory.
-- When a download finishes, the transfer list shows **[Open folder]**, which opens Windows Explorer with the file selected (in both the SFTP window and the side panel).
+- When a download finishes, the transfer list shows **[Open folder]**, which opens Windows Explorer with the file selected.
 - Icons tell files apart: folders are yellow folders, files get a colored band by kind (images green, archives purple, code blue, scripts orange,
   configuration teal, documents red, media pink, executables dark red; text and others striped).
   Symbolic links get a small arrow, and hidden files (starting with .) are dimmed.
-  Change folders, upload (files/folders, or drop them on the window), download (folders as a whole), new folder, rename, delete, transfer progress/cancel.
+  Change folders, upload (files/folders, or drop them on the panel), download (folders as a whole), new folder, rename, delete, transfer progress/cancel.
 - **Selecting several**: Ctrl+click (add/remove one), Shift+click (a range), Ctrl+A or the checkbox at the top of the list (all). [Download (N)],
   [Delete (N)] and 'Download/Delete N selected' in the right-click menu act on all of them; downloading several asks for one folder to put them in.
   After a click in the list, Delete deletes the selection (after asking) and Esc clears it.
@@ -393,7 +392,7 @@ On macOS playterm does not replace the signed `playterm.app` itself: **Open the 
 | Alt+→ / Alt+← | Next / previous tab |
 | Ctrl+Shift+B | Show/hide the site list |
 | Ctrl+Shift+F | Find (including scrollback) |
-| Ctrl+Shift+E | SFTP file browser |
+| Ctrl+Shift+E | SFTP explorer (side panel) on/off (same as Ctrl+Shift+X) |
 | Ctrl+Shift+X | SFTP explorer (side panel) on/off |
 | Ctrl+Shift+M | Command input bar (bottom) on/off |
 | Ctrl+Shift+I | Typing into all tabs on/off |
