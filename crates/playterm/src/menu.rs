@@ -15,6 +15,8 @@ pub enum Command {
     QuickConnect,
     NewTab,
     SiteManager,
+    /// The site manager on this saved site (the connection line above a terminal).
+    EditSite(String),
     NewSite,
     ImportPutty,
     ImportXshell,

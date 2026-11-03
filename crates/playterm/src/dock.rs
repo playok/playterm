@@ -286,6 +286,9 @@ impl Behavior<u64> for DockView<'_> {
             self.focused = Some(id);
         }
         self.out.view.zoom_steps += output.zoom_steps;
+        if output.command.is_some() {
+            self.out.command = output.command;
+        }
         self.out.view.inputs.extend(output.inputs);
         self.out.shown.push(id);
         UiResponse::None
