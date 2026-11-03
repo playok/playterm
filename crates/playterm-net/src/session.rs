@@ -90,6 +90,8 @@ pub struct ConnectParams {
     /// SSH: reach the host through this one (a bastion), like OpenSSH's ProxyJump / -J. It can
     /// have a jump host of its own (A → B → this host).
     pub jump: Option<Box<ConnectParams>>,
+    /// SSH: X11 forwarding to this display (e.g. `localhost:0.0`), like `ssh -X`.
+    pub x11: Option<String>,
 }
 
 impl ConnectParams {

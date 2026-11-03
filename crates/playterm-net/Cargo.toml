@@ -8,6 +8,7 @@ license.workspace = true
 anyhow = "1.0.104"
 base64 = "0.23.1"
 encoding_rs = "0.8.44"
+getrandom = "0.4.3"
 ironrdp-cliprdr = "0.9"
 ironrdp-cliprdr-native = "0.9"
 ironrdp-connector = "0.12"

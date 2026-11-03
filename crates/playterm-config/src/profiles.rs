@@ -150,6 +150,10 @@ pub struct SessionProfile {
     /// SSH: the jump host (bastion) to go through: a saved site's name, or `user@host:port`;
     /// empty for a direct connection.
     pub jump_host: String,
+    /// SSH: X11 forwarding (`ssh -X`), to `x11_display` (empty: this PC's DISPLAY, else
+    /// `localhost:0.0`).
+    pub x11_forwarding: bool,
+    pub x11_display: String,
     /// A macro (by name, Tools → Macros) run once connected and logged in; empty: none.
     pub after_connect_macro: String,
     /// Options for RDP sites.
@@ -179,6 +183,8 @@ impl Default for SessionProfile {
             tab_color: None,
             tab_label: String::new(),
             jump_host: String::new(),
+            x11_forwarding: false,
+            x11_display: String::new(),
             after_connect_macro: String::new(),
             rdp: RdpSettings::default(),
         }

@@ -33,6 +33,23 @@ struct TestServer {
     scripts: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
 }
 
+/// What came back from this PC's display through the test server's X11 channel.
+static X11_REPLY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+/// An X11 connection setup packet (little endian) with this authorization.
+fn x11_setup(name: &[u8], data: &[u8]) -> Vec<u8> {
+    let pad = |n: usize| vec![0u8; (4 - n % 4) % 4];
+    let mut out = vec![b'l', 0, 11, 0, 0, 0];
+    out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u16).to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out.extend_from_slice(name);
+    out.extend(pad(name.len()));
+    out.extend_from_slice(data);
+    out.extend(pad(data.len()));
+    out
+}
+
 /// What the test server says the shell's current directory is.
 const SHELL_DIR_ANSWER: &str = "/docs";
 
@@ -196,6 +213,32 @@ impl server::Handler for TestServer {
         Ok(())
     }
 
+    async fn x11_request(
+        &mut self,
+        _channel: ChannelId,
+        _single_connection: bool,
+        protocol: &str,
+        cookie: &str,
+        _screen: u32,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // Like an X program on the server: connect back with the session's cookie, say "ping",
+        // and keep what the display answers.
+        let cookie: Vec<u8> = (0..cookie.len()).step_by(2).map(|i| u8::from_str_radix(&cookie[i..i + 2], 16).unwrap()).collect();
+        let setup = [x11_setup(protocol.as_bytes(), &cookie), b"ping".to_vec()].concat();
+        let handle = session.handle();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let channel = handle.channel_open_x11("127.0.0.1", 6010).await.unwrap();
+            let mut stream = channel.into_stream();
+            stream.write_all(&setup).await.unwrap();
+            let mut reply = [0u8; 4];
+            stream.read_exact(&mut reply).await.unwrap();
+            X11_REPLY.lock().unwrap().extend_from_slice(&reply);
+        });
+        Ok(())
+    }
+
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         // The shell is driven through the handler callbacks; release the channel object.
         self.channels.lock().unwrap().remove(&channel);
@@ -300,6 +343,7 @@ impl Fixture {
             known_hosts: self.known_hosts.clone(),
             connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
             jump: None,
+            x11: None,
         }
     }
 
@@ -427,6 +471,7 @@ fn silent_server_times_out() {
         port: silent.local_addr().unwrap().port(),
         connect_timeout: Duration::from_secs(1),
         jump: None,
+        x11: None,
         ..fx.params()
     };
     let started = Instant::now();
@@ -548,6 +593,37 @@ fn key_files_authenticate_without_prompts() {
     let rsa_path = fx.write_key("id_rsa", &rsa);
     let h = fx.connect(ConnectParams { identity_file: Some(rsa_path), ..fx.params() });
     expect_connected(&h);
+}
+
+#[test]
+fn forwards_x11_to_the_display() {
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("x11", &[&key]);
+    fx.trust_host();
+    let path = fx.write_key("id_ed25519", &key);
+    // A fake X server; its display number is its port - 6000.
+    let display = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let number = display.local_addr().unwrap().port() - 6000;
+    let h = fx.connect(ConnectParams {
+        identity_file: Some(path),
+        x11: Some(format!("127.0.0.1:{number}.0")),
+        ..fx.params()
+    });
+    expect_connected(&h);
+    display.set_nonblocking(false).unwrap();
+    let (mut x, _) = display.accept().unwrap();
+    x.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    // The server's made-up cookie is gone: this display has no xauth entry, so none is passed.
+    let expected = [x11_setup(b"", b""), b"ping".to_vec()].concat();
+    let mut got = vec![0u8; expected.len()];
+    x.read_exact(&mut got).unwrap();
+    assert_eq!(got, expected);
+    x.write_all(b"pong").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while X11_REPLY.lock().unwrap().as_slice() != b"pong" {
+        assert!(Instant::now() < deadline, "the reply did not come back");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]

@@ -126,7 +126,7 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 
 | Command | Does |
 |---|---|
-| `ssh [-p port] [-l user] [-i key] [-J jumphost] [-L/-R/-D ...] [--cp949] [user@]host[:port]` | SSH (without a user, your user name on this PC). `-J` goes through a jump host: a site name or `user@host:port` |
+| `ssh [-p port] [-l user] [-i key] [-J jumphost] [-X] [-L/-R/-D ...] [--cp949] [user@]host[:port]` | SSH (without a user, your user name on this PC). `-J` goes through a jump host: a site name or `user@host:port`; `-X` (`-Y`) forwards X11 |
 | `telnet host [port]` | Telnet |
 | `serial COM3 [speed]` | Serial console |
 | `rdp [user@]host[:port]` | Remote Desktop |
@@ -378,6 +378,15 @@ prompt: `ssh -J bastion db01`.
 - With a site's name, that site's key, saved password (while the vault is open) and its own jump host are used (A → B → target, up to 4 hops).
 - In `user@host:port`, a missing user is the target site's, a missing port is 22. Login uses the agent and default keys, else a prompt.
 - The host keys of the jump host and of the target are each checked against known_hosts.
+
+## X11 forwarding
+
+Turn on **X11 forwarding** in an SSH site's settings (advanced), or connect with `ssh -X host` at the local prompt, and X programs run on the
+server (xterm, installers…) show on the X server of this PC.
+- An X server must be running here: VcXsrv or Xming on Windows (by default `localhost:0.0`), XQuartz on macOS. Without one, a notice says so.
+- Where they show is the site's DISPLAY field (empty: this PC's `DISPLAY`, else `localhost:0.0`).
+- The server gets a made-up cookie, and only connections carrying it reach the X server (only this session's programs get the display).
+  The real cookie is put in from `xauth` when it has one.
 
 ## SSH authentication order
 
