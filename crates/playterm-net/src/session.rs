@@ -51,6 +51,15 @@ impl fmt::Display for Protocol {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct X11Request {
+    /// Where the X server is (e.g. `localhost:0.0`).
+    pub display: String,
+    /// The server's X programs get the whole display, keyboard included (`ssh -Y`); otherwise
+    /// they get an untrusted cookie, or nothing when none can be made.
+    pub trusted: bool,
+}
+
 #[derive(Clone)]
 pub struct ConnectParams {
     pub protocol: Protocol,
@@ -90,8 +99,8 @@ pub struct ConnectParams {
     /// SSH: reach the host through this one (a bastion), like OpenSSH's ProxyJump / -J. It can
     /// have a jump host of its own (A → B → this host).
     pub jump: Option<Box<ConnectParams>>,
-    /// SSH: X11 forwarding to this display (e.g. `localhost:0.0`), like `ssh -X`.
-    pub x11: Option<String>,
+    /// SSH: X11 forwarding (`ssh -X`, or with `trusted` `ssh -Y`).
+    pub x11: Option<X11Request>,
 }
 
 impl ConnectParams {

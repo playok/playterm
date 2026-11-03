@@ -5,15 +5,22 @@
 //!
 //! Like OpenSSH, the cookie the server sees is not the real one: each connection's first packet
 //! (the X11 connection setup) must carry it, or the connection is dropped — so only programs of
-//! this session reach the display. It is then replaced by the display's real cookie (from
-//! `xauth`, when there is one), or by no authorization (an X server that does not ask for one).
+//! this session reach the display. It is then replaced by:
+//!
+//! - untrusted (`ssh -X`, the default): a cookie `xauth` generates as *untrusted*, with which
+//!   the X server (SECURITY extension) keeps the remote programs from reading other windows or
+//!   the keyboard. When none can be made (no `xauth`, or an X server without the extension),
+//!   X11 connections are refused rather than given full access.
+//! - trusted (`ssh -Y`, chosen by the user): the display's real cookie from `xauth`, or no
+//!   authorization (an X server that asks for none). The server's programs then have the whole
+//!   display, keyboard included.
 
 use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use playterm_i18n::tr;
+use playterm_i18n::{t, tr};
 
 pub const AUTH_PROTOCOL: &str = "MIT-MAGIC-COOKIE-1";
 /// X11's first TCP port (display 0).
@@ -60,32 +67,61 @@ pub fn default_display() -> String {
     std::env::var("DISPLAY").ok().filter(|d| !d.trim().is_empty()).unwrap_or_else(|| "localhost:0.0".into())
 }
 
-/// The forwarding of one session: the display, the cookie shown to the server and the
-/// display's real one.
+/// What an X11 connection takes to the display in place of the session's made-up cookie.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DisplayAuth {
+    /// This MIT-MAGIC-COOKIE-1 (untrusted, or the display's real one when trusted).
+    Cookie(Vec<u8>),
+    /// No authorization (trusted, and `xauth` has nothing for the display).
+    Open,
+    /// Connections are refused, for this reason (untrusted, and no untrusted cookie).
+    Refuse(String),
+}
+
+/// The forwarding of one session: the display, the cookie shown to the server, and what
+/// connections take to the display.
 #[derive(Clone)]
 pub struct X11Forward {
     pub display: String,
     target: DisplayTarget,
     pub screen: u32,
     fake: Vec<u8>,
-    real: Option<Vec<u8>>,
+    auth: DisplayAuth,
 }
 
 impl X11Forward {
-    /// Prepares forwarding to `display`: a new random cookie, and the display's real one if
-    /// `xauth` knows it.
-    pub async fn new(display: &str) -> anyhow::Result<Self> {
+    /// Prepares forwarding to `display`: a new random cookie for the server, and an untrusted
+    /// cookie for the display (or with `trusted`, its real one).
+    pub async fn new(display: &str, trusted: bool) -> anyhow::Result<Self> {
         let (target, screen) = parse_display(display).map_err(|e| anyhow!(e))?;
         let mut fake = vec![0u8; 16];
         getrandom::fill(&mut fake).map_err(|e| anyhow!("random: {e}"))?;
-        let real = real_cookie(display).await;
-        Ok(Self { display: display.to_owned(), target, screen, fake, real })
+        let auth = if trusted {
+            real_cookie(display).await.map_or(DisplayAuth::Open, DisplayAuth::Cookie)
+        } else {
+            match untrusted_cookie(display).await {
+                Ok(cookie) => DisplayAuth::Cookie(cookie),
+                Err(why) => DisplayAuth::Refuse(tr!(
+                    "신뢰하지 않는(untrusted) X11 쿠키를 만들 수 없어 X 연결을 막습니다 ({why}). 이 서버를 믿는다면 사이트 설정에서 X11 '신뢰 (-Y)' 를 켜세요.",
+                    "No untrusted X11 cookie could be made, so X connections are refused ({why}). If you trust this server, turn on X11 'Trusted (-Y)' in the site's settings."
+                )),
+            }
+        };
+        Ok(Self { display: display.to_owned(), target, screen, fake, auth })
     }
 
-    /// For tests: forwarding with a known real cookie (or none).
-    pub fn with_cookies(display: &str, fake: Vec<u8>, real: Option<Vec<u8>>) -> Result<Self, String> {
+    /// For tests: forwarding with a known made-up cookie and display authorization.
+    pub fn with_auth(display: &str, fake: Vec<u8>, auth: DisplayAuth) -> Result<Self, String> {
         let (target, screen) = parse_display(display)?;
-        Ok(Self { display: display.to_owned(), target, screen, fake, real })
+        Ok(Self { display: display.to_owned(), target, screen, fake, auth })
+    }
+
+    /// Why X11 connections will be refused, if they will (to tell the user up front).
+    pub fn refusal(&self) -> Option<&str> {
+        match &self.auth {
+            DisplayAuth::Refuse(why) => Some(why),
+            _ => None,
+        }
     }
 
     /// The cookie to send in the `x11-req`, in hex.
@@ -103,9 +139,10 @@ impl X11Forward {
                 "An X11 connection from the server did not carry this session's cookie; refused"
             ));
         }
-        let first = match &self.real {
-            Some(real) => setup.with_auth(AUTH_PROTOCOL.as_bytes(), real),
-            None => setup.with_auth(b"", b""),
+        let first = match &self.auth {
+            DisplayAuth::Cookie(cookie) => setup.with_auth(AUTH_PROTOCOL.as_bytes(), cookie),
+            DisplayAuth::Open => setup.with_auth(b"", b""),
+            DisplayAuth::Refuse(why) => bail!("{why}"),
         };
         match &self.target {
             DisplayTarget::Tcp { host, display } => {
@@ -202,6 +239,32 @@ impl Setup {
     }
 }
 
+/// An untrusted MIT-MAGIC-COOKIE-1 for `display`, generated by the X server through `xauth`
+/// into a file of its own (as OpenSSH does for `ssh -X`).
+async fn untrusted_cookie(display: &str) -> Result<Vec<u8>, String> {
+    let display = display.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let mut name = [0u8; 8];
+        getrandom::fill(&mut name).map_err(|e| e.to_string())?;
+        let hex: String = name.iter().map(|b| format!("{b:02x}")).collect();
+        let file = std::env::temp_dir().join(format!("playterm-xauth-{hex}"));
+        let run = |args: &[&str]| std::process::Command::new("xauth").arg("-q").arg("-f").arg(&file).args(args).output();
+        // The cookie lasts while it is in use, and 12 hours after the last X connection ended.
+        let generated = run(&["generate", &display, AUTH_PROTOCOL, "untrusted", "timeout", "43200"]);
+        let listed = run(&["list"]);
+        let _ = std::fs::remove_file(&file);
+        let generated = generated.map_err(|e| tr!("xauth 를 실행할 수 없습니다: {e}", "cannot run xauth: {e}"))?;
+        if !generated.status.success() {
+            let err = String::from_utf8_lossy(&generated.stderr).trim().to_owned();
+            return Err(tr!("xauth generate 실패: {err}", "xauth generate failed: {err}"));
+        }
+        let listed = listed.map_err(|e| e.to_string())?;
+        cookie_from_xauth(&String::from_utf8_lossy(&listed.stdout)).ok_or_else(|| t("xauth 가 쿠키를 만들지 않았습니다", "xauth made no cookie").into())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The display's MIT-MAGIC-COOKIE-1 from `xauth list`, if `xauth` is there and knows it.
 async fn real_cookie(display: &str) -> Option<Vec<u8>> {
     let display = display.to_owned();
@@ -246,6 +309,16 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn untrusted_without_xauth_refuses() {
+        // Unless this machine has xauth and an X server at :0 that makes untrusted cookies,
+        // nothing gets the display.
+        let forward = X11Forward::new("127.0.0.1:59000", false).await.unwrap();
+        assert!(forward.refusal().is_some(), "no untrusted cookie for a display that does not exist");
+        let trusted = X11Forward::new("127.0.0.1:59000", true).await.unwrap();
+        assert!(trusted.refusal().is_none());
+    }
+
     #[test]
     fn reads_xauth_cookies() {
         let list = "mac/unix:0  MIT-MAGIC-COOKIE-1  00ff10ab\nother  XDM-AUTHORIZATION-1  1234\n";
@@ -270,7 +343,8 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         // A display number whose port is this listener's (port - 6000 must fit).
         let Some(display) = port.checked_sub(X_TCP_PORT) else { return };
-        let forward = X11Forward::with_cookies(&format!("127.0.0.1:{display}.0"), vec![7; 16], Some(vec![9; 16])).unwrap();
+        let forward =
+            X11Forward::with_auth(&format!("127.0.0.1:{display}.0"), vec![7; 16], DisplayAuth::Cookie(vec![9; 16])).unwrap();
         for big in [false, true] {
             let (mut remote, theirs) = tokio::io::duplex(4096);
             let f = forward.clone();
@@ -297,8 +371,17 @@ mod tests {
         assert!(relay.await.unwrap().is_err());
         assert!(tokio::time::timeout(Duration::from_millis(200), listener.accept()).await.is_err());
 
-        // No real cookie: no authorization is passed on.
-        let open = X11Forward::with_cookies(&format!("127.0.0.1:{display}"), vec![7; 16], None).unwrap();
+        // Untrusted without an untrusted cookie: refused even with the right cookie.
+        let refused = X11Forward::with_auth(&format!("127.0.0.1:{display}"), vec![7; 16], DisplayAuth::Refuse("no".into())).unwrap();
+        assert_eq!(refused.refusal(), Some("no"));
+        let (mut remote, theirs) = tokio::io::duplex(4096);
+        let relay = tokio::spawn(async move { refused.relay(theirs).await });
+        remote.write_all(&setup_packet(false, AUTH_PROTOCOL.as_bytes(), &[7; 16])).await.unwrap();
+        assert!(relay.await.unwrap().is_err());
+        assert!(tokio::time::timeout(Duration::from_millis(200), listener.accept()).await.is_err());
+
+        // Trusted, and no real cookie: no authorization is passed on.
+        let open = X11Forward::with_auth(&format!("127.0.0.1:{display}"), vec![7; 16], DisplayAuth::Open).unwrap();
         let (mut remote, theirs) = tokio::io::duplex(4096);
         tokio::spawn(async move { open.relay(theirs).await });
         remote.write_all(&setup_packet(false, AUTH_PROTOCOL.as_bytes(), &[7; 16])).await.unwrap();

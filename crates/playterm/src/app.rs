@@ -497,9 +497,12 @@ impl PlaytermApp {
             known_hosts: self.known_hosts.clone(),
             connect_timeout: std::time::Duration::from_secs(self.settings.connect_timeout.into()),
             jump: None,
-            x11: (profile.protocol == Protocol::Ssh && profile.x11_forwarding).then(|| match profile.x11_display.trim() {
-                "" => playterm_net::x11::default_display(),
-                display => display.to_owned(),
+            x11: (profile.protocol == Protocol::Ssh && profile.x11_forwarding).then(|| playterm_net::X11Request {
+                display: match profile.x11_display.trim() {
+                    "" => playterm_net::x11::default_display(),
+                    display => display.to_owned(),
+                },
+                trusted: profile.x11_trusted,
             }),
         }
     }

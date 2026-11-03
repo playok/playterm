@@ -20,7 +20,7 @@ pub fn help() -> &'static str {
 
 const HELP_KO: &str = "\
 \x1b[1m사용할 수 있는 명령\x1b[0m
-  ssh [-p 포트] [-l 사용자] [-i 키파일] [-J 점프호스트] [-X] [-L|-R 포트:호스트:포트] [-D 포트] [--cp949] [사용자@]호스트[:포트]
+  ssh [-p 포트] [-l 사용자] [-i 키파일] [-J 점프호스트] [-X|-Y] [-L|-R 포트:호스트:포트] [-D 포트] [--cp949] [사용자@]호스트[:포트]
   telnet 호스트 [포트]              Telnet 접속 (--cp949: 한글 구형 장비)
   serial COM3 [속도]                시리얼 콘솔 (기본 9600 8N1)
   rdp [사용자@]호스트[:포트]         원격 데스크톱 (Windows RDP)
@@ -43,7 +43,7 @@ const HELP_KO: &str = "\
 
 const HELP_EN: &str = "\
 \x1b[1mAvailable commands\x1b[0m
-  ssh [-p port] [-l user] [-i keyfile] [-J jumphost] [-X] [-L|-R port:host:port] [-D port] [--cp949] [user@]host[:port]
+  ssh [-p port] [-l user] [-i keyfile] [-J jumphost] [-X|-Y] [-L|-R port:host:port] [-D port] [--cp949] [user@]host[:port]
   telnet host [port]                Telnet connection (--cp949: older Korean devices)
   serial COM3 [speed]               Serial console (default 9600 8N1)
   rdp [user@]host[:port]            Remote desktop (Windows RDP)
@@ -141,6 +141,7 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
     let mut identity = String::new();
     let mut jump = String::new();
     let mut x11 = false;
+    let mut x11_trusted = false;
     let mut forwards = Vec::new();
     let mut charset = Charset::Auto;
     let mut target = None;
@@ -154,7 +155,8 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
             "-l" => user = Some(value(t("사용자 이름", "user name"))?),
             "-i" => identity = value(t("키 파일", "key file"))?,
             "-J" => jump = value(t("점프 호스트", "jump host"))?,
-            "-X" | "-Y" => x11 = true,
+            "-X" => x11 = true,
+            "-Y" => (x11, x11_trusted) = (true, true),
             "-L" | "-R" | "-D" => {
                 let kind = match arg.as_str() {
                     "-L" => ForwardKind::Local,
@@ -182,6 +184,7 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
     profile.identity_file = identity;
     profile.jump_host = jump;
     profile.x11_forwarding = x11;
+    profile.x11_trusted = x11_trusted;
     profile.forwards = forwards;
     profile.charset = charset;
     Ok(profile)
@@ -646,8 +649,10 @@ mod tests {
         let p = connect("ssh -J ops@bastion:2222 db01");
         assert_eq!((p.host.as_str(), p.jump_host.as_str()), ("db01", "ops@bastion:2222"));
         assert!(!p.x11_forwarding);
-        assert!(connect("ssh -X web").x11_forwarding);
-        assert!(connect("ssh -Y -p 2222 web").x11_forwarding);
+        let p = connect("ssh -X web");
+        assert!(p.x11_forwarding && !p.x11_trusted, "-X is untrusted");
+        let p = connect("ssh -Y -p 2222 web");
+        assert!(p.x11_forwarding && p.x11_trusted);
         assert!(matches!(parse("ssh -J"), Parsed::Error(_)), "-J needs a host");
 
         let p = connect("ssh me@host:2200 -L 8080:db:5432 -D 1080");
