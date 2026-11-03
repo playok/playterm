@@ -391,6 +391,7 @@ impl SiteManager {
                 .push_id(("site", &p.id), |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
+                        site_tree::row_lead(ui, p.tab_color.map(crate::menu::color32));
                         site_tree::badge(ui, p.protocol);
                         ui.selectable_label(selected, p.display_name())
                     })

@@ -362,10 +362,7 @@ impl Sidebar {
             let response = ui
                 .push_id(&p.id, |ui| {
                     ui.horizontal(|ui| {
-                        if let Some(color) = p.tab_color.map(crate::menu::color32) {
-                            let (rect, _) = ui.allocate_exact_size(egui::vec2(4.0, 16.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 1.0, color);
-                        }
+                        site_tree::row_lead(ui, p.tab_color.map(crate::menu::color32));
                         site_tree::badge(ui, p.protocol);
                         ui.selectable_label(selected, p.display_name())
                     })
