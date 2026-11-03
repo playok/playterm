@@ -367,6 +367,10 @@ pub fn shortcuts(ctx: &egui::Context, keys: &ClipboardKeys) -> bool {
     done || close
 }
 
+/// Who makes playterm, and where to ask questions or report bugs.
+pub const AUTHOR: &str = "playok";
+pub const PROJECT_PAGE: &str = "https://github.com/playok/playterm";
+
 /// "About" box. Returns `true` once closed.
 pub fn about(ctx: &egui::Context) -> bool {
     let mut done = false;
@@ -384,6 +388,11 @@ pub fn about(ctx: &egui::Context) -> bool {
                 "SFTP, 포트 포워딩, 세션 로그, 한글(CP949) 지원",
                 "SFTP, port forwarding, session logs, Korean (CP949) support",
             ));
+            ui.add_space(6.0);
+            ui.label(tr!("제작: {}", "Made by {}", AUTHOR));
+            ui.hyperlink_to(t("문의·버그 신고 (GitHub)", "Questions and bug reports (GitHub)"), PROJECT_PAGE)
+                .on_hover_text(PROJECT_PAGE);
+            ui.weak(PROJECT_PAGE);
             ui.add_space(4.0);
             ui.weak(t(
                 "MIT 라이선스 · 사용한 오픈소스는 도움말 → 오픈소스 라이선스",
@@ -567,5 +576,40 @@ pub fn secret_field(ui: &egui::Ui, field: &egui::Response) {
                 ui.visuals().warn_fg_color,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod about_tests {
+    use super::*;
+
+    /// Every piece of text the About box draws.
+    fn about_text() -> String {
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            // A modal is laid out on the second pass.
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                about(ui.ctx());
+            });
+            out.textures_delta.clear();
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+        }
+        texts.join("\n")
+    }
+
+    #[test]
+    fn about_names_the_author_and_where_to_ask() {
+        let text = about_text();
+        assert!(text.contains(AUTHOR), "{text}");
+        assert!(text.contains(PROJECT_PAGE), "{text}");
+        assert!(text.contains("GitHub"), "{text}");
     }
 }

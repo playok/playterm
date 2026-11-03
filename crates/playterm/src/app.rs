@@ -1257,6 +1257,7 @@ impl PlaytermApp {
             Command::Settings => self.modal = Some(Modal::Settings(Box::new(SettingsDialog::new(&self.settings)))),
             Command::Shortcuts => self.modal = Some(Modal::Shortcuts),
             Command::About => self.modal = Some(Modal::About),
+            Command::ProjectPage => ctx.open_url(egui::OpenUrl::new_tab(dialogs::PROJECT_PAGE)),
             Command::Licenses => self.modal = Some(Modal::Licenses(Box::default())),
             Command::CheckUpdates => self.updater.check(ctx, true),
             Command::ShowUpdate => self.updater.reopen(),

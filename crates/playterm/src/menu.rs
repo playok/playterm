@@ -72,6 +72,8 @@ pub enum Command {
 
     Shortcuts,
     About,
+    /// The project's GitHub page (questions, bug reports).
+    ProjectPage,
     Licenses,
     CheckUpdates,
     /// The dialog of the newer release found earlier.
@@ -303,6 +305,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             ui.separator();
             item(ui, out, t("playterm 정보", "About playterm"), "", true, Command::About);
             item(ui, out, t("오픈소스 라이선스", "Open-source licenses"), "", true, Command::Licenses);
+            item(ui, out, t("문의·버그 신고 (GitHub)", "Questions and bug reports (GitHub)"), "", true, Command::ProjectPage);
             ui.separator();
             item(ui, out, t("업데이트 확인…", "Check for updates…"), "", true, Command::CheckUpdates);
         });
