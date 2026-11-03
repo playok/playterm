@@ -28,6 +28,8 @@ pub enum SidebarAction {
     Delete(String),
     LockVault,
     UnlockVault,
+    /// Set the master password (no vault yet).
+    SetUpVault,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -35,6 +37,48 @@ pub enum VaultState {
     Missing,
     Locked,
     Unlocked,
+}
+
+/// The saved-passwords line of the sidebar: what the vault's state means in plain words, and
+/// the one thing to do about it.
+struct VaultLine {
+    text: &'static str,
+    icon: icon::MaterialIcon,
+    button: &'static str,
+    action: SidebarAction,
+}
+
+impl VaultLine {
+    fn explain() -> &'static str {
+        t(
+            "사이트 비밀번호를 마스터 비밀번호로 암호화해 이 PC 에 저장합니다.",
+            "Site passwords are stored on this PC, encrypted with a master password.",
+        )
+    }
+
+    fn of(vault: VaultState) -> Self {
+        let (text, icon, button, action) = match vault {
+            VaultState::Missing => (
+                t("저장된 비밀번호: 사용 안 함", "Saved passwords: not set up"),
+                icon::VAULT_SET_UP,
+                t("설정", "Set up"),
+                SidebarAction::SetUpVault,
+            ),
+            VaultState::Locked => (
+                t("저장된 비밀번호: 잠김", "Saved passwords: locked"),
+                icon::UNLOCK,
+                t("잠금 해제", "Unlock"),
+                SidebarAction::UnlockVault,
+            ),
+            VaultState::Unlocked => (
+                t("저장된 비밀번호: 열림", "Saved passwords: unlocked"),
+                icon::LOCK,
+                t("잠그기", "Lock"),
+                SidebarAction::LockVault,
+            ),
+        };
+        Self { text, icon, button, action }
+    }
 }
 
 /// Whether a site's name, host, user or folder contains `filter` (ignoring case).
@@ -204,22 +248,10 @@ impl Sidebar {
         ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t("검색", "Search")).desired_width(f32::INFINITY));
 
         ui.horizontal(|ui| {
-            let (text, button) = match vault {
-                VaultState::Missing => (t("비밀번호 볼트: 없음", "Password vault: none"), None),
-                VaultState::Locked => (
-                    t("비밀번호 볼트: 잠김", "Password vault: locked"),
-                    Some((t("잠금 해제", "Unlock"), SidebarAction::UnlockVault)),
-                ),
-                VaultState::Unlocked => (
-                    t("비밀번호 볼트: 열림", "Password vault: unlocked"),
-                    Some((t("잠그기", "Lock"), SidebarAction::LockVault)),
-                ),
-            };
-            ui.small(text);
-            if let Some((label, a)) = button
-                && ui.small_button(label).clicked()
-            {
-                action = Some(a);
+            let line = VaultLine::of(vault);
+            ui.small(line.text).on_hover_text(VaultLine::explain());
+            if ui.add(icon::button(line.icon, line.button).small()).on_hover_text(VaultLine::explain()).clicked() {
+                action = Some(line.action);
             }
         });
         // Sites deleted elsewhere are no longer selected.
@@ -433,5 +465,21 @@ mod tests {
         p.protocol = Protocol::Telnet;
         p.port = 23;
         assert_eq!(summary(&p), "Telnet [::1]:23");
+    }
+}
+
+#[cfg(test)]
+mod vault_line_tests {
+    use super::*;
+
+    #[test]
+    fn every_vault_state_offers_its_action() {
+        assert!(matches!(VaultLine::of(VaultState::Missing).action, SidebarAction::SetUpVault));
+        assert!(matches!(VaultLine::of(VaultState::Locked).action, SidebarAction::UnlockVault));
+        assert!(matches!(VaultLine::of(VaultState::Unlocked).action, SidebarAction::LockVault));
+        // No jargon: the words say what is stored.
+        for state in [VaultState::Missing, VaultState::Locked, VaultState::Unlocked] {
+            assert!(!VaultLine::of(state).text.contains("볼트"));
+        }
     }
 }
