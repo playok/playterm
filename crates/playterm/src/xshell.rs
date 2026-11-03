@@ -11,10 +11,30 @@ use playterm_term::Charset;
 
 use crate::import_dialog::ImportedSession;
 
-/// Deepest subfolder read, and most session files read (a wrongly picked folder such as a
-/// whole drive must not hang the dialog).
-const MAX_DEPTH: usize = 8;
-const MAX_FILES: usize = 5000;
+/// How much of a folder tree is read. A wrongly picked folder such as a whole drive or the
+/// home folder must not hang the dialog, so folders and directory entries are counted too,
+/// not only session files.
+#[derive(Clone, Copy, Debug)]
+struct Limits {
+    /// Deepest subfolder read.
+    depth: usize,
+    /// Folders read.
+    dirs: usize,
+    /// Directory entries looked at (files and folders).
+    entries: usize,
+    /// Session files read.
+    files: usize,
+}
+
+const LIMITS: Limits = Limits { depth: 8, dirs: 2_000, entries: 50_000, files: 5_000 };
+
+/// The sessions found under a folder.
+#[derive(Debug)]
+pub struct Loaded {
+    pub sessions: Vec<ImportedSession>,
+    /// The folder held more than [`LIMITS`] allow: only part of it was read.
+    pub truncated: bool,
+}
 
 /// Values of an `.xsh` file by (section, key), both lower-case.
 pub type Values = HashMap<(String, String), String>;
@@ -231,38 +251,57 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
     done(Ok(p), notes)
 }
 
-/// Every `.xsh` file under `dir` with its subfolder ("" at the top, `a/b` below), sorted.
-fn session_files(dir: &Path) -> Vec<(String, PathBuf)> {
+/// The `.xsh` files under `dir` with their subfolder ("" at the top, `a/b` below), sorted, and
+/// whether `limits` stopped the walk before it read everything.
+fn session_files(dir: &Path, limits: Limits) -> (Vec<(String, PathBuf)>, bool) {
     let mut out = Vec::new();
+    let mut truncated = false;
+    let (mut dirs, mut entries_seen) = (0, 0);
     let mut stack = vec![(dir.to_owned(), String::new(), 0)];
-    while let Some((path, folder, depth)) = stack.pop() {
+    'walk: while let Some((path, folder, depth)) = stack.pop() {
+        if dirs >= limits.dirs {
+            truncated = true;
+            break;
+        }
+        dirs += 1;
         let Ok(entries) = std::fs::read_dir(&path) else { continue };
         for entry in entries.flatten() {
-            if out.len() >= MAX_FILES {
-                return out;
+            if entries_seen >= limits.entries || out.len() >= limits.files {
+                truncated = true;
+                break 'walk;
             }
+            entries_seen += 1;
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
             // Not followed through links: they could lead out of the folder, or in circles.
             let Ok(kind) = entry.file_type() else { continue };
-            if kind.is_dir() && depth < MAX_DEPTH {
-                let sub = if folder.is_empty() { name } else { format!("{folder}/{name}") };
-                stack.push((path, sub, depth + 1));
+            if kind.is_dir() {
+                if depth < limits.depth {
+                    let sub = if folder.is_empty() { name } else { format!("{folder}/{name}") };
+                    stack.push((path, sub, depth + 1));
+                } else {
+                    truncated = true;
+                }
             } else if kind.is_file() && name.to_lowercase().ends_with(".xsh") {
                 out.push((folder.clone(), path));
             }
         }
     }
     out.sort_by_key(|(folder, path)| (folder.to_lowercase(), path.to_string_lossy().to_lowercase()));
-    out
+    (out, truncated)
 }
 
-/// Reads and converts every session under `dir`.
-pub fn load(dir: &Path) -> Result<Vec<ImportedSession>, String> {
+/// Reads and converts every session under `dir` (as far as [`LIMITS`] allow).
+pub fn load(dir: &Path) -> Result<Loaded, String> {
+    load_with(dir, LIMITS)
+}
+
+fn load_with(dir: &Path, limits: Limits) -> Result<Loaded, String> {
     if !dir.is_dir() {
         return Err(tr!("폴더가 없습니다: {}", "Folder not found: {}", dir.display()));
     }
-    Ok(session_files(dir)
+    let (files, truncated) = session_files(dir, limits);
+    let sessions = files
         .into_iter()
         .map(|(folder, path)| {
             let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -271,7 +310,8 @@ pub fn load(dir: &Path) -> Result<Vec<ImportedSession>, String> {
                 Err(e) => ImportedSession { name, folder, profile: Err(e.to_string()), notes: Vec::new() },
             }
         })
-        .collect())
+        .collect();
+    Ok(Loaded { sessions, truncated })
 }
 
 #[cfg(test)]
@@ -337,9 +377,47 @@ mod tests {
         std::fs::write(dir.path().join("web.xsh"), "[CONNECTION]\nHost=web\n[CONNECTION:AUTHENTICATION]\nUserName=u\n").unwrap();
         std::fs::write(dir.path().join("운영").join("DB").join("master.XSH"), utf16le(SSH)).unwrap();
         std::fs::write(dir.path().join("notes.txt"), "not a session").unwrap();
-        let sessions = load(dir.path()).unwrap();
-        let found: Vec<(&str, &str)> = sessions.iter().map(|s| (s.folder.as_str(), s.name.as_str())).collect();
+        let loaded = load(dir.path()).unwrap();
+        let found: Vec<(&str, &str)> = loaded.sessions.iter().map(|s| (s.folder.as_str(), s.name.as_str())).collect();
         assert_eq!(found, [("", "web"), ("운영/DB", "master")]);
+        assert!(!loaded.truncated);
         assert!(load(&dir.path().join("missing")).is_err());
+    }
+
+    /// A tree with `width` subfolders, each holding `width` session files named in reverse.
+    fn wide_tree(width: usize) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for d in 0..width {
+            let sub = dir.path().join(format!("d{d}"));
+            std::fs::create_dir(&sub).unwrap();
+            for f in (0..width).rev() {
+                std::fs::write(sub.join(format!("s{f}.xsh")), "[CONNECTION]\nHost=h\n").unwrap();
+            }
+        }
+        dir
+    }
+
+    #[test]
+    fn stops_at_the_limits_and_still_sorts() {
+        let dir = wide_tree(4);
+        let all = Limits { depth: 8, dirs: 100, entries: 1000, files: 1000 };
+        let (files, truncated) = session_files(dir.path(), all);
+        assert_eq!((files.len(), truncated), (16, false));
+
+        // Folders without any session files count too: a big tree stops early.
+        for limits in [
+            Limits { dirs: 2, ..all },
+            Limits { entries: 6, ..all },
+            Limits { files: 3, ..all },
+            Limits { depth: 0, ..all },
+        ] {
+            let (files, truncated) = session_files(dir.path(), limits);
+            assert!(truncated, "{limits:?}");
+            assert!(files.len() < 16, "{limits:?}");
+            let mut sorted = files.clone();
+            sorted.sort_by_key(|(folder, path)| (folder.to_lowercase(), path.to_string_lossy().to_lowercase()));
+            assert_eq!(files, sorted, "sorted even when cut short: {limits:?}");
+        }
+        assert!(load_with(dir.path(), Limits { files: 3, ..all }).unwrap().truncated);
     }
 }

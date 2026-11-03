@@ -1305,9 +1305,9 @@ impl PlaytermApp {
             Modal::Import(mut dialog) => match dialog.show(ctx, &self.store) {
                 ImportResult::Open => self.modal = Some(Modal::Import(dialog)),
                 ImportResult::Cancel => {}
-                ImportResult::Import(profiles) => {
+                ImportResult::Import { source, folder, profiles } => {
                     let count = profiles.len();
-                    let folder = profiles.first().map(|p| p.folder.clone()).unwrap_or_default();
+                    let source = source.name();
                     for p in profiles {
                         let r = self.store.upsert(p);
                         self.report(t("사이트 저장 실패", "Could not save the site"), r);
@@ -1315,8 +1315,8 @@ impl PlaytermApp {
                     let place =
                         if folder.is_empty() { String::new() } else { tr!(" ('{folder}' 폴더)", " (folder '{folder}')") };
                     self.info = Some(tr!(
-                        "PuTTY 세션 {count}개를 가져왔습니다{place}",
-                        "Imported {count} PuTTY sessions{place}"
+                        "{source} 세션 {count}개를 가져왔습니다{place}",
+                        "Imported {count} {source} sessions{place}"
                     ));
                     self.show_sidebar = true;
                 }
