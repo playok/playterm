@@ -28,6 +28,8 @@ pub struct SettingsDialog {
     fonts: &'static [FontChoice],
     /// Narrows the font list.
     font_filter: String,
+    /// The section on show.
+    section: Section,
 }
 
 fn color(hex: u32) -> Color32 {
@@ -57,6 +59,36 @@ fn swatch(ui: &mut egui::Ui, theme: &Theme) {
     }
 }
 
+/// Height of a settings section (the tallest: the display section with its preview).
+const SECTION_HEIGHT: f32 = 330.0;
+
+/// The settings, by subject.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Section {
+    Display,
+    Terminal,
+    Clipboard,
+    Connection,
+    Transfers,
+    Updates,
+}
+
+impl Section {
+    const ALL: [Section; 6] =
+        [Section::Display, Section::Terminal, Section::Clipboard, Section::Connection, Section::Transfers, Section::Updates];
+
+    fn name(self) -> &'static str {
+        match self {
+            Section::Display => t("화면", "Display"),
+            Section::Terminal => t("터미널", "Terminal"),
+            Section::Clipboard => t("키보드·클립보드", "Keyboard & clipboard"),
+            Section::Connection => t("연결", "Connection"),
+            Section::Transfers => t("파일 전송", "File transfer"),
+            Section::Updates => t("업데이트", "Updates"),
+        }
+    }
+}
+
 impl SettingsDialog {
     pub fn new(current: &AppSettings) -> Self {
         Self {
@@ -65,6 +97,7 @@ impl SettingsDialog {
             shown: current.clone(),
             fonts: fonts::available(),
             font_filter: String::new(),
+            section: Section::Display,
         }
     }
 
@@ -73,34 +106,42 @@ impl SettingsDialog {
         let modal = egui::Modal::new(egui::Id::unique("settings")).show(ctx, |ui| {
             ui.set_width(460.0);
             ui.heading(t("설정", "Settings"));
-            ui.add_space(8.0);
-            egui::Grid::new("settings-grid").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                self.ui_rows(ui);
-                self.font_row(ui);
-                self.size_row(ui);
-                self.theme_row(ui);
-
-                ui.label(t("스크롤백", "Scrollback"));
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut self.draft.scrollback)
-                            .range(AppSettings::MIN_SCROLLBACK..=AppSettings::MAX_SCROLLBACK)
-                            .speed(100)
-                            .suffix(t(" 줄", " lines")),
-                    );
-                    ui.weak(t("탭마다 보관하는 지난 출력", "Past output kept for each tab"));
-                });
-                ui.end_row();
-                if crate::power::SUPPORTED {
-                    self.sleep_row(ui);
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                for section in Section::ALL {
+                    ui.selectable_value(&mut self.section, section, section.name());
                 }
-                self.timeout_row(ui);
-                self.zmodem_row(ui);
-                self.update_row(ui);
-                self.clipboard_rows(ui);
             });
-            ui.add_space(8.0);
-            self.preview(ui);
+            ui.separator();
+            ui.add_space(4.0);
+            // The same height for every section, so the dialog does not jump when switching.
+            ui.allocate_ui(egui::vec2(ui.available_width(), SECTION_HEIGHT), |ui| {
+                ui.set_min_height(SECTION_HEIGHT);
+                egui::Grid::new(("settings-grid", self.section)).num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
+                    match self.section {
+                        Section::Display => {
+                            self.ui_rows(ui);
+                            self.font_row(ui);
+                            self.size_row(ui);
+                            self.theme_row(ui);
+                        }
+                        Section::Terminal => self.scrollback_row(ui),
+                        Section::Clipboard => self.clipboard_rows(ui),
+                        Section::Connection => {
+                            self.timeout_row(ui);
+                            if crate::power::SUPPORTED {
+                                self.sleep_row(ui);
+                            }
+                        }
+                        Section::Transfers => self.zmodem_row(ui),
+                        Section::Updates => self.update_row(ui),
+                    }
+                });
+                if self.section == Section::Display {
+                    ui.add_space(8.0);
+                    self.preview(ui);
+                }
+            });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked() {
@@ -127,6 +168,20 @@ impl SettingsDialog {
             return SettingsResult::Changed(self.draft.clone());
         }
         SettingsResult::Open
+    }
+
+    fn scrollback_row(&mut self, ui: &mut egui::Ui) {
+        ui.label(t("스크롤백", "Scrollback"));
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut self.draft.scrollback)
+                    .range(AppSettings::MIN_SCROLLBACK..=AppSettings::MAX_SCROLLBACK)
+                    .speed(100)
+                    .suffix(t(" 줄", " lines")),
+            );
+            ui.weak(t("탭마다 보관하는 지난 출력", "Past output kept for each tab"));
+        });
+        ui.end_row();
     }
 
     fn font_row(&mut self, ui: &mut egui::Ui) {
@@ -426,5 +481,62 @@ Help → Check for updates checks at any time.",
                 ui.label(selected.background_color(color(theme.selection)));
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+
+    /// The text the dialog draws with `section` on show, and the dialog's height.
+    fn render(section: Section) -> (String, f32) {
+        let ctx = egui::Context::default();
+        let mut dialog = SettingsDialog::new(&AppSettings::default());
+        dialog.section = section;
+        let (mut text, mut height) = (String::new(), 0.0);
+        for _ in 0..3 {
+            // A modal is laid out on a later pass.
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let _ = dialog.show(ui.ctx());
+            });
+            out.textures_delta.clear();
+            let mut texts = Vec::new();
+            let mut bottom = 0.0f32;
+            let mut top = f32::MAX;
+            for s in &out.shapes {
+                if let egui::Shape::Text(t) = &s.shape {
+                    texts.push(t.galley.text().to_owned());
+                    top = top.min(t.pos.y);
+                    bottom = bottom.max(t.pos.y + t.galley.size().y);
+                }
+            }
+            text = texts.join("\n");
+            height = bottom - top;
+        }
+        (text, height)
+    }
+
+    #[test]
+    fn each_section_shows_its_own_settings() {
+        playterm_i18n::set_english(false);
+        let expect = [
+            (Section::Display, "글꼴"),
+            (Section::Terminal, "스크롤백"),
+            (Section::Clipboard, "붙여넣기"),
+            (Section::Connection, "연결 시간 제한"),
+            (Section::Transfers, "ZMODEM"),
+            (Section::Updates, "업데이트"),
+        ];
+        let mut heights = Vec::new();
+        for (section, label) in expect {
+            let (text, height) = render(section);
+            assert!(text.contains(label), "{section:?}: {label} missing in\n{text}");
+            heights.push(height);
+        }
+        // Scrollback is only in its own section.
+        assert!(!render(Section::Display).0.contains("스크롤백"));
+        // The dialog keeps its height (the OK row stays put) from section to section.
+        let (min, max) = heights.iter().fold((f32::MAX, 0.0f32), |(a, b), &h| (a.min(h), b.max(h)));
+        assert!(max - min < 2.0, "heights {heights:?}");
     }
 }
