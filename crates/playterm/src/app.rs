@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
@@ -189,6 +189,10 @@ pub struct PlaytermApp {
     settings_unsaved: Option<Instant>,
     /// Where ZMODEM downloads are saved (from the settings).
     zmodem_dir: PathBuf,
+    /// The folder last picked for a ZMODEM download, where the next question starts.
+    zmodem_last: Option<PathBuf>,
+    /// Open questions for the folder of a ZMODEM download: the tab, and the answer to come.
+    zmodem_questions: Vec<(u64, mpsc::Receiver<Option<PathBuf>>)>,
     /// Ctrl+wheel / pinch steps not yet turned into a whole font size step.
     zoom_accum: f32,
     /// Simultaneous input: typing in the active tab also goes to the other included tabs.
@@ -255,6 +259,8 @@ impl PlaytermApp {
             connect_target: None,
             dialog_target: None,
             zmodem_dir: local_fs::zmodem_folder(&settings.zmodem_dir),
+            zmodem_last: None,
+            zmodem_questions: Vec::new(),
             settings,
             settings_path,
             settings_unsaved: None,
@@ -1002,6 +1008,7 @@ impl PlaytermApp {
         }
         if new.zmodem_dir != self.settings.zmodem_dir {
             self.zmodem_dir = local_fs::zmodem_folder(&new.zmodem_dir);
+            self.zmodem_last = None;
         }
         self.settings = new;
     }
@@ -1675,6 +1682,51 @@ fn load_profiles(path: &Path) -> (ProfileStore, Option<String>) {
     }
 }
 
+impl PlaytermApp {
+    /// Asks where to save the ZMODEM downloads that just started, and hands the answers to
+    /// their tabs. The question is a window of its own: the app (and the transfer) go on.
+    fn zmodem_folders(&mut self, ctx: &egui::Context) {
+        let start = self.zmodem_last.clone().filter(|dir| dir.is_dir()).unwrap_or_else(|| self.zmodem_dir.clone());
+        for session in &mut self.sessions {
+            if !session.take_zmodem_question() {
+                continue;
+            }
+            let title = tr!(
+                "ZMODEM 으로 받은 파일을 저장할 폴더 - {}",
+                "Folder for the files received with ZMODEM - {}",
+                session.tab_title()
+            );
+            let (start, ctx) = (start.clone(), ctx.clone());
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(rfd::FileDialog::new().set_title(title).set_directory(&start).pick_folder());
+                ctx.request_repaint();
+            });
+            self.zmodem_questions.push((session.id, rx));
+        }
+        let mut answers = Vec::new();
+        self.zmodem_questions.retain(|(id, rx)| match rx.try_recv() {
+            Ok(dir) => {
+                answers.push((*id, dir));
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                answers.push((*id, None));
+                false
+            }
+        });
+        for (id, dir) in answers {
+            if let Some(dir) = &dir {
+                self.zmodem_last = Some(dir.clone());
+            }
+            if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+                session.zmodem_folder_chosen(dir);
+            }
+        }
+    }
+}
+
 impl eframe::App for PlaytermApp {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Text fields get the usual clipboard keys; a terminal or remote desktop with the
@@ -1688,8 +1740,9 @@ impl eframe::App for PlaytermApp {
         let ctx = ui.ctx().clone();
         let active_id = self.sessions.get(self.active).map(|s| s.id);
         let downloads = self.zmodem_dir.clone();
+        let ask = self.settings.zmodem_ask;
         for session in &mut self.sessions {
-            session.poll(&downloads);
+            session.poll(&downloads, ask);
             if session.in_zmodem() {
                 // Timeouts of the transfer, also while nothing arrives.
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
@@ -1708,6 +1761,7 @@ impl eframe::App for PlaytermApp {
                 }
             }
         }
+        self.zmodem_folders(&ctx);
         // "Save password" from a login dialog, once that login has succeeded. Waits while another
         // dialog is open if the vault still has to be unlocked (that needs a dialog of its own).
         if (self.modal.is_none() || self.vault.is_unlocked())

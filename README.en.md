@@ -275,7 +275,10 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
 
 - Running `sz file...` on the server is recognized by the terminal, and the files are received on this PC. Works over SSH, Telnet and serial (the server needs lrzsz).
 - They are saved in **Tools → Settings → ZMODEM downloads** (Windows' Downloads folder by default). A file with the same name is not replaced: the new one is saved as `name (1).ext`.
+- With **Ask for the folder each time** (on by default), a window asks where to save when a download starts (starting at the folder picked last).
+  `sz` gives up after about 20 seconds without an answer, so the files are received into a temporary folder meanwhile and moved to the chosen one when both are done. Cancelling the window cancels the download and deletes what was received.
 - While receiving, the terminal shows the progress of each file, and at the end the files received and where they are. **Ctrl+C** (or Esc, Ctrl+X) cancels.
+  After a cancel, the transfer data the server had already sent is dropped instead of filling the screen; only the shell prompt after it is shown.
 - Every data block is checked (16/32-bit CRC); a damaged part is received again from where it went wrong, and only complete files are kept (a file is written under a temporary name and renamed at the end).
   Cancelling or losing the connection deletes the file being received. File names from the server lose their path and characters Windows does not allow, so nothing is saved outside the folder.
 - ZCOMMAND, a server asking to run a command on this PC, is refused. `rz` on the server (sending from this PC) is not supported yet and is cancelled automatically; use SFTP to send files.
@@ -330,7 +333,7 @@ with 'Forgot the master password?' keeps the old file as `vault.toml.bak`.
 | File | Contents |
 |---|---|
 | `sessions.toml` | Saved sites and templates (no passwords) |
-| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder |
+| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder and asking for it |
 | `vault.toml` | Saved passwords, encrypted with the master password → Argon2id → XChaCha20-Poly1305. Each password is stored with the target it was saved for (protocol, user, host, port), also encrypted: if a site in `sessions.toml` is pointed elsewhere, its password is not sent (changes made in playterm carry it along). Several windows do not delete each other's saved passwords |
 | `known_hosts` | SSH host keys. If a known host's key changes — even to a key of another type — the connection is refused (protection against man-in-the-middle attacks). Key types on record are asked for first |
 | `known_rdp_hosts` | RDP server certificate fingerprints. A changed certificate is refused |

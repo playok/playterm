@@ -142,6 +142,9 @@ pub struct AppSettings {
     pub site_view: SiteView,
     /// Folder ZMODEM downloads (`sz` on the server) are saved in; empty = the Downloads folder.
     pub zmodem_dir: String,
+    /// Ask for the folder each time a ZMODEM download starts (`zmodem_dir` is where the
+    /// question starts).
+    pub zmodem_ask: bool,
 }
 
 impl AppSettings {
@@ -200,6 +203,7 @@ impl Default for AppSettings {
             clipboard: ClipboardKeys::default(),
             site_view: SiteView::Tree,
             zmodem_dir: String::new(),
+            zmodem_ask: true,
         }
     }
 }
@@ -229,6 +233,7 @@ mod tests {
             clipboard: ClipboardKeys { copy_on_select: true, ctrl_v: false, right_click_paste: true, ..Default::default() },
             site_view: SiteView::Grid,
             zmodem_dir: "D:\\받은 파일".into(),
+            zmodem_ask: false,
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);
