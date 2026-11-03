@@ -82,6 +82,45 @@ pub fn button<'a>(icon: MaterialIcon, text: impl Into<WidgetText>) -> Button<'a>
     Button::new((icon.rich_text(), text.into()))
 }
 
+/// The main action of a dialog (Connect, Save, OK…): filled with the selection color, so it
+/// stands out from Cancel and it is clear what Enter does.
+pub fn primary<'a>(ui: &eframe::egui::Ui, icon: MaterialIcon, text: impl Into<WidgetText>) -> Button<'a> {
+    button(icon, text).fill(ui.visuals().selection.bg_fill)
+}
+
+/// An action that destroys something (Delete): filled in a dark red.
+pub fn danger<'a>(ui: &eframe::egui::Ui, icon: MaterialIcon, text: impl Into<WidgetText>) -> Button<'a> {
+    button(icon, text).fill(ui.visuals().error_fg_color.gamma_multiply(0.45))
+}
+
+/// Whether the main action comes after Cancel (macOS) or before it (Windows and others).
+pub const MAIN_LAST: bool = cfg!(target_os = "macos");
+
+/// A dialog's main button and Cancel side by side, in the platform's order. Returns their
+/// responses as (main, cancel).
+pub fn ok_cancel_row(
+    ui: &mut eframe::egui::Ui,
+    main: Button<'_>,
+    main_enabled: bool,
+    cancel: Button<'_>,
+) -> (eframe::egui::Response, eframe::egui::Response) {
+    ui.horizontal(|ui| {
+        if MAIN_LAST {
+            let c = ui.add(cancel);
+            (ui.add_enabled(main_enabled, main), c)
+        } else {
+            let m = ui.add_enabled(main_enabled, main);
+            (m, ui.add(cancel))
+        }
+    })
+    .inner
+}
+
+/// Cancel, as every dialog has it.
+pub fn cancel<'a>() -> Button<'a> {
+    button(CANCEL, playterm_i18n::t("취소", "Cancel"))
+}
+
 /// Smallest size of a button that shows only an icon: the recommended minimum target, so a
 /// small ✕ or ▲ is not hard to hit (the icon itself keeps its size).
 pub const MIN_ICON_BUTTON: f32 = 24.0;
@@ -132,6 +171,23 @@ mod tests {
         });
         out.textures_delta.clear(); // no renderer here
         assert!(size.x >= MIN_ICON_BUTTON && size.y >= MIN_ICON_BUTTON, "{size:?}");
+    }
+
+    #[test]
+    fn main_button_follows_the_platform_order() {
+        let ctx = eframe::egui::Context::default();
+        let (mut main_x, mut cancel_x) = (0.0, 0.0);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let main = primary(ui, OK, "OK");
+            let (m, c) = ok_cancel_row(ui, main, true, cancel());
+            (main_x, cancel_x) = (m.rect.left(), c.rect.left());
+        });
+        out.textures_delta.clear();
+        if cfg!(target_os = "macos") {
+            assert!(main_x > cancel_x, "macOS: [Cancel] [OK]");
+        } else {
+            assert!(main_x < cancel_x, "Windows: [OK] [Cancel]");
+        }
     }
 
     #[test]

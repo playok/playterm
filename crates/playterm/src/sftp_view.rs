@@ -597,14 +597,21 @@ impl SftpBrowser {
                 }
             }
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked() {
+            let deleting = matches!(prompt, Prompt::Delete(_));
+            let ok = if deleting {
+                icon::danger(ui, icon::DELETE, t("삭제", "Delete"))
+            } else {
+                icon::primary(ui, icon::OK, t("확인", "OK"))
+            };
+            let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
+            {
+                if main.clicked() {
                     done = Some(true);
                 }
-                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
+                if cancel.clicked() {
                     done = Some(false);
                 }
-            });
+            }
         });
         if modal.should_close() && done.is_none() {
             done = Some(false);

@@ -43,12 +43,12 @@ impl QuickConnect {
             ui.add_space(4.0);
             ui.checkbox(&mut self.save, t("사이트 목록에 저장", "Save to the site list"));
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                submit |= ui.add(icon::button(icon::CONNECT, t("연결", "Connect"))).clicked();
-                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
-                    result = QuickConnectResult::Cancel;
-                }
-            });
+            let connect = icon::primary(ui, icon::CONNECT, t("연결", "Connect"));
+            let (main, cancel) = icon::ok_cancel_row(ui, connect, true, icon::cancel());
+            submit |= main.clicked();
+            if cancel.clicked() {
+                result = QuickConnectResult::Cancel;
+            }
             if submit && let Some((profile, password)) = self.form.validate() {
                 result = QuickConnectResult::Connect { profile: Box::new(profile), password, save: self.save };
             }
@@ -157,7 +157,7 @@ impl VaultDialog {
             ui.horizontal(|ui| {
                 let label = if self.mode == VaultMode::Unlock { t("잠금 해제", "Unlock") } else { t("만들기", "Create") };
                 let icon = if self.mode == VaultMode::Unlock { icon::UNLOCK } else { icon::ADD };
-                if ui.add(icon::button(icon, label)).clicked() || enter {
+                if ui.add(icon::primary(ui, icon, label)).clicked() || enter {
                     if self.master.is_empty() {
                         self.error = Some(t("마스터 비밀번호를 입력하세요", "Enter the master password").into());
                     } else if self.mode == VaultMode::Create && *self.master != *self.confirm {
@@ -214,14 +214,14 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
         ui.heading(title);
         ui.label(text);
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.add(icon::button(icon::OK, ok_label)).clicked() {
-                answer = Some(true);
-            }
-            if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
-                answer = Some(false);
-            }
-        });
+        let ok = icon::primary(ui, icon::OK, ok_label);
+        let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
+        if main.clicked() {
+            answer = Some(true);
+        }
+        if cancel.clicked() {
+            answer = Some(false);
+        }
     });
     if close && answer.is_none() { Some(false) } else { answer }
 }
@@ -260,14 +260,14 @@ pub fn confirm_paste(ctx: &egui::Context, text: &str) -> Option<bool> {
             ui.add(egui::Label::new(egui::RichText::new(preview.join("\n")).monospace()).wrap());
         });
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.add(icon::button(icon::PASTE, t("붙여넣기", "Paste"))).clicked() {
-                answer = Some(true);
-            }
-            if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
-                answer = Some(false);
-            }
-        });
+        let paste = icon::primary(ui, icon::PASTE, t("붙여넣기", "Paste"));
+        let (main, cancel) = icon::ok_cancel_row(ui, paste, true, icon::cancel());
+        if main.clicked() {
+            answer = Some(true);
+        }
+        if cancel.clicked() {
+            answer = Some(false);
+        }
         ui.weak(t(
             "도구 → 설정의 '붙여넣기 확인' 에서 끌 수 있습니다.",
             "Can be turned off with 'Confirm paste' in Tools → Settings.",
@@ -399,7 +399,7 @@ pub fn about(ctx: &egui::Context) -> bool {
                 "MIT License · open-source components: Help → Open-source licenses",
             ));
             ui.add_space(8.0);
-            done = ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked();
+            done = ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked();
         });
     });
     done || close
@@ -440,14 +440,14 @@ pub fn host_key(ctx: &egui::Context, session: &mut Session) {
             ui.end_row();
         });
         ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            if ui.add(icon::button(icon::TRUST, t("신뢰하고 연결", "Trust and connect"))).clicked() {
-                decision = Some(true);
-            }
-            if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
-                decision = Some(false);
-            }
-        });
+        let trust = icon::primary(ui, icon::TRUST, t("신뢰하고 연결", "Trust and connect"));
+        let (main, cancel) = icon::ok_cancel_row(ui, trust, true, icon::cancel());
+        if main.clicked() {
+            decision = Some(true);
+        }
+        if cancel.clicked() {
+            decision = Some(false);
+        }
     });
     if let Some(accept) = decision
         && let Some(check) = session.host_key.take()
@@ -518,14 +518,14 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
         }
         ui.add_space(10.0);
         let user_ok = original_user.is_none() || !pending.user.trim().is_empty();
-        ui.horizontal(|ui| {
-            if ui.add_enabled(user_ok, icon::button(icon::OK, t("확인", "OK"))).clicked() || (enter && user_ok) {
-                submit = Some(true);
-            }
-            if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
-                submit = Some(false);
-            }
-        });
+        let ok = icon::primary(ui, icon::OK, t("확인", "OK"));
+        let (main, cancel) = icon::ok_cancel_row(ui, ok, user_ok, icon::cancel());
+        if main.clicked() || (enter && user_ok) {
+            submit = Some(true);
+        }
+        if cancel.clicked() {
+            submit = Some(false);
+        }
     });
     let ok = submit?;
     let pending = session.auth.take()?;

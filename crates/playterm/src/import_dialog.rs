@@ -220,8 +220,10 @@ impl ImportDialog {
             });
             ui.add_space(8.0);
             let count = self.items.iter().filter(|i| i.checked).count();
-            ui.horizontal(|ui| {
-                if ui.add_enabled(count > 0, icon::button(icon::IMPORT, tr!("가져오기 ({count})", "Import ({count})"))).clicked() {
+            let import = icon::primary(ui, icon::IMPORT, tr!("가져오기 ({count})", "Import ({count})"));
+            let (main, cancel) = icon::ok_cancel_row(ui, import, count > 0, icon::cancel());
+            {
+                if main.clicked() {
                     let folder = normalize_folder(&self.folder);
                     let profiles = self
                         .items
@@ -234,10 +236,10 @@ impl ImportDialog {
                         .collect();
                     result = ImportResult::Import { source: self.source, folder, profiles };
                 }
-                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
+                if cancel.clicked() {
                     result = ImportResult::Cancel;
                 }
-            });
+            }
         });
         if matches!(result, ImportResult::Open) && modal.should_close() {
             result = ImportResult::Cancel;

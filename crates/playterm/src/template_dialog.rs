@@ -63,12 +63,12 @@ impl TemplateDialog {
                 if let Some(error) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
-                ui.horizontal(|ui| {
-                    submit |= ui.add(icon::button(icon::SAVE, t("저장", "Save"))).clicked();
-                    if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
-                        result = TemplateResult::Cancel;
-                    }
-                });
+                let save = icon::primary(ui, icon::SAVE, t("저장", "Save"));
+                let (main, cancel) = icon::ok_cancel_row(ui, save, true, icon::cancel());
+                submit |= main.clicked();
+                if cancel.clicked() {
+                    result = TemplateResult::Cancel;
+                }
                 if submit {
                     self.template.name = self.template.name.trim().to_owned();
                     self.template.sites.retain(|id| store.get(id).is_some());

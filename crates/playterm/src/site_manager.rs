@@ -517,14 +517,14 @@ impl SiteManager {
                     if let Some(e) = error {
                         ui.colored_label(ui.visuals().error_fg_color, e.as_str());
                     }
-                    ui.horizontal(|ui| {
-                        if ui.add(icon::button(icon::OK, t("확인", "OK"))).clicked() || enter {
-                            answer = Some(true);
-                        }
-                        if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
-                            answer = Some(false);
-                        }
-                    });
+                    let ok = icon::primary(ui, icon::OK, t("확인", "OK"));
+                    let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
+                    if main.clicked() || enter {
+                        answer = Some(true);
+                    }
+                    if cancel.clicked() {
+                        answer = Some(false);
+                    }
                 }
                 FolderPrompt::Delete { path } => {
                     ui.heading(t("폴더 삭제", "Delete folder"));
@@ -540,14 +540,14 @@ impl SiteManager {
                         "Its {} sites and the folders inside it are not deleted: they move to {up}.",
                         store.sites_in_folder(path)
                     ));
-                    ui.horizontal(|ui| {
-                        if ui.add(icon::button(icon::DELETE, t("삭제", "Delete"))).clicked() {
-                            answer = Some(true);
-                        }
-                        if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
-                            answer = Some(false);
-                        }
-                    });
+                    let delete = icon::danger(ui, icon::DELETE, t("삭제", "Delete"));
+                    let (main, cancel) = icon::ok_cancel_row(ui, delete, true, icon::cancel());
+                    if main.clicked() {
+                        answer = Some(true);
+                    }
+                    if cancel.clicked() {
+                        answer = Some(false);
+                    }
                 }
             }
         });
@@ -628,7 +628,7 @@ impl SiteManager {
         let mut revert = false;
         ui.horizontal(|ui| {
             connect = ui.add(icon::button(icon::CONNECT, t("연결", "Connect"))).clicked();
-            submit |= ui.add_enabled(dirty || is_new, icon::button(icon::SAVE, t("저장", "Save"))).clicked();
+            submit |= ui.add_enabled(dirty || is_new, icon::primary(ui, icon::SAVE, t("저장", "Save"))).clicked();
             revert = ui.add_enabled(dirty && !is_new, icon::button(icon::REVERT, t("되돌리기", "Revert"))).clicked();
         });
 
@@ -678,7 +678,7 @@ impl SiteManager {
             ui.label(tr!("'{name}' 의 변경 사항을 저장할까요?", "Save the changes to '{name}'?"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.add(icon::button(icon::SAVE, t("저장", "Save"))).clicked() {
+                if ui.add(icon::primary(ui, icon::SAVE, t("저장", "Save"))).clicked() {
                     answer = Some(Answer::Save);
                 }
                 if ui.add(icon::button(icon::DONT_SAVE, t("저장 안 함", "Don't save"))).clicked() {
