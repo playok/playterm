@@ -360,8 +360,9 @@ impl ironrdp_tokio::NetworkClient for NoKdc {
     }
 }
 
-/// Clipboard backend messages, into the session loop.
+/// Clipboard backend messages, into the session loop (only Windows has a clipboard backend).
 #[derive(Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
 struct ClipboardProxy(mpsc::UnboundedSender<ClipboardMessage>);
 
 impl ClipboardMessageProxy for ClipboardProxy {
