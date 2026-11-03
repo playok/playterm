@@ -40,11 +40,16 @@ impl QuickConnect {
             ui.add_space(8.0);
             let mut submit =
                 self.form.ui(ui, &FormOptions { meta: false, save_password: false, folders: &[] });
-            ui.add_space(4.0);
-            ui.checkbox(&mut self.save, t("사이트 목록에 저장", "Save to the site list"));
             ui.add_space(8.0);
-            let connect = icon::primary(ui, icon::CONNECT, t("연결", "Connect"));
-            let (main, cancel) = icon::ok_cancel_row(ui, connect, true, icon::cancel());
+            let (main, cancel) = ui
+                .horizontal(|ui| {
+                    let connect = icon::primary(ui, icon::CONNECT, t("연결", "Connect"));
+                    let buttons = icon::ok_cancel_row(ui, connect, true, icon::cancel());
+                    ui.add_space(12.0);
+                    ui.checkbox(&mut self.save, t("사이트 목록에 저장", "Save to the site list"));
+                    buttons
+                })
+                .inner;
             submit |= main.clicked();
             if cancel.clicked() {
                 result = QuickConnectResult::Cancel;
