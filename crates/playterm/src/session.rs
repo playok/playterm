@@ -17,6 +17,7 @@ use crate::autologin::{LoginAction, LoginRunner, LoginScript};
 use crate::console::{self, KeyResult, LineEditor, Parsed, Request};
 use crate::local_fs;
 use crate::logging::{self, LogPlan};
+use crate::macros::{self, MacroRun};
 use crate::rdp_view::RdpScreen;
 use crate::search_bar::SearchBar;
 use crate::sftp_view::{SftpBrowser, human_size};
@@ -268,6 +269,8 @@ pub struct Session {
     zmodem_question: bool,
     /// A ZMODEM upload in progress: the output goes to it instead of the screen.
     zmodem_up: Option<UploadRun>,
+    /// A macro typing into this tab (Tools → Macros).
+    macro_run: Option<MacroRun>,
     /// The app has to ask for the files of `zmodem_up` (see [`Session::take_upload_question`]).
     upload_question: bool,
     /// `ping` running at the prompt (until it ends or Ctrl+C).
@@ -340,6 +343,7 @@ impl Session {
             zmodem_pick: None,
             zmodem_question: false,
             zmodem_up: None,
+            macro_run: None,
             upload_question: false,
             ping: None,
         }
@@ -664,6 +668,7 @@ impl Session {
             self.send_raw(reply);
             self.zmodem_show();
         }
+        changed |= self.macro_step();
         if let Some(run) = &mut self.zmodem_up {
             let reply = run.upload.tick(Instant::now());
             changed |= !reply.is_empty() || run.upload.outcome().is_some();
@@ -798,6 +803,10 @@ impl Session {
             None => {
                 self.terminal.feed(bytes);
                 self.auto_login(bytes.contains(&b'\n'));
+                if let Some(run) = &mut self.macro_run {
+                    run.output(&String::from_utf8_lossy(bytes));
+                    self.macro_step();
+                }
             }
             Some(Start::Download { at, rest }) => {
                 self.terminal.feed(&bytes[..at]);
@@ -1117,6 +1126,70 @@ impl Session {
         running
     }
 
+    /// Starts a macro in this tab (a running one stops).
+    pub fn run_macro(&mut self, name: &str, steps: Vec<macros::Step>) {
+        if self.state != SessionState::Connected || self.remote.is_none() {
+            return;
+        }
+        let line = tr!("매크로 '{name}' 실행 · 키를 누르면 중지", "Macro '{name}' running · press a key to stop");
+        self.notice(&line, "36");
+        self.macro_run = Some(MacroRun::new(name.to_owned(), steps));
+        self.macro_step();
+    }
+
+    /// The name of the macro running in this tab.
+    pub fn macro_name(&self) -> Option<&str> {
+        self.macro_run.as_ref().map(|r| r.name.as_str())
+    }
+
+    /// When the running macro next has something to do by itself.
+    pub fn macro_wake(&self) -> Option<Instant> {
+        self.macro_run.as_ref().and_then(MacroRun::wake_at)
+    }
+
+    /// Stops the running macro (the user typed, or chose Stop).
+    pub fn stop_macro(&mut self) {
+        if let Some(run) = self.macro_run.take() {
+            self.notice(&tr!("매크로 '{}' 를 중지했습니다", "Macro '{}' stopped", run.name), "33");
+        }
+    }
+
+    /// Lets the running macro go on: types its next lines, reports its end. Returns whether
+    /// anything changed.
+    fn macro_step(&mut self) -> bool {
+        let Some(run) = &mut self.macro_run else { return false };
+        if self.state != SessionState::Connected || self.zmodem.is_some() || self.zmodem_up.is_some() {
+            if self.state != SessionState::Connected {
+                self.macro_run = None;
+                return true;
+            }
+            return false;
+        }
+        let actions = run.step(Instant::now());
+        let name = run.name.clone();
+        let changed = !actions.is_empty();
+        for action in actions {
+            match action {
+                macros::Action::Send(text) => {
+                    if let Some(remote) = &self.remote {
+                        let bytes = self.terminal.encode_input(&text);
+                        self.tx_bytes += bytes.len() as u64;
+                        remote.handle.send(bytes);
+                    }
+                }
+                macros::Action::Done => {
+                    self.macro_run = None;
+                    self.notice(&tr!("매크로 '{name}' 완료", "Macro '{name}' done"), "32");
+                }
+                macros::Action::Failed(why) => {
+                    self.macro_run = None;
+                    self.notice(&tr!("매크로 '{name}' 중단: {why}", "Macro '{name}' stopped: {why}"), "31");
+                }
+            }
+        }
+        changed
+    }
+
     /// Protocol bytes (not typed input) for the remote side.
     fn send_raw(&mut self, bytes: Vec<u8>) {
         if bytes.is_empty() {
@@ -1167,6 +1240,10 @@ impl Session {
             return;
         }
         self.start_screen = false;
+        // Typing takes over from a running macro (focus and mouse reports are not typing).
+        if !(bytes == b"\x1b[I" || bytes == b"\x1b[O" || bytes.starts_with(b"\x1b[<") || bytes.starts_with(b"\x1b[M")) {
+            self.stop_macro();
+        }
         // During a ZMODEM download typing does not reach the server; Ctrl+C, Ctrl+X or Esc
         // cancel the download.
         if let Some(run) = &mut self.zmodem {
@@ -1539,6 +1616,103 @@ mod tests {
         session.poll(Path::new(""), false);
         assert!(!session.in_zmodem());
         assert!(shows(&mut session, "back$"));
+    }
+
+    /// A tab connected over Telnet to a fake device on this PC: it shows `router#` and answers
+    /// each line with `out:<line>` and the prompt again. Returns the tab and the lines it got.
+    fn device_tab(prompt_delay: Duration) -> (Session, NetRuntime, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(b"router#").unwrap();
+            let reader = BufReader::new(stream.try_clone().unwrap());
+            for line in reader.split(b'\r') {
+                let Ok(line) = line else { break };
+                let line = String::from_utf8_lossy(&line).trim_matches(['\n', '\0']).to_owned();
+                std::thread::sleep(prompt_delay);
+                let _ = stream.write_all(format!("\r\nout:{line}\r\nrouter#").as_bytes());
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let net = NetRuntime::new().unwrap();
+        let params = ConnectParams {
+            protocol: Protocol::Telnet,
+            host: "127.0.0.1".into(),
+            port,
+            username: String::new(),
+            password: None,
+            identity_file: None,
+            default_identity_files: Vec::new(),
+            use_agent: false,
+            agent_pipe: None,
+            forwards: Vec::new(),
+            serial: Default::default(),
+            keepalive: Default::default(),
+            rdp: Default::default(),
+            desktop: (1024, 768),
+            term_type: "xterm-256color".into(),
+            cols: 80,
+            rows: 24,
+            known_hosts: std::env::temp_dir().join("playterm-macro-test-known_hosts"),
+            connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
+            jump: None,
+        };
+        let spec = SessionSpec {
+            params,
+            charset: Charset::Utf8,
+            name: None,
+            log: None,
+            login: None,
+            site: None,
+            tab_color: None,
+            profile: None,
+        };
+        let setup = TermSetup { palette: Palette::default(), scrollback: 100 };
+        let mut session = Session::connect(1, spec, &net, std::sync::Arc::new(|| {}), &setup);
+        poll_until(&mut session, |s| s.state == SessionState::Connected && shows(s, "router#"));
+        (session, net, rx)
+    }
+
+    fn poll_until(session: &mut Session, done: impl Fn(&mut Session) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done(session) {
+            assert!(Instant::now() < deadline, "timed out");
+            session.poll(Path::new(""), false);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn macros_type_and_wait_for_the_prompt() {
+        let (mut session, _net, lines) = device_tab(Duration::from_millis(150));
+        let steps = macros::parse("terminal length 0\n@wait #\nshow version\n@wait router#\n@send exi\n@send t\n@enter").unwrap();
+        let start = Instant::now();
+        session.run_macro("check", steps);
+        assert_eq!(session.macro_name(), Some("check"));
+        poll_until(&mut session, |s| s.macro_name().is_none());
+        // Each line went only after the device answered the one before (150 ms each).
+        assert!(start.elapsed() >= Duration::from_millis(300), "{:?}", start.elapsed());
+        let got: Vec<String> = lines.iter().take(3).collect();
+        assert_eq!(got, ["terminal length 0", "show version", "exit"]);
+        assert!(shows(&mut session, "out:show version"));
+        assert!(shows(&mut session, "'check'"), "its end is reported");
+
+        // A wait that never matches stops the macro after its time limit.
+        session.run_macro("slow", macros::parse("@timeout 0.3\nshow run\n@wait never\nreload").unwrap());
+        poll_until(&mut session, |s| s.macro_name().is_none());
+        assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "show run");
+        assert!(lines.recv_timeout(Duration::from_millis(500)).is_err(), "nothing after the wait that failed");
+
+        // Typing stops a running macro.
+        session.run_macro("long", macros::parse("a\n@sleep 5\nb").unwrap());
+        assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "a");
+        session.send_bytes(b"x".to_vec());
+        assert!(session.macro_name().is_none());
     }
 
     #[test]

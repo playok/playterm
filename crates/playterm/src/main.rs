@@ -17,6 +17,7 @@ mod input;
 mod licenses;
 mod local_fs;
 mod logging;
+mod macros;
 mod menu;
 mod mouse;
 mod power;

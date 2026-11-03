@@ -304,6 +304,24 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
   - Remote (R): a port on the server → connected from this PC to the target
   - Dynamic (D): a SOCKS5 proxy on this PC
 
+## Macros
+
+**Tools → Macros** runs a named sequence of commands in the current tab, and with simultaneous input on in the tabs that receive it.
+**Manage macros…** creates and edits them.
+
+```text
+# a comment
+terminal length 0     ← each line is typed with Enter
+@wait #               ← wait until '#' comes in the output (ignoring case)
+show running-config
+@timeout 60           ← seconds the next @wait steps wait (default 30); past it the macro stops and says so
+@sleep 1.5            ← pause (seconds)
+@send y               ← type without Enter,  @enter ← Enter alone,  @@… ← a line that starts with '@'
+```
+
+- A running macro is shown in the terminal; a key press or **Tools → Macros → Stop the running macro** stops it.
+- Macros are kept as they are in the settings file (`settings.toml`): do not put passwords in them.
+
 ## ZMODEM downloads (sz)
 
 - Running `sz file...` on the server is recognized by the terminal, and the files are received on this PC. Works over SSH, Telnet and serial (the server needs lrzsz).
@@ -392,7 +410,7 @@ On macOS playterm does not replace the signed `playterm.app` itself: **Open the 
 | File | Contents |
 |---|---|
 | `sessions.toml` | Saved sites and templates (no passwords) |
-| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder and asking for it, update check / skipped version |
+| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder and asking for it, macros, update check / skipped version |
 | `vault.toml` | Saved passwords, encrypted with the master password → Argon2id → XChaCha20-Poly1305. Each password is stored with the target it was saved for (protocol, user, host, port), also encrypted: if a site in `sessions.toml` is pointed elsewhere, its password is not sent (changes made in playterm carry it along). Several windows do not delete each other's saved passwords |
 | `known_hosts` | SSH host keys. If a known host's key changes — even to a key of another type — the connection is refused (protection against man-in-the-middle attacks). Key types on record are asked for first |
 | `known_rdp_hosts` | RDP server certificate fingerprints. A changed certificate is refused |
