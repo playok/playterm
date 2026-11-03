@@ -16,11 +16,21 @@ use crate::session::{Session, SessionState};
 use crate::{boxdraw, clipboard, toast};
 
 /// How the terminal is drawn (from the app settings).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ViewStyle {
     pub font_size: f32,
     pub selection: Color32,
     pub clipboard: ClipboardKeys,
+    /// Sites connected to lately, newest first, for the start screen.
+    pub recent: Vec<RecentSite>,
+}
+
+/// A recently connected site, as the start screen lists it.
+#[derive(Clone, Debug)]
+pub struct RecentSite {
+    pub id: String,
+    pub name: String,
+    pub protocol: playterm_net::Protocol,
 }
 
 /// What the terminal widget asks of the app this frame.
@@ -196,6 +206,9 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
         None => Vec::new(),
     };
     paint(ui, session, area, rect, cell, focused, style, &matches);
+    if session.start_screen && session.state == SessionState::Local {
+        output.command = output.command.or(start_screen(ui, rect, style));
+    }
     if let (Some(bar), Some(strip)) = (session.search.as_mut(), bar_strip)
         && let BarAction::Close = bar.show(ui, &mut session.terminal, strip)
     {
@@ -687,6 +700,55 @@ fn cell_text(cell: &Cell) -> String {
         s.extend(zw);
     }
     s
+}
+
+/// What a fresh local tab shows over its terminal: recent sites and ways to connect, and how
+/// to use the prompt instead. Gone as soon as something is typed.
+fn start_screen(ui: &mut egui::Ui, rect: Rect, style: &ViewStyle) -> Option<crate::menu::Command> {
+    use crate::menu::Command;
+    let width = 440.0_f32.min(rect.width() - 24.0).max(200.0);
+    let card = Rect::from_center_size(rect.center() - Vec2::new(0.0, rect.height() * 0.1), Vec2::new(width, 10.0));
+    let mut command = None;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(card.with_max_y(rect.bottom())), |ui| {
+        egui::Frame::popup(ui.style()).inner_margin(16.0).show(ui, |ui| {
+            ui.set_width(width - 32.0);
+            ui.heading("playterm");
+            ui.weak(t("연결할 곳을 고르세요.", "Choose where to connect."));
+            ui.add_space(8.0);
+            if !style.recent.is_empty() {
+                ui.strong(t("최근 연결", "Recent"));
+                for site in &style.recent {
+                    ui.horizontal(|ui| {
+                        crate::site_tree::badge(ui, site.protocol);
+                        if ui.link(&site.name).on_hover_text(t("연결", "Connect")).clicked() {
+                            command = Some(Command::ConnectSite(site.id.clone()));
+                        }
+                    });
+                }
+                ui.add_space(8.0);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.add(crate::icon::primary(ui, crate::icon::ADD, t("빠른 연결", "Quick Connect"))).clicked() {
+                    command = Some(Command::QuickConnect);
+                }
+                if ui.add(crate::icon::button(crate::icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
+                    command = Some(Command::NewSite);
+                }
+                if ui.add(crate::icon::button(crate::icon::IMPORT, t("PuTTY 가져오기", "Import PuTTY"))).clicked() {
+                    command = Some(Command::ImportPutty);
+                }
+                if ui.add(crate::icon::button(crate::icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
+                    command = Some(Command::ImportXshell);
+                }
+            });
+            ui.add_space(8.0);
+            ui.weak(t(
+                "명령으로 쓰려면 아무 키나 누르세요 — ssh, telnet, open, sites, ls, help …",
+                "To use commands, just type — ssh, telnet, open, sites, ls, help …",
+            ));
+        });
+    });
+    command
 }
 
 /// Height of the connection line above a remote terminal.

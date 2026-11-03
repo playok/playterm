@@ -228,6 +228,8 @@ pub struct Session {
     site: Option<String>,
     /// When the current connection came up.
     connected_since: Option<Instant>,
+    /// A fresh local tab nothing was typed into yet: the start screen shows over it.
+    pub start_screen: bool,
     /// Profile the connection was opened from.
     profile: Option<Box<SessionProfile>>,
     /// Password typed in the login dialog with "save password" on; stored in the vault for the
@@ -264,12 +266,9 @@ impl Session {
     /// A tab with the local command prompt.
     pub fn local(id: u64, cols: u16, rows: u16, setup: &TermSetup) -> Self {
         let mut session = Self::blank(id, cols, rows, Charset::Utf8, setup);
-        session.terminal.feed_local(t(
-            "\x1b[1mplayterm\x1b[0m \x1b[90m- 연결되지 않은 탭입니다. \
-             ssh, telnet, open(사이트 관리), sites(사이트 목록), ls 등을 입력하세요. help: 명령 목록\x1b[0m\r\n\r\n",
-            "\x1b[1mplayterm\x1b[0m \x1b[90m- This tab is not connected. \
-             Type ssh, telnet, open (Site Manager), sites (site list), ls and so on. help: list of commands\x1b[0m\r\n\r\n",
-        ));
+        // The start screen over the terminal explains the tab (in the UI font: Hangul in the
+        // terminal grid would be spread over two cells a letter).
+        session.start_screen = true;
         session.prompt();
         session
     }
@@ -312,6 +311,7 @@ impl Session {
             login_script: None,
             site: None,
             connected_since: None,
+            start_screen: false,
             profile: None,
             save_on_login: None,
             login: None,
@@ -333,6 +333,7 @@ impl Session {
 
     /// Connects this tab (from the prompt, or as a new tab), keeping the screen contents.
     pub fn start(&mut self, spec: SessionSpec, net: &NetRuntime, waker: Waker) {
+        self.start_screen = false;
         let SessionSpec { mut params, charset, name, log, login, site, tab_color, profile } = spec;
         if let Some(remote) = &self.remote {
             remote.handle.close();
@@ -1056,6 +1057,7 @@ impl Session {
         if bytes.is_empty() {
             return;
         }
+        self.start_screen = false;
         // During a ZMODEM download typing does not reach the server; Ctrl+C, Ctrl+X or Esc
         // cancel the download.
         if let Some(run) = &mut self.zmodem {
@@ -1102,6 +1104,7 @@ impl Session {
     pub fn send_text(&mut self, text: &str) {
         // Typing yourself takes over from an automatic login still waiting for its prompt.
         self.login = None;
+        self.start_screen = false;
         if self.in_console() {
             self.console_text(text);
             return;

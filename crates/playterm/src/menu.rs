@@ -13,6 +13,8 @@ use crate::sidebar::VaultState;
 #[derive(Clone)]
 pub enum Command {
     QuickConnect,
+    /// Connect this saved site (start screen).
+    ConnectSite(String),
     NewTab,
     SiteManager,
     /// The site manager on this saved site (the connection line above a terminal).

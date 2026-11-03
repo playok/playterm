@@ -398,6 +398,9 @@ impl PlaytermApp {
     /// Connects a saved profile, unlocking the vault first if its password is stored there.
     fn connect_saved(&mut self, id: &str) {
         let Some(profile) = self.store.get(id).cloned() else { return };
+        // For the start screen's "recent" list.
+        self.settings.remember_site(id);
+        self.settings_unsaved = Some(Instant::now());
         // SSH logs in with it; Telnet and serial sites type it at the prompt (automatic login).
         let wants_secret = profile.save_password;
         if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
@@ -1000,10 +1003,19 @@ impl PlaytermApp {
 
     fn view_style(&self) -> view::ViewStyle {
         let selection = Theme::rgb(Theme::named(&self.settings.theme).selection);
+        let recent = self
+            .settings
+            .recent_sites
+            .iter()
+            .filter_map(|id| self.store.get(id))
+            .take(5)
+            .map(|p| view::RecentSite { id: p.id.clone(), name: p.display_name(), protocol: p.protocol })
+            .collect();
         view::ViewStyle {
             font_size: self.settings.font_size,
             selection: Color32::from_rgb(selection.r, selection.g, selection.b),
             clipboard: self.settings.clipboard,
+            recent,
         }
     }
 
@@ -1264,6 +1276,7 @@ impl PlaytermApp {
             Command::Shortcuts => self.modal = Some(Modal::Shortcuts),
             Command::About => self.modal = Some(Modal::About),
             Command::EditSite(id) => self.open_site_manager(Some(&id), false, None),
+            Command::ConnectSite(id) => self.connect_saved(&id),
             Command::ProjectPage => ctx.open_url(egui::OpenUrl::new_tab(dialogs::PROJECT_PAGE)),
             Command::Licenses => self.modal = Some(Modal::Licenses(Box::default())),
             Command::CheckUpdates => self.updater.check(ctx, true),
