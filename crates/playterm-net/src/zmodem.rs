@@ -70,6 +70,12 @@ const RETRY_AFTER: Duration = Duration::from_secs(10);
 const GIVE_UP_AFTER: Duration = Duration::from_secs(60);
 /// How long to wait for the sender's closing "OO".
 const OO_WAIT: Duration = Duration::from_secs(1);
+/// After a cancel, what the sender had already sent is dropped until it is quiet this long...
+const DRAIN_QUIET: Duration = Duration::from_millis(300);
+/// ...or at most this long...
+const DRAIN_MAX: Duration = Duration::from_secs(5);
+/// ...or until this much came without a ZMODEM byte (it is not the transfer any more).
+const DRAIN_KEEP: usize = 4096;
 
 /// What cancels a ZMODEM transfer on the other side: CAN bytes, then backspaces that erase them
 /// on a terminal that shows them.
@@ -457,6 +463,10 @@ pub struct Download {
     last_retry: Instant,
     /// The last header sent, sent again when the sender asks (ZNAK).
     last_sent: Vec<u8>,
+    /// The user cancelled at this time: the rest of the transfer is being dropped.
+    cancelling: Option<Instant>,
+    /// While cancelling: what came after the last ZMODEM byte (the shell's prompt, at the end).
+    drain: Vec<u8>,
 }
 
 /// The first header of a download, which [`Detector`] found.
@@ -480,6 +490,8 @@ impl Download {
             last_input: now,
             last_retry: now,
             last_sent: Vec::new(),
+            cancelling: None,
+            drain: Vec::new(),
         };
         let mut reply = download.feed(DOWNLOAD_START, now);
         reply.extend(download.feed(rest, now));
@@ -495,9 +507,37 @@ impl Download {
                 break;
             }
             self.last_input = now;
+            if self.cancelling.is_some() {
+                self.drain(&input[i..]);
+                break;
+            }
             self.byte(b, now, &mut reply);
         }
         reply
+    }
+
+    /// After a cancel: drops what the sender still sends, keeping what came after its last
+    /// ZMODEM byte for the screen. That is a ZDLE (escaped data is full of them) before an
+    /// escaped byte or the end of a block, all from 0x40 up; a shell echoing our CAN bytes
+    /// sends them before other bytes. (A ZDLE at the end waits for the next byte.)
+    fn drain(&mut self, input: &[u8]) {
+        self.drain.extend_from_slice(input);
+        let last = (0..self.drain.len())
+            .rev()
+            .find(|&i| self.drain[i] == ZDLE && self.drain.get(i + 1).is_some_and(|&next| next >= 0x40));
+        if let Some(i) = last {
+            self.drain.drain(..=i);
+        }
+        if self.drain.len() > DRAIN_KEEP {
+            self.end_cancel();
+        }
+    }
+
+    fn end_cancel(&mut self) {
+        self.cancelling = None;
+        self.outcome = Some(Outcome::Cancelled);
+        let drain = std::mem::take(&mut self.drain);
+        self.passthrough = text_tail(&drain).to_vec();
     }
 
     /// Repeats the last answer when the sender has gone quiet, and gives up after a while.
@@ -505,6 +545,12 @@ impl Download {
     pub fn tick(&mut self, now: Instant) -> Vec<u8> {
         let mut reply = Vec::new();
         if self.outcome.is_some() {
+            return reply;
+        }
+        if let Some(since) = self.cancelling {
+            if now.duration_since(self.last_input) >= DRAIN_QUIET || now.duration_since(since) >= DRAIN_MAX {
+                self.end_cancel();
+            }
             return reply;
         }
         if let Stage::Finishing(since) = self.stage {
@@ -527,10 +573,13 @@ impl Download {
     }
 
     /// Stops the download (the user cancelled). Returns what tells the server to stop.
-    pub fn cancel(&mut self) -> Vec<u8> {
-        if self.outcome.is_none() {
+    /// What the sender had already sent is dropped until it goes quiet ([`Download::tick`]);
+    /// then the outcome is [`Outcome::Cancelled`].
+    pub fn cancel(&mut self, now: Instant) -> Vec<u8> {
+        if self.outcome.is_none() && self.cancelling.is_none() {
             self.discard();
-            self.outcome = Some(Outcome::Cancelled);
+            self.cancelling = Some(now);
+            self.last_input = now;
         }
         CANCEL.to_vec()
     }
@@ -764,6 +813,45 @@ impl Drop for Download {
     }
 }
 
+/// The end of `bytes` that reads as text (printable ASCII, UTF-8, line ends, escape
+/// sequences, echoed CAN), without the binary data before it.
+fn text_tail(bytes: &[u8]) -> &[u8] {
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let len = match bytes[i] {
+            0x20..=0x7e | b'\r' | b'\n' | b'\t' | 0x1b | 0x07 | 0x08 | ZDLE => 1,
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => 0,
+        };
+        if len == 1 || (len > 1 && bytes.get(i..i + len).is_some_and(|s| std::str::from_utf8(s).is_ok())) {
+            i += len;
+        } else {
+            i += 1;
+            start = i;
+        }
+    }
+    &bytes[start..]
+}
+
+/// Moves a received file into `dir` under a name not taken there yet (copying it when `dir` is
+/// on another drive). Returns where it went.
+pub fn move_into(file: &Path, dir: &Path) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let name = file.file_name().ok_or_else(|| io::Error::other("no file name"))?.to_string_lossy();
+    let target = unique_path(dir, &name);
+    if std::fs::rename(file, &target).is_err() {
+        if let Err(e) = std::fs::copy(file, &target) {
+            let _ = std::fs::remove_file(&target);
+            return Err(e);
+        }
+        std::fs::remove_file(file)?;
+    }
+    Ok(target)
+}
+
 /// A file name for this PC from the name the sender gave: its last part (a sender may send a
 /// path), as UTF-8 or else CP949, with what Windows does not allow in a name replaced.
 fn local_name(raw: &[u8]) -> String {
@@ -825,6 +913,33 @@ mod tests {
 
     /// The ZRINIT this receiver sends, read as a position: its flags are in the last byte.
     const RINIT_FLAGS: u32 = u32::from_le_bytes([0, 0, 0, CANFDX | CANOVIO | CANFC32]);
+
+    #[test]
+    fn text_after_binary_data() {
+        assert_eq!(text_tail(b"\x00\xff\x81ab\xea\xb0\x80\r\n\x1b[1m$ "), "ab가\r\n\x1b[1m$ ".as_bytes());
+        assert_eq!(text_tail(b"plain"), b"plain");
+        assert_eq!(text_tail(b"ab\xea\xb0"), b"", "a cut character is not text");
+        assert_eq!(text_tail(b""), b"");
+    }
+
+    #[test]
+    fn moving_keeps_existing_files() {
+        let base = std::env::temp_dir().join(format!("playterm-zmodem-move-{}", std::process::id()));
+        let (from, to) = (base.join("from"), base.join("to"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(to.join("a.txt"), b"old").unwrap();
+        std::fs::write(from.join("a.txt"), b"new").unwrap();
+        let moved = move_into(&from.join("a.txt"), &to).unwrap();
+        assert_eq!(moved, to.join("a (1).txt"));
+        assert_eq!(std::fs::read(&moved).unwrap(), b"new");
+        assert_eq!(std::fs::read(to.join("a.txt")).unwrap(), b"old");
+        assert!(!from.join("a.txt").exists());
+        // A folder that does not exist yet is made.
+        std::fs::write(from.join("b"), b"b").unwrap();
+        assert_eq!(move_into(&from.join("b"), &to.join("sub")).unwrap(), to.join("sub").join("b"));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     // A small ZMODEM sender, to drive the receiver.
 
@@ -1005,12 +1120,34 @@ mod tests {
         assert!(reply.is_empty(), "no CAN back to a shell");
         assert_eq!(files(dir.path()), Vec::<String>::new());
 
-        // By the user.
+        // By the user. What the sender had already sent is dropped, the prompt after it kept.
         let (mut download, _) = Download::begin(dir.path().to_owned(), b"000000000000\r\n", Instant::now());
         feed(&mut download, &[bin(ZFILE, 0, true), block(&file_info(b"a.bin", 3000), ZCRCW, true)].concat(), 100);
-        assert_eq!(download.cancel(), CANCEL);
-        assert_eq!(download.outcome(), Some(&Outcome::Cancelled));
+        feed(&mut download, &[bin(ZDATA, 0, true), block(&all_bytes(1000), ZCRCG, true)].concat(), 100);
+        assert_eq!(download.cancel(Instant::now()), CANCEL);
         assert_eq!(files(dir.path()), Vec::<String>::new());
+        assert_eq!(download.outcome(), None, "still dropping what was on its way");
+        // (The shell echoes the CAN bytes it got after the sender ended.)
+        let late = [block(&all_bytes(3000), ZCRCG, true), block(&all_bytes(500), ZCRCE, true), b"\r\n$ \x18\x18\x08 \x08".to_vec()].concat();
+        assert!(feed(&mut download, &late, 1).is_empty());
+        assert!(download.tick(Instant::now()).is_empty());
+        assert_eq!(download.outcome(), None, "not quiet yet");
+        download.tick(Instant::now() + Duration::from_secs(1));
+        assert_eq!(download.outcome(), Some(&Outcome::Cancelled));
+        let shown = download.take_passthrough();
+        assert!(shown.ends_with(b"\r\n$ \x18\x18\x08 \x08") && shown.len() < 16, "{shown:?}");
+        assert_eq!(files(dir.path()), Vec::<String>::new());
+
+        // A sender that does not stop is given up on after a while.
+        let start = Instant::now();
+        let (mut download, _) = Download::begin(dir.path().to_owned(), b"000000000000\r\n", start);
+        download.cancel(start);
+        download.feed(&block(&all_bytes(1000), ZCRCG, true), start + Duration::from_secs(4));
+        download.tick(start + Duration::from_secs(4));
+        assert_eq!(download.outcome(), None);
+        download.feed(&block(&all_bytes(1000), ZCRCG, true), start + Duration::from_secs(6));
+        download.tick(start + Duration::from_secs(6));
+        assert_eq!(download.outcome(), Some(&Outcome::Cancelled));
 
         // Dropped mid-file (the connection closed).
         let (mut download, _) = Download::begin(dir.path().to_owned(), b"000000000000\r\n", Instant::now());

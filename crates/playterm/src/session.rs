@@ -1,7 +1,8 @@
 //! One open tab: a terminal screen, bound to a network session while connected and running
 //! the local command prompt ([`crate::console`]) while not.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use playterm_config::{SessionProfile, TabColor};
@@ -129,6 +130,35 @@ struct PingRun {
     stats: PingStats,
 }
 
+/// A ZMODEM download whose folder the user is asked for. It is received into `staging`
+/// meanwhile; the files move to the chosen folder once both the transfer and the choice are done.
+struct ZmodemPick {
+    staging: PathBuf,
+    chosen: Option<PathBuf>,
+    /// The transfer is over: the files received completely and how it ended.
+    ended: Option<(Vec<PathBuf>, Outcome)>,
+    /// Some file could not be moved: the staging folder stays.
+    keep: bool,
+}
+
+impl ZmodemPick {
+    /// A new staging folder (under the system's temporary folder) for a download of tab `id`.
+    fn new(id: u64) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let name = format!("{}-{id}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
+        let staging = std::env::temp_dir().join("playterm-zmodem").join(name);
+        Self { staging, chosen: None, ended: None, keep: false }
+    }
+}
+
+impl Drop for ZmodemPick {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_dir_all(&self.staging);
+        }
+    }
+}
+
 /// A ZMODEM download and what the screen shows of it.
 struct ZmodemRun {
     download: zmodem::Download,
@@ -136,6 +166,8 @@ struct ZmodemRun {
     listed: usize,
     /// When the progress line was last drawn.
     drawn: Option<Instant>,
+    /// Its end is not reported (the user was told already).
+    silent: bool,
 }
 
 pub struct Session {
@@ -203,6 +235,14 @@ pub struct Session {
     zmodem_detector: zmodem::Detector,
     /// A ZMODEM download in progress: the output goes to it instead of the screen.
     zmodem: Option<ZmodemRun>,
+    /// Where ZMODEM downloads are saved, and whether the folder is asked for each time (the
+    /// settings, see [`Session::poll`]).
+    zmodem_dir: PathBuf,
+    zmodem_ask: bool,
+    /// A download whose folder is being asked for (it may be running or over).
+    zmodem_pick: Option<ZmodemPick>,
+    /// The app has to ask for the folder of `zmodem_pick` (see [`Session::take_zmodem_question`]).
+    zmodem_question: bool,
     /// `ping` running at the prompt (until it ends or Ctrl+C).
     ping: Option<PingRun>,
 }
@@ -270,6 +310,10 @@ impl Session {
             tx_bytes: 0,
             zmodem_detector: zmodem::Detector::default(),
             zmodem: None,
+            zmodem_dir: PathBuf::new(),
+            zmodem_ask: false,
+            zmodem_pick: None,
+            zmodem_question: false,
             ping: None,
         }
     }
@@ -532,9 +576,14 @@ impl Session {
         }
     }
 
-    /// Processes pending network and terminal events; a ZMODEM download saves into `downloads`.
+    /// Processes pending network and terminal events; a ZMODEM download saves into `downloads`,
+    /// or with `ask` into the folder the user picks (see [`Session::take_zmodem_question`]).
     /// Returns `true` if anything changed.
-    pub fn poll(&mut self, downloads: &Path) -> bool {
+    pub fn poll(&mut self, downloads: &Path, ask: bool) -> bool {
+        if self.zmodem_dir != downloads {
+            self.zmodem_dir = downloads.to_owned();
+        }
+        self.zmodem_ask = ask;
         let mut changed = false;
         changed |= self.ping_output();
         // A quiet ZMODEM sender is reminded, and given up after a while.
@@ -561,7 +610,7 @@ impl Session {
                 SessionEvent::Connected => self.state = SessionState::Connected,
                 SessionEvent::Data(bytes) => {
                     self.rx_bytes += bytes.len() as u64;
-                    self.output(&bytes, downloads);
+                    self.output(&bytes);
                 }
                 SessionEvent::Notice(text) => self.notice(&text, "33"),
                 SessionEvent::HostKeyCheck(check) => self.host_key = Some(check),
@@ -655,7 +704,7 @@ impl Session {
     }
 
     /// Output of the remote side: onto the screen, or into a ZMODEM download.
-    fn output(&mut self, bytes: &[u8], downloads: &Path) {
+    fn output(&mut self, bytes: &[u8]) {
         if let Some(run) = &mut self.zmodem {
             let reply = run.download.feed(bytes, Instant::now());
             self.send_raw(reply);
@@ -670,18 +719,25 @@ impl Session {
             Some(Start::Download { at, rest }) => {
                 self.terminal.feed(&bytes[..at]);
                 self.login = None;
-                self.terminal.feed_local(&format!(
-                    "\r\n\x1b[36m[{}]\x1b[0m\r\n",
-                    printable(&tr!(
-                        "ZMODEM 받기: {} 에 저장합니다 · Ctrl+C 로 취소",
-                        "ZMODEM download into {} · Ctrl+C cancels",
-                        downloads.display()
-                    ))
-                ));
-                let (download, reply) = zmodem::Download::begin(downloads.to_owned(), &bytes[rest..], Instant::now());
-                self.zmodem = Some(ZmodemRun { download, listed: 0, drawn: None });
-                self.send_raw(reply);
-                self.zmodem_show();
+                // The sender gives up when it is not answered for about 20 seconds, so the
+                // download starts right away, into a staging folder while the folder is asked
+                // for. (Not when the files of an earlier one still wait for their folder.)
+                if self.zmodem_ask && self.zmodem_pick.is_none() {
+                    let pick = ZmodemPick::new(self.id);
+                    let staging = pick.staging.clone();
+                    self.zmodem_pick = Some(pick);
+                    self.zmodem_question = true;
+                    let line = t(
+                        "ZMODEM 받기: 저장할 폴더를 고르는 동안 임시 폴더에 받습니다 · Ctrl+C 로 취소",
+                        "ZMODEM download: received into a temporary folder while you choose where to save · Ctrl+C cancels",
+                    );
+                    self.begin_zmodem(staging, &bytes[rest..], line);
+                } else {
+                    let dir = self.zmodem_dir.clone();
+                    let line =
+                        tr!("ZMODEM 받기: {} 에 저장합니다 · Ctrl+C 로 취소", "ZMODEM download into {} · Ctrl+C cancels", dir.display());
+                    self.begin_zmodem(dir, &bytes[rest..], &line);
+                }
             }
             Some(Start::Upload { at, .. }) => {
                 // `rz` waits for files from us, which is not supported: stop it instead of
@@ -696,6 +752,133 @@ impl Session {
                     "33",
                 );
             }
+        }
+    }
+
+    /// Starts receiving into `dir`, with the output after the sender's first header; `line`
+    /// tells the user.
+    fn begin_zmodem(&mut self, dir: PathBuf, rest: &[u8], line: &str) {
+        self.terminal.feed_local(&format!("\r\n\x1b[36m[{}]\x1b[0m\r\n", printable(line)));
+        let (download, reply) = zmodem::Download::begin(dir, rest, Instant::now());
+        self.zmodem = Some(ZmodemRun { download, listed: 0, drawn: None, silent: false });
+        self.send_raw(reply);
+        self.zmodem_show();
+    }
+
+    /// Whether the app has to ask for the folder of a ZMODEM download that just started (once),
+    /// and answer with [`Session::zmodem_folder_chosen`].
+    pub fn take_zmodem_question(&mut self) -> bool {
+        std::mem::take(&mut self.zmodem_question)
+    }
+
+    /// The folder the user picked for the ZMODEM download asked about, or `None` (cancelled):
+    /// the download is cancelled then and what it received deleted.
+    pub fn zmodem_folder_chosen(&mut self, dir: Option<PathBuf>) {
+        let Some(pick) = &mut self.zmodem_pick else { return };
+        let running = pick.ended.is_none();
+        match dir {
+            Some(dir) if running => {
+                let line = tr!("ZMODEM: 받기가 끝나면 {} 에 저장합니다", "ZMODEM: the files go to {} when the download is done", dir.display());
+                pick.chosen = Some(dir);
+                // Below the progress line, which goes on.
+                self.terminal.feed_local(&format!("\r\x1b[K\x1b[36m[{}]\x1b[0m\r\n", printable(&line)));
+                if let Some(run) = &mut self.zmodem {
+                    run.drawn = None;
+                }
+                self.zmodem_show();
+            }
+            Some(dir) => self.zmodem_move(&dir),
+            None => {
+                let pick = self.zmodem_pick.take();
+                if running && let Some(run) = &mut self.zmodem {
+                    // It goes on until what the sender had sent is dropped; its end says nothing.
+                    let reply = run.download.cancel(Instant::now());
+                    run.silent = true;
+                    self.send_raw(reply);
+                    self.terminal.feed_local("\r\x1b[K");
+                }
+                drop(pick);
+                self.notice(
+                    if running {
+                        t(
+                            "저장할 폴더를 고르지 않아 ZMODEM 받기를 취소하고 받은 파일을 지웠습니다",
+                            "No folder was chosen: the ZMODEM download was cancelled and what it received deleted",
+                        )
+                    } else {
+                        t("저장할 폴더를 고르지 않아 ZMODEM 으로 받은 파일을 지웠습니다", "No folder was chosen: the files received with ZMODEM were deleted")
+                    },
+                    "33",
+                );
+            }
+        }
+    }
+
+    /// The transfer of the download asked about is over: its files move now if the folder is
+    /// known, or wait for it.
+    fn zmodem_pick_ended(&mut self, files: Vec<PathBuf>, outcome: Outcome) {
+        let Some(pick) = &mut self.zmodem_pick else { return };
+        let chosen = pick.chosen.clone();
+        let count = files.len();
+        if count == 0 {
+            self.zmodem_pick = None;
+            match outcome {
+                Outcome::Finished => self.notice(t("ZMODEM 받기 완료: 받은 파일이 없습니다", "ZMODEM download done: no files were received"), "32"),
+                outcome => self.zmodem_notice(&outcome, 0, Path::new("")),
+            }
+            return;
+        }
+        pick.ended = Some((files, outcome.clone()));
+        if let Some(dir) = chosen {
+            self.zmodem_move(&dir);
+            return;
+        }
+        let wait = t("저장할 폴더를 고르면 그곳으로 옮깁니다", "they move to the folder you choose");
+        match outcome {
+            Outcome::Finished => self.notice(&tr!("ZMODEM 받기 완료: 파일 {count}개 · {wait}", "ZMODEM download done: {count} file(s), {wait}"), "36"),
+            Outcome::Cancelled => self.notice(
+                &tr!("ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {count}개) · {wait}", "ZMODEM download cancelled ({count} file(s) received completely), {wait}"),
+                "33",
+            ),
+            Outcome::Failed(e) => {
+                self.notice(&tr!("ZMODEM 받기 실패: {e} (끝까지 받은 파일 {count}개) · {wait}", "ZMODEM download failed: {e} ({count} file(s) received completely), {wait}"), "31")
+            }
+        }
+    }
+
+    /// Moves the files of the finished download asked about into `dir`.
+    fn zmodem_move(&mut self, dir: &Path) {
+        let Some(mut pick) = self.zmodem_pick.take() else { return };
+        let Some((files, outcome)) = pick.ended.take() else { return };
+        let mut failed = Vec::new();
+        for file in &files {
+            if let Err(e) = zmodem::move_into(file, dir) {
+                let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                failed.push(format!("{name}: {e}"));
+            }
+        }
+        self.zmodem_notice(&outcome, files.len() - failed.len(), dir);
+        if !failed.is_empty() {
+            pick.keep = true;
+            let (staging, failed) = (pick.staging.display(), failed.join(", "));
+            self.notice(
+                &tr!("옮기지 못한 파일은 {staging} 에 남겨 두었습니다: {failed}", "Files that could not be moved are left in {staging}: {failed}"),
+                "31",
+            );
+        }
+    }
+
+    /// How a ZMODEM download ended, with `saved` files in `dir`.
+    fn zmodem_notice(&mut self, outcome: &Outcome, saved: usize, dir: &Path) {
+        let dir = dir.display();
+        match outcome {
+            Outcome::Finished => {
+                self.notice(&tr!("ZMODEM 받기 완료: 파일 {saved}개를 {dir} 에 저장했습니다", "ZMODEM download done: {saved} file(s) saved in {dir}"), "32")
+            }
+            Outcome::Cancelled => self.notice(
+                &tr!("ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {saved}개)", "ZMODEM download cancelled ({saved} file(s) received completely)"),
+                "33",
+            ),
+            Outcome::Failed(e) => self.notice(&tr!("ZMODEM 받기 실패: {e}", "ZMODEM download failed: {e}"), "31"),
         }
     }
 
@@ -717,23 +900,21 @@ impl Session {
         }
         run.listed = run.download.saved().len();
         if let Some(outcome) = run.download.outcome().cloned() {
-            let saved = run.download.saved().len();
-            let dir = run.download.dir().display().to_string();
+            let saved = run.download.saved().to_vec();
+            let dir = run.download.dir().to_owned();
             let rest = run.download.take_passthrough();
+            let silent = run.silent;
             self.zmodem = None;
             self.terminal.feed_local(&format!("{text}\r\x1b[K"));
-            match outcome {
-                Outcome::Finished => self.notice(&tr!("ZMODEM 받기 완료: 파일 {saved}개를 {dir} 에 저장했습니다", "ZMODEM download done: {saved} file(s) saved in {dir}"), "32"),
-                Outcome::Cancelled => self.notice(
-                    &tr!("ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {saved}개)", "ZMODEM download cancelled ({saved} file(s) received completely)"),
-                    "33",
-                ),
-                Outcome::Failed(e) => self.notice(&tr!("ZMODEM 받기 실패: {e}", "ZMODEM download failed: {e}"), "31"),
+            if silent {
+            } else if self.zmodem_pick.as_ref().is_some_and(|p| p.ended.is_none()) {
+                self.zmodem_pick_ended(saved, outcome);
+            } else {
+                self.zmodem_notice(&outcome, saved.len(), &dir);
             }
             // What the server printed after the transfer (its prompt).
             if !rest.is_empty() {
-                let dir = std::path::PathBuf::from(dir);
-                self.output(&rest, &dir);
+                self.output(&rest);
             }
             return;
         }
@@ -762,7 +943,12 @@ impl Session {
     /// file is deleted. Returns whether one was running.
     fn end_zmodem(&mut self) -> bool {
         self.zmodem_detector = zmodem::Detector::default();
-        self.zmodem.take().is_some()
+        let running = self.zmodem.take().is_some();
+        // Files received completely still wait for their folder; a cut transfer is dropped.
+        if self.zmodem_pick.as_ref().is_some_and(|p| p.ended.is_none()) {
+            self.zmodem_pick = None;
+        }
+        running
     }
 
     /// Protocol bytes (not typed input) for the remote side.
@@ -818,7 +1004,7 @@ impl Session {
         // cancel the download.
         if let Some(run) = &mut self.zmodem {
             if bytes.contains(&0x03) || bytes.contains(&0x18) || bytes == [0x1b] {
-                let reply = run.download.cancel();
+                let reply = run.download.cancel(Instant::now());
                 self.send_raw(reply);
                 self.zmodem_show();
             }
