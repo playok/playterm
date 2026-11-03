@@ -537,7 +537,8 @@ mod tests {
 
     #[test]
     fn partial_downloads_go_next_to_the_target() {
-        let target = Path::new(r"C:\Users\me\Downloads\report.pdf");
+        let target = std::env::temp_dir().join("Downloads").join("report.pdf");
+        let target = target.as_path();
         let (a, b) = (part_path(target), part_path(target));
         assert_ne!(a, b, "each download has its own partial file");
         assert_eq!(a.parent(), target.parent());

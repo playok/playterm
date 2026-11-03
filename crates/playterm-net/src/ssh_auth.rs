@@ -2,7 +2,7 @@
 //!
 //! 1. `none` (learns which methods the server accepts)
 //! 2. the explicitly configured private key file
-//! 3. keys held by an SSH agent (Windows OpenSSH agent pipe, then Pageant)
+//! 3. keys held by an SSH agent (Windows: OpenSSH agent pipe, then Pageant; Unix: `SSH_AUTH_SOCK`)
 //! 4. default key files (`~/.ssh/id_ed25519`, ...)
 //! 5. the stored password
 //! 6. keyboard-interactive / password prompts
@@ -28,6 +28,7 @@ type Session = client::Handle<ClientHandler>;
 const MAX_AUTH_ROUNDS: usize = 3;
 const MAX_PASSPHRASE_TRIES: usize = 3;
 /// Pipe served by the Windows OpenSSH `ssh-agent` service.
+#[cfg(windows)]
 const OPENSSH_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
 
 fn allows(methods: &MethodSet, kind: MethodKind) -> bool {
@@ -226,7 +227,27 @@ async fn agents(session: &mut Session, params: &ConnectParams, methods: &mut Met
             }
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        // An explicitly configured socket, else the agent named by SSH_AUTH_SOCK (the macOS
+        // launchd agent, ssh-agent, 1Password, ...).
+        let socket =
+            params.agent_pipe.clone().or_else(|| std::env::var("SSH_AUTH_SOCK").ok()).filter(|s| !s.is_empty());
+        if let Some(socket) = socket {
+            match AgentClient::connect_uds(&socket).await {
+                Ok(mut agent) => {
+                    if let Some(binding) = session.agent_session_binding() {
+                        let _ = agent.bind_session(binding, false).await;
+                    }
+                    if agent_keys(session, params, agent, methods).await? {
+                        return Ok(true);
+                    }
+                }
+                Err(e) => log::debug!("no SSH agent at {socket}: {e}"),
+            }
+        }
+    }
+    #[cfg(not(any(windows, unix)))]
     let _ = (session, params, methods);
     Ok(false)
 }

@@ -155,6 +155,8 @@ impl AppSettings {
     pub const MIN_FONT_SIZE: f32 = 8.0;
     pub const MAX_FONT_SIZE: f32 = 40.0;
     pub const DEFAULT_FONT_SIZE: f32 = 15.0;
+    /// The terminal font every installation of the platform has.
+    pub const DEFAULT_FONT: &str = if cfg!(target_os = "macos") { "Menlo" } else { "Consolas" };
     pub const MIN_SCROLLBACK: usize = 100;
     pub const MAX_SCROLLBACK: usize = 200_000;
     pub const MIN_CONNECT_TIMEOUT: u32 = 3;
@@ -193,7 +195,7 @@ impl AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            font: "Consolas".into(),
+            font: Self::DEFAULT_FONT.into(),
             font_size: Self::DEFAULT_FONT_SIZE,
             theme: "Campbell".into(),
             scrollback: 10_000,
@@ -249,7 +251,7 @@ mod tests {
         // Missing keys take defaults; out-of-range values are clamped.
         std::fs::write(&path, "font_size = 99\nscrollback = 1\nconnect_timeout = 0\n").unwrap();
         let s = AppSettings::load(&path).unwrap();
-        assert_eq!((s.font.as_str(), s.font_size, s.scrollback), ("Consolas", 40.0, 100));
+        assert_eq!((s.font.as_str(), s.font_size, s.scrollback), (AppSettings::DEFAULT_FONT, 40.0, 100));
         assert_eq!(s.connect_timeout, AppSettings::MIN_CONNECT_TIMEOUT, "no endless wait");
         std::fs::write(&path, "theme = \"Dracula\"\n").unwrap();
         assert_eq!(AppSettings::load(&path).unwrap().connect_timeout, 15, "older files get the default");

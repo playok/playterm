@@ -16,6 +16,12 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
+    windows_resources();
+}
+
+/// `winresource` is a build dependency only on Windows hosts.
+#[cfg(windows)]
+fn windows_resources() {
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../assets/playterm.ico")
         .set("ProductName", "playterm")
@@ -26,6 +32,11 @@ fn main() {
         // A missing resource compiler only costs the exe icon; do not fail the build.
         println!("cargo:warning=Windows resources not embedded: {e}");
     }
+}
+
+#[cfg(not(windows))]
+fn windows_resources() {
+    println!("cargo:warning=Windows resources not embedded: winresource needs a Windows host");
 }
 
 /// The MIT license text, for crates that state MIT but ship no license file.

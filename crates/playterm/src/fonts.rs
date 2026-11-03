@@ -1,11 +1,14 @@
 //! Terminal fonts: every font family installed on this PC (system and per-user fonts), or any
-//! font file the user picks, with Malgun Gothic behind it for Hangul the chosen font lacks.
+//! font file the user picks, with Malgun Gothic (Windows) or Apple SD Gothic Neo (macOS) behind
+//! it for Hangul the chosen font lacks.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use eframe::egui::{self, FontData, FontDefinitions};
+
+use playterm_config::AppSettings;
 
 use crate::view::bold_family;
 
@@ -59,6 +62,7 @@ struct FaceInfo {
 }
 
 /// System fonts, then fonts installed for the current user only.
+#[cfg(windows)]
 fn font_dirs() -> Vec<PathBuf> {
     let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
     let mut dirs = vec![PathBuf::from(windir).join("Fonts")];
@@ -66,6 +70,56 @@ fn font_dirs() -> Vec<PathBuf> {
         dirs.push(PathBuf::from(local).join("Microsoft").join("Windows").join("Fonts"));
     }
     dirs
+}
+
+/// System fonts, then fonts installed for all users and for the current user.
+#[cfg(target_os = "macos")]
+fn font_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> =
+        ["/System/Library/Fonts", "/System/Library/Fonts/Supplemental", "/Library/Fonts"].map(PathBuf::from).into();
+    if let Some(home) = std::env::var_os("HOME") {
+        dirs.push(PathBuf::from(home).join("Library").join("Fonts"));
+    }
+    dirs
+}
+
+/// The usual font folders of other Unix systems (one level of subfolders, as most
+/// distributions sort fonts by vendor).
+#[cfg(not(any(windows, target_os = "macos")))]
+fn font_dirs() -> Vec<PathBuf> {
+    let mut roots = vec![PathBuf::from("/usr/share/fonts"), PathBuf::from("/usr/local/share/fonts")];
+    if let Some(home) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(&home).join(".local/share/fonts"));
+        roots.push(PathBuf::from(home).join(".fonts"));
+    }
+    let mut dirs = Vec::new();
+    for root in roots {
+        let subdirs = std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir());
+        let subdirs: Vec<PathBuf> = subdirs.collect();
+        dirs.push(root);
+        dirs.extend(subdirs);
+    }
+    dirs
+}
+
+/// The regular and bold faces of the font behind the terminal font for Hangul.
+#[cfg(windows)]
+fn hangul_fallback(files: &[(String, PathBuf)]) -> (Option<Face>, Option<Face>) {
+    let lookup = |name: &str| files.iter().find(|(n, _)| n == name).map(|(_, p)| Face { path: p.clone(), index: 0 });
+    (lookup("malgun.ttf"), lookup("malgunbd.ttf"))
+}
+
+/// The regular and bold faces of the font behind the terminal font for Hangul.
+#[cfg(not(windows))]
+fn hangul_fallback(files: &[(String, PathBuf)]) -> (Option<Face>, Option<Face>) {
+    const CANDIDATES: [&str; 3] = ["applesdgothicneo.ttc", "nanumgothiccoding.ttf", "nanumgothic.ttf"];
+    for name in CANDIDATES {
+        let found: Vec<(String, PathBuf)> = files.iter().filter(|(n, _)| n == name).cloned().collect();
+        if let Some(family) = families_from(read_files(&found)).into_iter().next() {
+            return (Some(family.regular), family.bold);
+        }
+    }
+    (None, None)
 }
 
 /// Installed font files by lower-case file name, sorted so the first match is predictable.
@@ -90,6 +144,28 @@ fn map(path: &Path) -> Option<memmap2::Mmap> {
     unsafe { memmap2::Mmap::map(&file) }.ok()
 }
 
+/// Mac OS Roman characters 0x80..=0xFF.
+const MAC_ROMAN_HIGH: &str = concat!(
+    "ÄÅÇÉÑÖÜáàâäãåçéèêëíìîïñóòôöõúùûü†°¢£§•¶ß®©™´¨≠ÆØ∞±≤≥¥µ∂∑∏π∫ªºΩæø",
+    "¿¡¬√ƒ≈∆«»…\u{A0}ÀÃÕŒœ–—“”‘’÷◊ÿŸ⁄€‹›\u{FB01}\u{FB02}‡·‚„‰ÂÊÁËÈÍÎÏÌÓÔ\u{F8FF}ÒÚÛÙıˆ˜¯˘˙˚¸˝˛ˇ",
+);
+
+/// The text and language of a name record, as a Windows language id. Besides Unicode and
+/// Windows records this reads Macintosh Roman ones, the only names some macOS fonts (Menlo,
+/// Monaco) carry.
+fn name_text(n: &ttf_parser::name::Name) -> Option<(u16, String)> {
+    if let Some(s) = n.to_string() {
+        return Some((n.language_id, s));
+    }
+    // Macintosh platform, Roman encoding, English.
+    if n.platform_id != ttf_parser::PlatformId::Macintosh || n.encoding_id != 0 || n.language_id != 0 {
+        return None;
+    }
+    let high: Vec<char> = MAC_ROMAN_HIGH.chars().collect();
+    let text = n.name.iter().map(|&b| if b < 0x80 { b as char } else { high[b as usize - 0x80] }).collect();
+    Some((LANG_ENGLISH_US, text))
+}
+
 /// Reads the family names, weight, slant and pitch of every face in a font file.
 fn read_faces(path: &Path, data: &[u8]) -> Vec<FaceInfo> {
     use ttf_parser::name_id::{FAMILY, TYPOGRAPHIC_FAMILY};
@@ -100,10 +176,10 @@ fn read_faces(path: &Path, data: &[u8]) -> Vec<FaceInfo> {
             let names_with = |id: u16| -> Vec<(u16, String)> {
                 let mut out: Vec<(u16, String)> = Vec::new();
                 for n in face.names().into_iter().filter(|n| n.name_id == id) {
-                    if let Some(s) = n.to_string().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
-                        && !out.iter().any(|(_, o)| *o == s)
-                    {
-                        out.push((n.language_id, s));
+                    let Some((lang, s)) = name_text(&n) else { continue };
+                    let s = s.trim().to_owned();
+                    if !s.is_empty() && !out.iter().any(|(_, o)| *o == s) {
+                        out.push((lang, s));
                     }
                 }
                 out
@@ -294,16 +370,17 @@ fn load(face: &Face) -> std::io::Result<FontData> {
     }
 }
 
-/// Installs `font` (a family name or a font file) as the terminal font. Falls back to
-/// Consolas, and says so, when it cannot be found or loaded.
+/// Installs `font` (a family name or a font file) as the terminal font. Falls back to the
+/// platform's default font (Consolas, Menlo), and says so, when it cannot be found or loaded.
 pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
     let mut error = None;
+    let fallback = AppSettings::DEFAULT_FONT;
     let choice = find(font).or_else(|| {
         error = Some(playterm_i18n::tr!(
-            "'{font}' 글꼴을 찾을 수 없어 Consolas 를 씁니다",
-            "Font '{font}' not found, using Consolas"
+            "'{font}' 글꼴을 찾을 수 없어 {fallback} 를 씁니다",
+            "Font '{font}' not found, using {fallback}"
         ));
-        find("Consolas")
+        find(fallback)
     });
 
     let mut defs = FontDefinitions::default();
@@ -338,17 +415,16 @@ pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
         bold.extend(regular.iter().cloned());
     }
     // Hangul and other scripts the terminal font lacks.
-    let files = installed_files(&font_dirs());
-    let lookup = |name: &str| files.iter().find(|(n, _)| n == name).map(|(_, p)| Face { path: p.clone(), index: 0 });
-    if let Some(f) = lookup("malgun.ttf")
-        && add(&mut defs, "malgun", &f)
+    let (hangul, hangul_bold) = hangul_fallback(&installed_files(&font_dirs()));
+    if let Some(f) = hangul
+        && add(&mut defs, "hangul", &f)
     {
-        regular.push("malgun".to_owned());
+        regular.push("hangul".to_owned());
     }
-    if let Some(f) = lookup("malgunbd.ttf")
-        && add(&mut defs, "malgun-bold", &f)
+    if let Some(f) = hangul_bold
+        && add(&mut defs, "hangul-bold", &f)
     {
-        bold.push("malgun-bold".to_owned());
+        bold.push("hangul-bold".to_owned());
     }
 
     // egui's built-in monospace fonts stay as the last fallback (symbols, emoji).
@@ -413,6 +489,18 @@ mod tests {
         assert!(faces[0].families.iter().any(|(_, n)| n == "Consolas"));
         assert!(faces[0].monospace && !faces[0].italic && faces[0].weight == 400);
         assert!(read_faces(Path::new("x"), b"not a font").is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn finds_macos_fonts() {
+        let menlo = find(AppSettings::DEFAULT_FONT).expect("Menlo ships with macOS");
+        assert!(menlo.monospace && menlo.bold.is_some());
+        let (hangul, hangul_bold) = hangul_fallback(&installed_files(&font_dirs()));
+        let hangul = hangul.expect("Apple SD Gothic Neo ships with macOS");
+        let data = map(&hangul.path).unwrap();
+        assert!(ttf_parser::Face::parse(&data, hangul.index).unwrap().glyph_index('가').is_some());
+        assert!(hangul_bold.is_some_and(|b| b.index != hangul.index));
     }
 
     #[test]

@@ -619,6 +619,36 @@ fn agent_on_named_pipe_authenticates() {
     expect_connected(&h);
 }
 
+#[cfg(unix)]
+#[test]
+fn agent_on_unix_socket_authenticates() {
+    use russh::keys::agent::client::AgentClient;
+    use tokio::net::UnixListener;
+
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("agent", &[&key]);
+    fx.trust_host();
+
+    // An in-process ssh-agent speaking the OpenSSH agent protocol on a private socket.
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("agent.sock");
+    fx.server_rt.block_on(async {
+        let listener = UnixListener::bind(&socket).unwrap();
+        let connections = futures::stream::unfold(listener, |listener| async move {
+            let accepted = listener.accept().await.map(|(stream, _)| stream);
+            Some((accepted, listener))
+        });
+        tokio::spawn(russh::keys::agent::server::serve(Box::pin(connections), ()));
+
+        let mut client = AgentClient::connect_uds(&socket).await.unwrap();
+        client.add_identity(&key, &[]).await.unwrap();
+    });
+
+    let socket = socket.to_string_lossy().into_owned();
+    let h = fx.connect(ConnectParams { use_agent: true, agent_pipe: Some(socket), ..fx.params() });
+    expect_connected(&h);
+}
+
 // -------------------------------------------------------------------------------------------------
 // SFTP
 
