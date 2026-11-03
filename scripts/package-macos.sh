@@ -6,6 +6,12 @@
 #   scripts/package-macos.sh arm64            # one architecture
 #   scripts/package-macos.sh universal        # one app for both (lipo)
 #   RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh   # a toolchain other than the default
+#   scripts/package-macos.sh --build-only arm64 x64    # only build
+#   scripts/package-macos.sh --skip-build arm64 x64    # package what --build-only built (no cargo)
+#
+# Certificates and notarization passwords should not be in the environment (or the keychain)
+# while cargo builds: every dependency's build script runs then. The release workflow builds with
+# --build-only first, then imports the certificate and packages with --skip-build.
 #
 # The app is signed ad hoc unless $MACOS_SIGN_IDENTITY names a "Developer ID Application"
 # certificate in the keychain; it is then signed with the hardened runtime and a timestamp.
@@ -28,6 +34,11 @@ cd "$root"
 version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
 [ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
 
+step=all
+case "${1:-}" in
+    --build-only) step=build; shift ;;
+    --skip-build) step=package; shift ;;
+esac
 targets=${*:-arm64 x64}
 
 notarize=
@@ -69,14 +80,28 @@ triple() {
     esac
 }
 
-# Builds playterm for one architecture; prints the path of the executable.
+# Builds playterm for one architecture (with --skip-build: checks it was built); prints the
+# path of the executable.
 build() {
     t=$(triple "$1")
-    rustup target add "$t" >/dev/null 2>&1 || true
-    echo "== cargo build ($t)" >&2
-    cargo build --release --locked -p playterm --target "$t" >&2
-    echo "target/$t/release/playterm"
+    exe="target/$t/release/playterm"
+    if [ "$step" = package ]; then
+        [ -f "$exe" ] || { echo "--skip-build: $exe is not built (run --build-only first)" >&2; exit 1; }
+    else
+        rustup target add "$t" >/dev/null 2>&1 || true
+        echo "== cargo build ($t)" >&2
+        cargo build --release --locked -p playterm --target "$t" >&2
+    fi
+    echo "$exe"
 }
+
+if [ "$step" = build ]; then
+    for arch in $targets; do
+        if [ "$arch" = universal ]; then build arm64 >/dev/null; build x64 >/dev/null; else build "$arch" >/dev/null; fi
+    done
+    echo "built; package with --skip-build"
+    exit 0
+fi
 
 # make_app <executable> <app path>
 make_app() {

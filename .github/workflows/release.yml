@@ -16,6 +16,8 @@
 #   macOS    MACOS_CERT_P12 (base64 of a "Developer ID Application" .p12), MACOS_CERT_PASSWORD
 #            -> the apps signed with the hardened runtime; with MACOS_NOTARY_APPLE_ID,
 #            MACOS_NOTARY_TEAM_ID and MACOS_NOTARY_PASSWORD (app-specific) also notarized and stapled
+# Secrets are given only to the steps that package and sign, which run no cargo: the builds (and
+# with them every dependency's build script) run first, without any secret in their environment.
 name: Release
 
 on:
@@ -65,9 +67,13 @@ jobs:
       - name: Test
         run: cargo test --locked --workspace
 
+      - name: Build (x64, ARM64)
+        shell: pwsh
+        run: ./scripts/package.ps1 -BuildOnly
+
       # A tagged release must be signed (repository secret PLAYTERM_SIGNING_KEY): the in-app
       # updater installs only releases whose SHA256SUMS.txt.sig matches its public key.
-      - name: Package (x64, ARM64)
+      - name: Package and sign (x64, ARM64)
         id: package
         shell: pwsh
         env:
@@ -75,7 +81,7 @@ jobs:
           WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
-          $options = @{ Upx = $true }
+          $options = @{ Upx = $true; SkipBuild = $true }
           if ($env:GITHUB_REF -like "refs/tags/*") { $options.Sign = $true }
           if ($env:WINDOWS_CERT_PFX) { $options.CodeSign = $true }
           ./scripts/package.ps1 @options
@@ -96,12 +102,6 @@ jobs:
     outputs:
       signed: ${{ steps.certificate.outputs.signed }}
       notarized: ${{ steps.package.outputs.notarized }}
-    env:
-      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
-      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -127,10 +127,23 @@ jobs:
       - name: Test
         run: cargo test --locked --workspace
 
+      - name: Build (arm64, x64)
+        run: scripts/package-macos.sh --build-only arm64 x64
+
+      # Whether the signing secrets are set (not their values).
+      - name: Signing secrets
+        id: secrets
+        run: |
+          echo "certificate=${{ secrets.MACOS_CERT_P12 != '' }}" >> "$GITHUB_OUTPUT"
+          echo "notary=${{ secrets.MACOS_NOTARY_APPLE_ID != '' }}" >> "$GITHUB_OUTPUT"
+
       # The certificate goes into a keychain of its own, deleted at the end of the job.
       - name: Developer ID certificate
         id: certificate
-        if: env.MACOS_CERT_P12 != ''
+        if: steps.secrets.outputs.certificate == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         run: |
           set -eu
           keychain="$RUNNER_TEMP/signing.keychain-db"
@@ -152,11 +165,15 @@ jobs:
           echo "signed=true" >> "$GITHUB_OUTPUT"
 
       # Without the certificate the apps are signed ad hoc, and Gatekeeper asks on the first run.
-      - name: Package (arm64, x64)
+      - name: Package, sign and notarize (arm64, x64)
         id: package
+        env:
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         run: |
-          scripts/package-macos.sh arm64 x64
-          if [ -n "$MACOS_NOTARY_APPLE_ID" ]; then echo "notarized=true" >> "$GITHUB_OUTPUT"; fi
+          scripts/package-macos.sh --skip-build arm64 x64
+          if [ "${{ steps.secrets.outputs.notary }}" = true ]; then echo "notarized=true" >> "$GITHUB_OUTPUT"; fi
 
       - name: Remove the signing keychain
         if: always() && steps.certificate.outcome == 'success'
