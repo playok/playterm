@@ -1,5 +1,7 @@
 //! "사이트 관리" window: the saved-site tree on the left, the selected site's settings on the
-//! right. Saving, deleting and connecting are carried out by the app.
+//! right. Saving, deleting and connecting are carried out by the app. It is a window of its own,
+//! not a modal: the terminals stay usable beside it (e.g. to read a connection error while
+//! changing the port).
 
 use eframe::egui::{self, Button, Key, Modifiers, RichText};
 use playterm_config::{ProfileStore, SessionProfile, SiteView, folder_name, normalize_folder, parent_folder};
@@ -129,6 +131,9 @@ pub struct SiteManager {
     /// The folder last clicked: where a new site or folder goes.
     focus_folder: Option<String>,
     folder_prompt: Option<FolderPrompt>,
+    /// Asked for while open (the sidebar, a menu): gone to on the next frame, after asking about
+    /// unsaved changes.
+    pending: Option<Next>,
 }
 
 /// Whether the vault (probably) holds a password for a site.
@@ -150,6 +155,19 @@ impl SiteManager {
             && let Some(p) = store.get(&id)
         {
             self.select(p, has_secret(p));
+        }
+    }
+
+    /// Goes to a saved site, or a new one, once any unsaved changes are dealt with (the manager
+    /// was asked for again while open).
+    pub fn request(&mut self, site: Option<&str>, new_site: bool) {
+        let selection = match site {
+            _ if new_site => Some(Selection::New(self.target_folder())),
+            Some(id) => Some(Selection::Site(id.to_owned())),
+            None => return,
+        };
+        if self.selected != selection {
+            self.pending = Some(Next::Select(selection));
         }
     }
 
@@ -215,7 +233,8 @@ impl SiteManager {
         Some(SiteManagerResult::Save { profile: Box::new(profile), password, connect, close })
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, store: &ProfileStore, has_secret: SecretCheck<'_>) -> SiteManagerResult {
+    /// Shows the window. `keys_free`: no terminal has the keyboard, so Escape is for this window.
+    pub fn show(&mut self, ctx: &egui::Context, store: &ProfileStore, has_secret: SecretCheck<'_>, keys_free: bool) -> SiteManagerResult {
         // The selected site was deleted.
         if let Some(id) = self.selected_site()
             && store.get(id).is_none()
@@ -224,14 +243,20 @@ impl SiteManager {
             self.form = None;
         }
 
-        let mut next = None;
+        let mut next = self.pending.take();
         let mut result = SiteManagerResult::Open;
         let folders = store.folders();
-        let modal = egui::Modal::new(egui::Id::unique("site-manager")).show(ctx, |ui| {
-            ui.heading(t("사이트 관리", "Site Manager"));
-            ui.add_space(6.0);
-            // A modal has no natural height limit: give the body a fixed size, or the vertical
-            // separator and scroll areas would stretch to the whole screen.
+        let mut open = true;
+        let window = egui::Window::new(t("사이트 관리", "Site Manager"))
+            .id(egui::Id::unique("site-manager"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
+            .show(ctx, |ui| {
+            // Give the body a fixed size, or the vertical separator and scroll areas would
+            // stretch to the whole screen.
             let (list_width, form_width) = match self.view {
                 SiteView::Tree => (LIST_WIDTH, FORM_WIDTH),
                 SiteView::Grid => (GRID_LIST_WIDTH, GRID_FORM_WIDTH),
@@ -259,10 +284,16 @@ impl SiteManager {
                 });
             });
         });
-        // Escape closes; a click outside does not (too easy to lose edits).
-        if self.folder_prompt.is_none()
-            && modal.is_top_modal
-            && !modal.any_popup_open
+        if !open {
+            next = Some(Next::Close);
+        }
+        // Escape closes, unless a terminal has the keyboard (Escape is the shell's then) or
+        // something of the manager's own is open above it.
+        if keys_free
+            && window.is_some()
+            && self.folder_prompt.is_none()
+            && self.unsaved.is_none()
+            && !egui::Popup::is_any_open(ctx)
             && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
         {
             next = Some(Next::Close);
