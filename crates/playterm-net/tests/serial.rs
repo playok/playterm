@@ -27,6 +27,7 @@ fn params(port: &str) -> ConnectParams {
         rows: 24,
         known_hosts: std::env::temp_dir().join("playterm-serial-test-known_hosts"),
         connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
+        jump: None,
     }
 }
 

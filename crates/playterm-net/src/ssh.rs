@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::future::Future;
+use std::pin::Pin;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -129,34 +131,74 @@ fn prefer(order: &[Algorithm], known: &[Algorithm]) -> Vec<Algorithm> {
     first
 }
 
-/// TCP, the SSH handshake, authentication, forwardings and the shell channel.
+/// Jump hosts a connection goes through, kept open for as long as it lasts.
+type Hops = Vec<client::Handle<ClientHandler>>;
+/// A connection being made: the session and the jump hosts it goes through.
+type Connecting<'a> = Pin<Box<dyn Future<Output = anyhow::Result<(client::Handle<ClientHandler>, Hops)>> + Send + 'a>>;
+
+/// An authenticated SSH session with `params.host`: over TCP, or through `params.jump` (a
+/// direct-tcpip channel of the jump host's session, which may itself go through another).
+/// Returns the session and the jump hosts' sessions, outermost last.
+fn connect_ssh<'a>(
+    params: &'a ConnectParams,
+    sink: &'a EventSink,
+) -> Connecting<'a> {
+    Box::pin(async move {
+        // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
+        let mut preferred = russh::Preferred::default();
+        preferred.key =
+            Cow::Owned(prefer_known_host_keys(&preferred.key, &params.host, params.port, &params.known_hosts));
+        let config = Arc::new(client::Config {
+            keepalive_interval: (params.keepalive.mode != KeepAliveMode::Off).then(|| params.keepalive.period()),
+            preferred,
+            ..Default::default()
+        });
+        let handler = ClientHandler {
+            host: params.host.clone(),
+            port: params.port,
+            known_hosts: params.known_hosts.clone(),
+            sink: sink.clone(),
+            remote_forwards: params.forwards.iter().filter(|r| r.kind == ForwardKind::Remote).cloned().collect(),
+        };
+        let (mut session, hops) = match &params.jump {
+            None => {
+                let stream = TcpStream::connect((params.host.as_str(), params.port)).await.with_context(|| {
+                    tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port)
+                })?;
+                stream.set_nodelay(true)?;
+                (client::connect_stream(config, stream, handler).await?, Hops::new())
+            }
+            Some(jump) => {
+                let (bastion, mut hops) = connect_ssh(jump, sink).await?;
+                let channel = bastion
+                    .channel_open_direct_tcpip(params.host.as_str(), params.port.into(), "127.0.0.1", 0)
+                    .await
+                    .with_context(|| {
+                        tr!(
+                            "점프 호스트 {} 에서 {}:{} 에 연결할 수 없습니다",
+                            "The jump host {} cannot reach {}:{}",
+                            jump.host,
+                            params.host,
+                            params.port
+                        )
+                    })?;
+                let session = client::connect_stream(config, channel.into_stream(), handler).await?;
+                hops.push(bastion);
+                (session, hops)
+            }
+        };
+        authenticate(&mut session, params, sink).await?;
+        Ok((session, hops))
+    })
+}
+
+/// TCP (or the jump hosts), the SSH handshake, authentication, forwardings and the shell
+/// channel.
 async fn open(
     params: &ConnectParams,
     sink: &EventSink,
-) -> anyhow::Result<(Arc<client::Handle<ClientHandler>>, russh::Channel<client::Msg>, JoinSet<()>)> {
-    let stream = TcpStream::connect((params.host.as_str(), params.port))
-        .await
-        .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
-    stream.set_nodelay(true)?;
-
-    // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
-    let mut preferred = russh::Preferred::default();
-    preferred.key = Cow::Owned(prefer_known_host_keys(&preferred.key, &params.host, params.port, &params.known_hosts));
-    let config = Arc::new(client::Config {
-        keepalive_interval: (params.keepalive.mode != KeepAliveMode::Off).then(|| params.keepalive.period()),
-        preferred,
-        ..Default::default()
-    });
-    let handler = ClientHandler {
-        host: params.host.clone(),
-        port: params.port,
-        known_hosts: params.known_hosts.clone(),
-        sink: sink.clone(),
-        remote_forwards: params.forwards.iter().filter(|r| r.kind == ForwardKind::Remote).cloned().collect(),
-    };
-    let mut session = client::connect_stream(config, stream, handler).await?;
-
-    authenticate(&mut session, params, sink).await?;
+) -> anyhow::Result<(Arc<client::Handle<ClientHandler>>, russh::Channel<client::Msg>, JoinSet<()>, Hops)> {
+    let (session, hops) = connect_ssh(params, sink).await?;
     // Shared with forwarding listeners and SFTP, which open their own channels.
     let session = Arc::new(session);
     let mut tasks = JoinSet::new();
@@ -175,7 +217,7 @@ async fn open(
         )
         .await?;
     channel.request_shell(false).await?;
-    Ok((session, channel, tasks))
+    Ok((session, channel, tasks, hops))
 }
 
 pub(crate) async fn run(
@@ -184,7 +226,8 @@ pub(crate) async fn run(
     sink: EventSink,
 ) -> anyhow::Result<()> {
     // Up to the shell, within the connect time limit; prompts (host key, password) pause it.
-    let (session, channel, mut tasks) = sink.connecting(&params, open(&params, &sink)).await?;
+    // The jump hosts' sessions stay open (held here) for as long as this one.
+    let (session, channel, mut tasks, _hops) = sink.connecting(&params, open(&params, &sink)).await?;
     sink.send(SessionEvent::Connected);
 
     let (mut reader, writer) = channel.split();

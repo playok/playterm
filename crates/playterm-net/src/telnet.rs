@@ -416,6 +416,7 @@ mod tests {
                 rows: 24,
                 known_hosts: Default::default(),
                 connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
+                jump: None,
             };
             let (handle, commands, sink) = SessionHandle::new(Arc::new(|| {}));
             let task = tokio::spawn(run(params, commands, sink));

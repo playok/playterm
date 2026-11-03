@@ -87,6 +87,9 @@ pub struct ConnectParams {
     /// Longest wait for the server while connecting (TCP, handshake, login), not counting
     /// time spent waiting on the user. Unused for serial ports.
     pub connect_timeout: Duration,
+    /// SSH: reach the host through this one (a bastion), like OpenSSH's ProxyJump / -J. It can
+    /// have a jump host of its own (A → B → this host).
+    pub jump: Option<Box<ConnectParams>>,
 }
 
 impl ConnectParams {

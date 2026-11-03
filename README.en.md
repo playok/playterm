@@ -126,7 +126,7 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 
 | Command | Does |
 |---|---|
-| `ssh [-p port] [-l user] [-i key] [-L/-R/-D ...] [--cp949] [user@]host[:port]` | SSH (without a user, your Windows user name) |
+| `ssh [-p port] [-l user] [-i key] [-J jumphost] [-L/-R/-D ...] [--cp949] [user@]host[:port]` | SSH (without a user, your user name on this PC). `-J` goes through a jump host: a site name or `user@host:port` |
 | `telnet host [port]` | Telnet |
 | `serial COM3 [speed]` | Serial console |
 | `rdp [user@]host[:port]` | Remote Desktop |
@@ -334,6 +334,15 @@ Choose protocol **RDP** in the Site Manager, type `rdp [user@]host[:port]` at th
 - Not supported yet: sound, drive and printer redirection, RD Gateway, Kerberos (domain accounts authenticate with NTLM).
 
 Test RDP server: `tools\dev-rdpd` (`cargo run --release` → 127.0.0.1:3389, tester / secret). It draws crosshairs that follow the mouse and prints the keyboard and mouse input it receives.
+
+## Jump hosts (ProxyJump)
+
+Put a saved site's name or `user@host:port` in a site's **Jump host** (quick connect: under Advanced) and playterm first connects to that
+server (a bastion) over SSH, then reaches the target through a channel of that connection (as OpenSSH's `ProxyJump` / `-J`). At the local
+prompt: `ssh -J bastion db01`.
+- With a site's name, that site's key, saved password (while the vault is open) and its own jump host are used (A → B → target, up to 4 hops).
+- In `user@host:port`, a missing user is the target site's, a missing port is 22. Login uses the agent and default keys, else a prompt.
+- The host keys of the jump host and of the target are each checked against known_hosts.
 
 ## SSH authentication order
 
