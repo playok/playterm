@@ -104,6 +104,11 @@ pub struct MenuState<'a> {
 }
 
 /// Adds a menu item; a click records `command` and closes the menu.
+/// The shortcut shown in a menu: the Windows one, or the Mac one on macOS.
+fn keys(other: &'static str, mac: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") { mac } else { other }
+}
+
 fn item(ui: &mut egui::Ui, out: &mut Option<Command>, label: &str, shortcut: &str, enabled: bool, command: Command) {
     let button = Button::new(label).shortcut_text(shortcut);
     if ui.add_enabled(enabled, button).clicked() {
@@ -175,8 +180,8 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
 
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button(t("파일", "File"), |ui| {
-            item(ui, out, t("새 탭", "New tab"), "Ctrl+Shift+N", true, Command::NewTab);
-            item(ui, out, t("새 창", "New window"), "", true, Command::NewWindow);
+            item(ui, out, t("새 탭", "New tab"), keys("Ctrl+Shift+N", "⌘T"), true, Command::NewTab);
+            item(ui, out, t("새 창", "New window"), keys("", "⌘N"), true, Command::NewWindow);
             item(ui, out, t("빠른 연결…", "Quick Connect…"), "Ctrl+Shift+T", true, Command::QuickConnect);
             item(ui, out, t("사이트 관리…", "Site Manager…"), "Ctrl+Shift+S", true, Command::SiteManager);
             item(ui, out, t("새 사이트…", "New site…"), "", true, Command::NewSite);
@@ -185,7 +190,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 item(ui, out, t("Xshell 세션…", "Xshell sessions…"), "", true, Command::ImportXshell);
             });
             ui.separator();
-            item(ui, out, t("끝내기", "Exit"), "Alt+F4", true, Command::Quit);
+            item(ui, out, t("끝내기", "Exit"), keys("Alt+F4", "⌘Q"), true, Command::Quit);
         });
 
         ui.menu_button(t("편집", "Edit"), |ui| {
@@ -193,7 +198,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("복사", "Copy"), st.copy_hint, has_selection, Command::Copy);
             item(ui, out, t("붙여넣기", "Paste"), st.paste_hint, active.is_some(), Command::Paste);
             item(ui, out, t("모두 선택", "Select all"), "", active.is_some(), Command::SelectAll);
-            item(ui, out, t("찾기…", "Find…"), "Ctrl+Shift+F", active.is_some(), Command::Find);
+            item(ui, out, t("찾기…", "Find…"), keys("Ctrl+Shift+F", "⌘F"), active.is_some(), Command::Find);
             ui.separator();
             item(ui, out, t("스크롤백 지우기", "Clear scrollback"), "", active.is_some(), Command::ClearScrollback);
         });
@@ -211,9 +216,9 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             );
             check(ui, out, t("전체 화면", "Full screen"), "F11", fullscreen, Command::ToggleFullscreen);
             ui.separator();
-            item(ui, out, t("글꼴 크게", "Larger font"), "Ctrl+=", true, Command::ZoomIn);
-            item(ui, out, t("글꼴 작게", "Smaller font"), "Ctrl+-", true, Command::ZoomOut);
-            item(ui, out, t("기본 크기", "Default size"), "Ctrl+0", true, Command::ZoomReset);
+            item(ui, out, t("글꼴 크게", "Larger font"), keys("Ctrl+=", "⌘="), true, Command::ZoomIn);
+            item(ui, out, t("글꼴 작게", "Smaller font"), keys("Ctrl+-", "⌘-"), true, Command::ZoomOut);
+            item(ui, out, t("기본 크기", "Default size"), keys("Ctrl+0", "⌘0"), true, Command::ZoomReset);
         });
 
         ui.menu_button(t("도구", "Tools"), |ui| {
@@ -256,14 +261,14 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 );
             }
             ui.separator();
-            item(ui, out, t("설정…", "Settings…"), "", true, Command::Settings);
+            item(ui, out, t("설정…", "Settings…"), keys("", "⌘,"), true, Command::Settings);
         });
 
         ui.menu_button(t("탭", "Tab"), |ui| {
-            item(ui, out, t("새 탭", "New tab"), "Ctrl+Shift+N", true, Command::NewTab);
+            item(ui, out, t("새 탭", "New tab"), keys("Ctrl+Shift+N", "⌘T"), true, Command::NewTab);
             ui.separator();
-            item(ui, out, t("다음 탭", "Next tab"), "Ctrl+Tab", n > 1, Command::NextTab);
-            item(ui, out, t("이전 탭", "Previous tab"), "Ctrl+Shift+Tab", n > 1, Command::PrevTab);
+            item(ui, out, t("다음 탭", "Next tab"), keys("Ctrl+Tab", "⇧⌘]"), n > 1, Command::NextTab);
+            item(ui, out, t("이전 탭", "Previous tab"), keys("Ctrl+Shift+Tab", "⇧⌘["), n > 1, Command::PrevTab);
             ui.separator();
             item(ui, out, t("탭 복제", "Duplicate tab"), "Ctrl+Shift+D", active.is_some(), Command::Duplicate(i));
             item(ui, out, t("새 창으로 열기", "Open in new window"), "", active.is_some(), Command::OpenInNewWindow(i));
@@ -273,7 +278,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             let can_reconnect = active.is_some_and(|s| s.has_target());
             item(ui, out, t("다시 연결", "Reconnect"), "", can_reconnect, Command::Reconnect(i));
             ui.separator();
-            item(ui, out, t("탭 닫기", "Close tab"), "Ctrl+Shift+W", active.is_some(), Command::Close(i));
+            item(ui, out, t("탭 닫기", "Close tab"), keys("Ctrl+Shift+W", "⌘W"), active.is_some(), Command::Close(i));
             item(ui, out, t("다른 탭 모두 닫기", "Close other tabs"), "", n > 1, Command::CloseOthers(i));
             item(ui, out, t("모든 탭 닫기", "Close all tabs"), "", n > 0, Command::CloseAll);
             ui.separator();

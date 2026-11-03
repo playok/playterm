@@ -23,6 +23,8 @@ pub struct ViewStyle {
     pub clipboard: ClipboardKeys,
     /// Sites connected to lately, newest first, for the start screen.
     pub recent: Vec<RecentSite>,
+    /// Alt (Option on macOS) + key is sent as Meta: ESC and the key.
+    pub alt_is_meta: bool,
 }
 
 /// A recently connected site, as the start screen lists it.
@@ -163,7 +165,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
 
     output.focused = response.has_focus();
     if focused {
-        handle_keyboard(ui, session, &style.clipboard, &mut output.inputs);
+        handle_keyboard(ui, session, &style.clipboard, style.alt_is_meta, &mut output.inputs);
     }
 
     // Mouse goes to the application when it asked for it (vim `mouse=a`, htop, mc, tmux),
@@ -229,7 +231,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     output
 }
 
-fn handle_keyboard(ui: &egui::Ui, session: &mut Session, keys: &ClipboardKeys, inputs: &mut Vec<UserInput>) {
+fn handle_keyboard(ui: &egui::Ui, session: &mut Session, keys: &ClipboardKeys, alt_is_meta: bool, inputs: &mut Vec<UserInput>) {
     let events = ui.input(|i| i.events.clone());
     let mode = *session.terminal.term().mode();
     let app_cursor = mode.contains(TermMode::APP_CURSOR);
@@ -259,6 +261,9 @@ fn handle_keyboard(ui: &egui::Ui, session: &mut Session, keys: &ClipboardKeys, i
                 }
             }
             Event::Key { key, pressed: true, modifiers, .. } => {
+                // Option not as Meta (macOS setting): the character macOS made of it comes as
+                // text; the key itself is sent as without Option.
+                let modifiers = if alt_is_meta { modifiers } else { egui::Modifiers { alt: false, ..modifiers } };
                 if let Some(bytes) = key_bytes(key, modifiers, app_cursor) {
                     skip_text = modifiers.alt && !modifiers.ctrl;
                     session.send_bytes(bytes);

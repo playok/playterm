@@ -308,6 +308,14 @@ impl SettingsDialog {
 
     /// Which keys and mouse buttons copy and paste in the terminal.
     fn clipboard_rows(&mut self, ui: &mut egui::Ui) {
+        if cfg!(target_os = "macos") {
+            ui.label(t("Option 키", "Option key"));
+            ui.checkbox(&mut self.draft.option_as_meta, t("Meta 키로 쓰기 (ESC + 키)", "Use as Meta (ESC + key)")).on_hover_text(t(
+                "켜면 Option+글자가 셸의 Alt 단축키(예: Option+B 한 단어 뒤로)로 갑니다. 끄면 macOS 가 만드는 문자(é, © …)를 입력합니다.",
+                "On: Option+letter goes to the shell as an Alt shortcut (e.g. Option+B, word back). Off: it types the character macOS makes (é, ©, …).",
+            ));
+            ui.end_row();
+        }
         let keys = &mut self.draft.clipboard;
         ui.label(t("복사", "Copy"));
         ui.horizontal_wrapped(|ui| {

@@ -21,6 +21,11 @@ fn ctrl_only(m: Modifiers) -> bool {
     m.ctrl && !m.shift && !m.alt
 }
 
+/// macOS: Cmd alone, the usual modifier of the clipboard keys there.
+fn cmd_only(m: Modifiers) -> bool {
+    cfg!(target_os = "macos") && m.mac_cmd && !m.shift && !m.alt && !m.ctrl
+}
+
 /// Shift alone.
 fn shift_only(m: Modifiers) -> bool {
     m.shift && !m.ctrl && !m.alt
@@ -31,6 +36,9 @@ fn shift_only(m: Modifiers) -> bool {
 /// app shortcuts, handled before the terminal sees them.
 pub fn terminal_action(key: Key, m: Modifiers, keys: &ClipboardKeys, has_selection: bool) -> Option<ClipAction> {
     match key {
+        // macOS: Cmd+C / Cmd+V, as in every Mac app (Cmd never reaches the shell anyway).
+        Key::C if cmd_only(m) && has_selection => Some(ClipAction::Copy),
+        Key::V if cmd_only(m) => Some(ClipAction::Paste),
         Key::C if ctrl_only(m) && keys.ctrl_c && has_selection => Some(ClipAction::Copy),
         Key::Insert if ctrl_only(m) && keys.ctrl_insert => Some(ClipAction::Copy),
         Key::V if ctrl_only(m) && keys.ctrl_v => Some(ClipAction::Paste),
@@ -62,11 +70,11 @@ pub fn widget_shortcuts(events: &mut [Event], clipboard: impl Fn() -> Option<Str
     for event in events.iter_mut() {
         let Event::Key { key, pressed: true, modifiers: m, .. } = *event else { continue };
         *event = match key {
-            Key::C if ctrl_only(m) => Event::Copy,
+            Key::C if ctrl_only(m) || cmd_only(m) => Event::Copy,
             Key::Insert if ctrl_only(m) => Event::Copy,
-            Key::X if ctrl_only(m) => Event::Cut,
+            Key::X if ctrl_only(m) || cmd_only(m) => Event::Cut,
             Key::Delete if shift_only(m) => Event::Cut,
-            Key::V if ctrl_only(m) => match clipboard() {
+            Key::V if ctrl_only(m) || cmd_only(m) => match clipboard() {
                 Some(text) => Event::Paste(text),
                 None => continue,
             },
@@ -87,6 +95,19 @@ pub fn paste_click(response: &egui::Response, keys: &ClipboardKeys, ctrl: bool) 
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn cmd_copies_and_pastes_on_macos() {
+        let none = ClipboardKeys { ctrl_c: false, ctrl_v: false, ..ClipboardKeys::default() };
+        let cmd = Modifiers::MAC_CMD;
+        assert_eq!(terminal_action(Key::C, cmd, &none, true), Some(ClipAction::Copy), "whatever the Ctrl settings");
+        assert_eq!(terminal_action(Key::C, cmd, &none, false), None, "nothing selected: nothing to copy");
+        assert_eq!(terminal_action(Key::V, cmd, &none, false), Some(ClipAction::Paste));
+        let mut events = vec![Event::Key { key: Key::X, physical_key: None, pressed: true, repeat: false, modifiers: cmd }];
+        widget_shortcuts(&mut events, || None);
+        assert!(matches!(events[0], Event::Cut), "text fields: Cmd+X cuts");
+    }
     use super::*;
 
     const CTRL: Modifiers = Modifiers::CTRL;
