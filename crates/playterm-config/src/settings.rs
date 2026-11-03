@@ -151,6 +151,9 @@ pub struct AppSettings {
     pub skipped_update: String,
     /// Saved sites connected to lately, newest first (their ids), for the start screen.
     pub recent_sites: Vec<String>,
+    /// macOS: Option+key is sent as Meta (ESC and the key), like Alt elsewhere. Off: Option
+    /// types the character macOS gives it (é, ©, …).
+    pub option_as_meta: bool,
 }
 
 impl AppSettings {
@@ -234,6 +237,7 @@ impl Default for AppSettings {
             check_updates: true,
             skipped_update: String::new(),
             recent_sites: Vec::new(),
+            option_as_meta: true,
         }
     }
 }
@@ -280,6 +284,7 @@ mod tests {
             check_updates: false,
             skipped_update: "0.3.0".into(),
             recent_sites: vec!["w1".into()],
+            option_as_meta: false,
         };
         s.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), s);

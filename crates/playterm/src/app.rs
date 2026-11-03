@@ -83,6 +83,32 @@ enum Shortcut {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    NewWindow,
+    Settings,
+    Quit,
+}
+
+/// macOS: the Cmd shortcuts Mac apps share, besides the ones above (Cmd never reaches the
+/// shell, so these take nothing from the terminal).
+const MAC_SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::T), Shortcut::NewTab),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::W), Shortcut::CloseTab),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::N), Shortcut::NewWindow),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::F), Shortcut::Find),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Comma), Shortcut::Settings),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Q), Shortcut::Quit),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD.plus(Modifiers::SHIFT), Key::OpenBracket), Shortcut::PrevTab),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD.plus(Modifiers::SHIFT), Key::CloseBracket), Shortcut::NextTab),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Equals), Shortcut::ZoomIn),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Plus), Shortcut::ZoomIn),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Minus), Shortcut::ZoomOut),
+    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Num0), Shortcut::ZoomReset),
+];
+
+/// The app shortcuts of this platform.
+fn shortcut_table() -> impl Iterator<Item = &'static (KeyboardShortcut, Shortcut)> {
+    let mac: &[(KeyboardShortcut, Shortcut)] = if cfg!(target_os = "macos") { MAC_SHORTCUTS } else { &[] };
+    SHORTCUTS.iter().chain(mac)
 }
 
 /// What to do once the vault dialog succeeds (or is cancelled).
@@ -1016,6 +1042,8 @@ impl PlaytermApp {
             selection: Color32::from_rgb(selection.r, selection.g, selection.b),
             clipboard: self.settings.clipboard,
             recent,
+            // Only macOS offers the choice (Option also types accented letters there).
+            alt_is_meta: !cfg!(target_os = "macos") || self.settings.option_as_meta,
         }
     }
 
@@ -1476,7 +1504,7 @@ impl PlaytermApp {
     /// App shortcuts, consumed before the terminal sees the key events.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let keys = self.settings.clipboard;
-        for (shortcut, what) in SHORTCUTS {
+        for (shortcut, what) in shortcut_table() {
             // Turned off in the settings: the key goes to the terminal.
             let off = match what {
                 Shortcut::Copy => !keys.ctrl_shift_c,
@@ -1506,6 +1534,9 @@ impl PlaytermApp {
                 Shortcut::ZoomIn => Command::ZoomIn,
                 Shortcut::ZoomOut => Command::ZoomOut,
                 Shortcut::ZoomReset => Command::ZoomReset,
+                Shortcut::NewWindow => Command::NewWindow,
+                Shortcut::Settings => Command::Settings,
+                Shortcut::Quit => Command::Quit,
             };
             self.run(ctx, command);
         }
