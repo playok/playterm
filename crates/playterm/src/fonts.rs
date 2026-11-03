@@ -83,21 +83,26 @@ fn font_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The usual font folders of other Unix systems (one level of subfolders, as most
-/// distributions sort fonts by vendor).
+/// The usual font folders of other Unix systems with their subfolders, up to three levels
+/// deep: distributions sort fonts by format and vendor (`/usr/share/fonts/truetype/dejavu`).
 #[cfg(not(any(windows, target_os = "macos")))]
 fn font_dirs() -> Vec<PathBuf> {
+    const DEPTH: usize = 3;
     let mut roots = vec![PathBuf::from("/usr/share/fonts"), PathBuf::from("/usr/local/share/fonts")];
     if let Some(home) = std::env::var_os("HOME") {
         roots.push(PathBuf::from(&home).join(".local/share/fonts"));
         roots.push(PathBuf::from(home).join(".fonts"));
     }
     let mut dirs = Vec::new();
-    for root in roots {
-        let subdirs = std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir());
-        let subdirs: Vec<PathBuf> = subdirs.collect();
-        dirs.push(root);
-        dirs.extend(subdirs);
+    let mut stack: Vec<(PathBuf, usize)> = roots.into_iter().map(|r| (r, 0)).collect();
+    while let Some((dir, depth)) = stack.pop() {
+        if depth < DEPTH {
+            // Not followed through links: they could lead in circles.
+            let subdirs = std::fs::read_dir(&dir).into_iter().flatten().flatten();
+            let subdirs = subdirs.filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| (e.path(), depth + 1));
+            stack.extend(subdirs);
+        }
+        dirs.push(dir);
     }
     dirs
 }
@@ -112,7 +117,13 @@ fn hangul_fallback(files: &[(String, PathBuf)]) -> (Option<Face>, Option<Face>) 
 /// The regular and bold faces of the font behind the terminal font for Hangul.
 #[cfg(not(windows))]
 fn hangul_fallback(files: &[(String, PathBuf)]) -> (Option<Face>, Option<Face>) {
-    const CANDIDATES: [&str; 3] = ["applesdgothicneo.ttc", "nanumgothiccoding.ttf", "nanumgothic.ttf"];
+    const CANDIDATES: [&str; 5] = [
+        "applesdgothicneo.ttc",
+        "nanumgothiccoding.ttf",
+        "nanumgothic.ttf",
+        "notosanscjk-regular.ttc",
+        "notosanscjkkr-regular.otf",
+    ];
     for name in CANDIDATES {
         let found: Vec<(String, PathBuf)> = files.iter().filter(|(n, _)| n == name).cloned().collect();
         if let Some(family) = families_from(read_files(&found)).into_iter().next() {
@@ -120,6 +131,14 @@ fn hangul_fallback(files: &[(String, PathBuf)]) -> (Option<Face>, Option<Face>) 
         }
     }
     (None, None)
+}
+
+/// The Hangul fallback faces, looked up once per run: finding them reads every font folder
+/// and, outside Windows, parses a whole font collection, and fonts are installed again on
+/// every font or size change.
+fn hangul_faces() -> (Option<Face>, Option<Face>) {
+    static HANGUL: OnceLock<(Option<Face>, Option<Face>)> = OnceLock::new();
+    HANGUL.get_or_init(|| hangul_fallback(&installed_files(&font_dirs()))).clone()
 }
 
 /// Installed font files by lower-case file name, sorted so the first match is predictable.
@@ -371,16 +390,24 @@ fn load(face: &Face) -> std::io::Result<FontData> {
 }
 
 /// Installs `font` (a family name or a font file) as the terminal font. Falls back to the
-/// platform's default font (Consolas, Menlo), and says so, when it cannot be found or loaded.
+/// platform's default font (Consolas, Menlo, DejaVu Sans Mono), or else to egui's built-in
+/// one, and says which when `font` cannot be found or loaded.
 pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
     let mut error = None;
     let fallback = AppSettings::DEFAULT_FONT;
     let choice = find(font).or_else(|| {
-        error = Some(playterm_i18n::tr!(
-            "'{font}' 글꼴을 찾을 수 없어 {fallback} 를 씁니다",
-            "Font '{font}' not found, using {fallback}"
-        ));
-        find(fallback)
+        let found = if font.trim().eq_ignore_ascii_case(fallback) { None } else { find(fallback) };
+        error = Some(match &found {
+            Some(_) => playterm_i18n::tr!(
+                "'{font}' 글꼴을 찾을 수 없어 {fallback} 를 씁니다",
+                "Font '{font}' not found, using {fallback}"
+            ),
+            None => playterm_i18n::tr!(
+                "'{font}' 글꼴을 찾을 수 없어 내장 글꼴을 씁니다",
+                "Font '{font}' not found, using the built-in font"
+            ),
+        });
+        found
     });
 
     let mut defs = FontDefinitions::default();
@@ -415,7 +442,7 @@ pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
         bold.extend(regular.iter().cloned());
     }
     // Hangul and other scripts the terminal font lacks.
-    let (hangul, hangul_bold) = hangul_fallback(&installed_files(&font_dirs()));
+    let (hangul, hangul_bold) = hangul_faces();
     if let Some(f) = hangul
         && add(&mut defs, "hangul", &f)
     {
@@ -496,7 +523,8 @@ mod tests {
     fn finds_macos_fonts() {
         let menlo = find(AppSettings::DEFAULT_FONT).expect("Menlo ships with macOS");
         assert!(menlo.monospace && menlo.bold.is_some());
-        let (hangul, hangul_bold) = hangul_fallback(&installed_files(&font_dirs()));
+        let (hangul, hangul_bold) = hangul_faces();
+        assert_eq!(hangul_faces(), (hangul.clone(), hangul_bold.clone()), "looked up once, same answer");
         let hangul = hangul.expect("Apple SD Gothic Neo ships with macOS");
         let data = map(&hangul.path).unwrap();
         assert!(ttf_parser::Face::parse(&data, hangul.index).unwrap().glyph_index('가').is_some());

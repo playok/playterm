@@ -228,28 +228,43 @@ async fn agents(session: &mut Session, params: &ConnectParams, methods: &mut Met
         }
     }
     #[cfg(unix)]
-    {
-        // An explicitly configured socket, else the agent named by SSH_AUTH_SOCK (the macOS
-        // launchd agent, ssh-agent, 1Password, ...).
-        let socket =
-            params.agent_pipe.clone().or_else(|| std::env::var("SSH_AUTH_SOCK").ok()).filter(|s| !s.is_empty());
-        if let Some(socket) = socket {
-            match AgentClient::connect_uds(&socket).await {
-                Ok(mut agent) => {
-                    if let Some(binding) = session.agent_session_binding() {
-                        let _ = agent.bind_session(binding, false).await;
-                    }
-                    if agent_keys(session, params, agent, methods).await? {
-                        return Ok(true);
-                    }
+    for socket in unix_agent_sockets(params.agent_pipe.as_deref(), std::env::var("SSH_AUTH_SOCK").ok().as_deref()) {
+        if !allows(methods, MethodKind::PublicKey) {
+            break;
+        }
+        match AgentClient::connect_uds(&socket).await {
+            Ok(mut agent) => {
+                if let Some(binding) = session.agent_session_binding() {
+                    let _ = agent.bind_session(binding, false).await;
                 }
-                Err(e) => log::debug!("no SSH agent at {socket}: {e}"),
+                if agent_keys(session, params, agent, methods).await? {
+                    return Ok(true);
+                }
             }
+            Err(e) => log::info!("no SSH agent at {socket}: {e}"),
         }
     }
     #[cfg(not(any(windows, unix)))]
     let _ = (session, params, methods);
     Ok(false)
+}
+
+/// The agent sockets to try on Unix, in order: the one configured for the site, then the one
+/// named by SSH_AUTH_SOCK (the macOS launchd agent, ssh-agent, 1Password, ...). A configured
+/// Windows named pipe (a site made on Windows) is no socket here and is skipped.
+#[cfg(any(unix, test))]
+fn unix_agent_sockets(configured: Option<&str>, env: Option<&str>) -> Vec<String> {
+    let configured = configured.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(pipe) = configured.filter(|s| s.starts_with(r"\\")) {
+        log::info!("agent pipe {pipe} is a Windows named pipe; using SSH_AUTH_SOCK instead");
+    }
+    let mut sockets: Vec<String> = Vec::new();
+    for socket in [configured.filter(|s| !s.starts_with(r"\\")), env.map(str::trim)].into_iter().flatten() {
+        if !socket.is_empty() && !sockets.iter().any(|s| s == socket) {
+            sockets.push(socket.to_owned());
+        }
+    }
+    sockets
 }
 
 async fn agent_keys<S>(
@@ -446,5 +461,16 @@ mod tests {
         assert!(looks_encrypted("PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: aes256-cbc\n", &other));
         assert!(!looks_encrypted("PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n", &other));
         assert!(!looks_encrypted("garbage", &other));
+    }
+
+    #[test]
+    fn unix_agent_sockets_fall_back_to_ssh_auth_sock() {
+        let launchd = "/private/tmp/com.apple.launchd.x/Listeners";
+        assert_eq!(unix_agent_sockets(None, Some(launchd)), [launchd]);
+        assert_eq!(unix_agent_sockets(Some("/run/agent.sock"), Some(launchd)), ["/run/agent.sock", launchd]);
+        // A pipe from a site made on Windows is no socket: only SSH_AUTH_SOCK is tried.
+        assert_eq!(unix_agent_sockets(Some(r"\\.\pipe\openssh-ssh-agent"), Some(launchd)), [launchd]);
+        assert_eq!(unix_agent_sockets(Some(launchd), Some(launchd)), [launchd], "tried once");
+        assert!(unix_agent_sockets(Some(" "), Some("")).is_empty());
     }
 }
