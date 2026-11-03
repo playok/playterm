@@ -344,6 +344,13 @@ impl SettingsDialog {
                 ));
         });
         ui.end_row();
+        ui.label("");
+        ui.checkbox(&mut self.draft.zmodem_ask, t("받을 때마다 저장할 폴더 묻기", "Ask for the folder each time"))
+            .on_hover_text(t(
+                "sz 로 받기가 시작되면 저장할 폴더를 묻습니다 (위의 폴더에서 시작).\n고르는 동안에도 임시 폴더에 받고, 받기와 선택이 모두 끝나면 고른 폴더로 옮깁니다.\n창을 취소하면 받기를 취소하고 받은 파일을 지웁니다.",
+                "When sz starts sending, a window asks where to save (starting at the folder above).\nThe files are received into a temporary folder meanwhile and moved to the chosen one when both are done.\nCancelling the window cancels the download and deletes what was received.",
+            ));
+        ui.end_row();
     }
 
     fn update_row(&mut self, ui: &mut egui::Ui) {

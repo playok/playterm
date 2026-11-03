@@ -281,7 +281,10 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
 
 - Running `sz file...` on the server is recognized by the terminal, and the files are received on this PC. Works over SSH, Telnet and serial (the server needs lrzsz).
 - They are saved in **Tools → Settings → ZMODEM downloads** (Windows' Downloads folder by default). A file with the same name is not replaced: the new one is saved as `name (1).ext`.
+- With **Ask for the folder each time** (on by default), a window asks where to save when a download starts (starting at the folder picked last).
+  `sz` gives up after about 20 seconds without an answer, so the files are received into a temporary folder meanwhile and moved to the chosen one when both are done. Cancelling the window cancels the download and deletes what was received.
 - While receiving, the terminal shows the progress of each file, and at the end the files received and where they are. **Ctrl+C** (or Esc, Ctrl+X) cancels.
+  After a cancel, the transfer data the server had already sent is dropped instead of filling the screen; only the shell prompt after it is shown.
 - Every data block is checked (16/32-bit CRC); a damaged part is received again from where it went wrong, and only complete files are kept (a file is written under a temporary name and renamed at the end).
   Cancelling or losing the connection deletes the file being received. File names from the server lose their path and characters Windows does not allow, so nothing is saved outside the folder.
 - ZCOMMAND, a server asking to run a command on this PC, is refused. `rz` on the server (sending from this PC) is not supported yet and is cancelled automatically; use SFTP to send files.
@@ -298,7 +301,7 @@ Choose protocol **RDP** in the Site Manager, type `rdp [user@]host[:port]` at th
 - **Screen size**: by default it fits the tab — when the window, the site list or the SFTP panel changes the tab's size, the remote resolution follows
   (on servers that support the display control channel). A fixed size like 1920×1080 can be chosen too; if it is bigger than the tab it is scaled down, keeping its proportions.
 - **Keyboard**: characters (including Korean IME input) are sent as Unicode, so they arrive as typed whatever the remote keyboard layout; Enter, arrows,
-  F1–F12 and Ctrl/Alt combinations are sent as keys (scan codes). playterm shortcuts (Ctrl+Shift+…, Ctrl+Tab, F11) are not sent to the remote side.
+  F1–F12 and Ctrl/Alt combinations are sent as keys (scan codes). playterm shortcuts (Ctrl+Shift+…, Ctrl+Tab, Alt+←/→, F11) are not sent to the remote side.
 - **Mouse**: movement, left/right/middle buttons, wheel. The remote cursor is drawn on the screen.
 - **Shared clipboard** (site setting, on by default): the Windows clipboard and the remote clipboard are kept in step, so copy and paste work both ways.
 - Text sent from the command input bar or by typing into all tabs reaches RDP tabs too.
@@ -346,7 +349,7 @@ menu bar opens the dialog again; **Skip this version** stops offering that versi
 | File | Contents |
 |---|---|
 | `sessions.toml` | Saved sites and templates (no passwords) |
-| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder, update check / skipped version |
+| `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder and asking for it, update check / skipped version |
 | `vault.toml` | Saved passwords, encrypted with the master password → Argon2id → XChaCha20-Poly1305. Each password is stored with the target it was saved for (protocol, user, host, port), also encrypted: if a site in `sessions.toml` is pointed elsewhere, its password is not sent (changes made in playterm carry it along). Several windows do not delete each other's saved passwords |
 | `known_hosts` | SSH host keys. If a known host's key changes — even to a key of another type — the connection is refused (protection against man-in-the-middle attacks). Key types on record are asked for first |
 | `known_rdp_hosts` | RDP server certificate fingerprints. A changed certificate is refused |
@@ -361,6 +364,7 @@ menu bar opens the dialog again; **Skip this version** stops offering that versi
 | Ctrl+Shift+W / middle click | Close tab |
 | Ctrl+Shift+D | Duplicate tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
+| Alt+→ / Alt+← | Next / previous tab |
 | Ctrl+Shift+B | Show/hide the site list |
 | Ctrl+Shift+F | Find (including scrollback) |
 | Ctrl+Shift+E | SFTP file browser |

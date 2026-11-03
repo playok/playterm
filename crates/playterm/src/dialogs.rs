@@ -296,6 +296,7 @@ fn shortcut_list(keys: &ClipboardKeys) -> Vec<(String, &'static str)> {
         ("Ctrl+Shift+M", t("명령 입력창 (하단) 열기/닫기", "Command input bar on/off")),
         ("Ctrl+Shift+I", t("모든 탭에 동시 입력 (켜기/끄기)", "Type into all tabs (on/off)")),
         ("Ctrl+Tab / Ctrl+Shift+Tab", t("다음 / 이전 탭", "Next / previous tab")),
+        ("Alt+→ / Alt+←", t("다음 / 이전 탭", "Next / previous tab")),
         ("Ctrl+Shift+D", t("탭 복제", "Duplicate tab")),
         ("Ctrl+Shift+W", t("탭 닫기", "Close tab")),
     ]
