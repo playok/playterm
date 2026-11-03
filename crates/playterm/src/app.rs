@@ -1661,7 +1661,21 @@ fn apply_ui(ctx: &egui::Context, settings: &AppSettings) {
         UiTheme::Light => egui::ThemePreference::Light,
         UiTheme::System => egui::ThemePreference::System,
     });
+    ctx.set_visuals_of(egui::Theme::Dark, readable_dark());
     ctx.set_visuals_of(egui::Theme::Light, soft_light());
+}
+
+/// Weak text (hints, placeholders, status details) at the WCAG AA contrast for body text,
+/// 4.5:1: egui makes it from the text color at 60 % alpha, which gives about 2.7:1 on the dark
+/// panels. Still dimmer than normal text (gray 140 on dark), so it reads as secondary.
+const DARK_WEAK_TEXT: u8 = 134;
+const LIGHT_WEAK_TEXT: u8 = 100;
+
+/// egui's dark look with readable weak text.
+fn readable_dark() -> egui::Visuals {
+    let mut v = egui::Visuals::dark();
+    v.weak_text_color = Some(Color32::from_gray(DARK_WEAK_TEXT));
+    v
 }
 
 /// egui's light look with the pure whites toned down to light grays (easier on the eyes,
@@ -1670,6 +1684,7 @@ fn apply_ui(ctx: &egui::Context, settings: &AppSettings) {
 fn soft_light() -> egui::Visuals {
     let gray = Color32::from_gray;
     let mut v = egui::Visuals::light();
+    v.weak_text_color = Some(gray(LIGHT_WEAK_TEXT));
     v.panel_fill = gray(234);
     v.window_fill = gray(240);
     v.extreme_bg_color = gray(246); // text fields
@@ -1911,5 +1926,33 @@ impl eframe::App for PlaytermApp {
 
         crate::toast::show(&ctx);
         self.update_window_title(&ctx);
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    /// WCAG relative luminance of a gray.
+    fn luminance(gray: u8) -> f64 {
+        let c = gray as f64 / 255.0;
+        if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f64 {
+        let (la, lb) = (luminance(a.r()), luminance(b.r()));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    #[test]
+    fn weak_text_is_readable_but_weaker() {
+        for v in [readable_dark(), soft_light()] {
+            let weak = v.weak_text_color();
+            for bg in [v.panel_fill, v.window_fill, v.extreme_bg_color] {
+                assert!(contrast(weak, bg) >= 4.5, "{weak:?} on {bg:?}: {:.2}", contrast(weak, bg));
+            }
+            // Normal text stands out more than weak text.
+            assert!(contrast(v.text_color(), v.panel_fill) > contrast(weak, v.panel_fill));
+        }
     }
 }
