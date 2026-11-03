@@ -47,6 +47,8 @@ const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
     (KeyboardShortcut::new(CTRL_SHIFT, Key::M), Shortcut::ComposeBar),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::Tab), Shortcut::PrevTab),
     (KeyboardShortcut::new(Modifiers::CTRL, Key::Tab), Shortcut::NextTab),
+    (KeyboardShortcut::new(Modifiers::ALT, Key::ArrowLeft), Shortcut::PrevTab),
+    (KeyboardShortcut::new(Modifiers::ALT, Key::ArrowRight), Shortcut::NextTab),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::W), Shortcut::CloseTab),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::D), Shortcut::DuplicateTab),
     (KeyboardShortcut::new(CTRL_SHIFT, Key::C), Shortcut::Copy),

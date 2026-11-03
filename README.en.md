@@ -295,7 +295,7 @@ Choose protocol **RDP** in the Site Manager, type `rdp [user@]host[:port]` at th
 - **Screen size**: by default it fits the tab — when the window, the site list or the SFTP panel changes the tab's size, the remote resolution follows
   (on servers that support the display control channel). A fixed size like 1920×1080 can be chosen too; if it is bigger than the tab it is scaled down, keeping its proportions.
 - **Keyboard**: characters (including Korean IME input) are sent as Unicode, so they arrive as typed whatever the remote keyboard layout; Enter, arrows,
-  F1–F12 and Ctrl/Alt combinations are sent as keys (scan codes). playterm shortcuts (Ctrl+Shift+…, Ctrl+Tab, F11) are not sent to the remote side.
+  F1–F12 and Ctrl/Alt combinations are sent as keys (scan codes). playterm shortcuts (Ctrl+Shift+…, Ctrl+Tab, Alt+←/→, F11) are not sent to the remote side.
 - **Mouse**: movement, left/right/middle buttons, wheel. The remote cursor is drawn on the screen.
 - **Shared clipboard** (site setting, on by default): the Windows clipboard and the remote clipboard are kept in step, so copy and paste work both ways.
 - Text sent from the command input bar or by typing into all tabs reaches RDP tabs too.
@@ -348,6 +348,7 @@ with 'Forgot the master password?' keeps the old file as `vault.toml.bak`.
 | Ctrl+Shift+W / middle click | Close tab |
 | Ctrl+Shift+D | Duplicate tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
+| Alt+→ / Alt+← | Next / previous tab |
 | Ctrl+Shift+B | Show/hide the site list |
 | Ctrl+Shift+F | Find (including scrollback) |
 | Ctrl+Shift+E | SFTP file browser |
