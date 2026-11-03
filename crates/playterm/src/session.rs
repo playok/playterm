@@ -66,6 +66,19 @@ impl PendingAuth {
 
 /// `text` with control characters (escape sequences, carriage returns, ...) made harmless for
 /// the terminal: line breaks and tabs stay, anything else becomes `?`.
+/// How long a connection has been up: "just now", "12 min", "2 h 5 min".
+pub fn elapsed(d: Duration) -> String {
+    let minutes = d.as_secs() / 60;
+    match minutes {
+        0 => t("방금", "just now").into(),
+        1..=59 => tr!("{minutes}분", "{minutes} min"),
+        _ => {
+            let (h, m) = (minutes / 60, minutes % 60);
+            if m == 0 { tr!("{h}시간", "{h} h") } else { tr!("{h}시간 {m}분", "{h} h {m} min") }
+        }
+    }
+}
+
 pub fn printable(text: &str) -> String {
     text.replace("\r\n", "\n")
         .chars()
@@ -213,6 +226,8 @@ pub struct Session {
     login_script: Option<LoginScript>,
     /// Saved site the connection was opened from.
     site: Option<String>,
+    /// When the current connection came up.
+    connected_since: Option<Instant>,
     /// Profile the connection was opened from.
     profile: Option<Box<SessionProfile>>,
     /// Password typed in the login dialog with "save password" on; stored in the vault for the
@@ -296,6 +311,7 @@ impl Session {
             log_plan: None,
             login_script: None,
             site: None,
+            connected_since: None,
             profile: None,
             save_on_login: None,
             login: None,
@@ -363,6 +379,39 @@ impl Session {
             let path = logging::new_log_path(&plan.dir, &self.tab_title());
             self.start_log(&path, plan.mode);
         }
+    }
+
+    /// Where input goes, to copy: `user@host:22`, `COM3`. `None` for a local tab.
+    pub fn address(&self) -> Option<String> {
+        let Remote { params: p, .. } = self.remote.as_ref()?;
+        Some(match p.protocol {
+            Protocol::Serial => p.serial.port.clone(),
+            _ if p.username.is_empty() => format!("{}:{}", printable(&p.host), p.port),
+            _ => format!("{}@{}:{}", printable(&p.username), printable(&p.host), p.port),
+        })
+    }
+
+    /// The line above the terminal: `SSH · user@host:22 · Connected 12 min · UTF-8`.
+    pub fn connection_line(&self) -> Option<String> {
+        let Remote { params: p, .. } = self.remote.as_ref()?;
+        let state = match self.state {
+            SessionState::Connected => match self.connected_since {
+                Some(since) => format!("{} {}", t("연결됨", "Connected"), elapsed(since.elapsed())),
+                None => t("연결됨", "Connected").into(),
+            },
+            SessionState::Connecting => t("연결 중…", "Connecting…").into(),
+            SessionState::Closed => t("연결 끊김", "Disconnected").into(),
+            SessionState::Local => return None,
+        };
+        let mut parts = vec![p.protocol.to_string(), self.address()?];
+        if p.protocol == Protocol::Serial {
+            parts.push(p.serial.line_summary());
+        }
+        parts.push(state);
+        if p.protocol != Protocol::Rdp {
+            parts.push(self.charset_label());
+        }
+        Some(parts.join(" · "))
     }
 
     /// `SSH host:22`, `Serial COM3 (9600 8N1)`.
@@ -604,7 +653,10 @@ impl Session {
         while let Some(event) = self.remote.as_ref().and_then(|r| r.handle.try_recv()) {
             changed = true;
             match event {
-                SessionEvent::Connected => self.state = SessionState::Connected,
+                SessionEvent::Connected => {
+                    self.state = SessionState::Connected;
+                    self.connected_since = Some(Instant::now());
+                }
                 SessionEvent::Data(bytes) => {
                     self.rx_bytes += bytes.len() as u64;
                     self.output(&bytes);
@@ -653,6 +705,7 @@ impl Session {
                         self.notice(t("연결이 끊겨 ZMODEM 받기를 중단했습니다", "The connection closed; the ZMODEM download stopped"), "31");
                     }
                     self.state = SessionState::Closed;
+                    self.connected_since = None;
                     self.rdp.reset();
                     self.save_on_login = None;
                     self.host_key = None;
@@ -1310,6 +1363,15 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn elapsed_reads_naturally() {
+        playterm_i18n::set_english(false);
+        assert_eq!(elapsed(Duration::from_secs(20)), "방금");
+        assert_eq!(elapsed(Duration::from_secs(12 * 60 + 5)), "12분");
+        assert_eq!(elapsed(Duration::from_secs(2 * 3600)), "2시간");
+        assert_eq!(elapsed(Duration::from_secs(2 * 3600 + 5 * 60)), "2시간 5분");
+    }
     use super::*;
 
     #[test]

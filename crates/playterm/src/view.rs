@@ -5,7 +5,7 @@ use eframe::egui::{
     Shape, Stroke, Vec2,
 };
 use playterm_config::ClipboardKeys;
-use playterm_i18n::t;
+use playterm_i18n::{t, tr};
 use playterm_term::{Cell, CursorShape, Flags, Point, Rgb, SearchMatch, SelectionType, Side, TermMode};
 
 use crate::clip_keys::{self, ClipAction};
@@ -32,6 +32,8 @@ pub struct ViewOutput {
     pub inputs: Vec<UserInput>,
     /// The view has the keyboard focus.
     pub focused: bool,
+    /// Something clicked in the view asks the app for this (the connection line).
+    pub command: Option<crate::menu::Command>,
 }
 
 /// Keyboard input as typed (before encoding), so it can be repeated in another tab with that
@@ -98,7 +100,17 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     let cell = cell_size(ui.ctx(), style.font_size);
     // The whole area takes clicks and is painted in the terminal background; the text grid
     // sits inside it with a margin, so the first column does not touch the border.
-    let area = ui.available_rect_before_wrap();
+    let full = ui.available_rect_before_wrap();
+    // Where input goes, on a line of its own above the terminal (remote tabs).
+    let line = session.connection_line();
+    let area = match &line {
+        Some(text) => {
+            let (strip, rest) = full.split_top_bottom_at_y(full.top() + LINE_HEIGHT);
+            output.command = connection_line(ui, session, strip, text);
+            rest
+        }
+        None => full,
+    };
     let response = ui.allocate_rect(area, Sense::click_and_drag());
     // The find bar takes a strip of its own at the top: it never covers output.
     let (bar_strip, grid_area) = match session.search {
@@ -675,6 +687,46 @@ fn cell_text(cell: &Cell) -> String {
         s.extend(zw);
     }
     s
+}
+
+/// Height of the connection line above a remote terminal.
+const LINE_HEIGHT: f32 = 22.0;
+
+/// The connection line: protocol, address, state and encoding, in the site's color. A click
+/// opens the site's settings; the context menu copies the address.
+fn connection_line(ui: &mut egui::Ui, session: &Session, strip: Rect, text: &str) -> Option<crate::menu::Command> {
+    let visuals = ui.visuals();
+    let color = session.tab_color.map(crate::menu::color32);
+    let fill = color.map_or(visuals.panel_fill, |c| c.gamma_multiply(0.35));
+    let painter = ui.painter_at(strip);
+    painter.rect_filled(strip, 0.0, fill);
+    if let Some(c) = color {
+        painter.rect_filled(Rect::from_min_size(strip.min, Vec2::new(3.0, strip.height())), 0.0, c);
+    }
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), egui::TextStyle::Small.resolve(ui.style()), visuals.text_color());
+    painter.galley(egui::pos2(strip.left() + 10.0, strip.center().y - galley.size().y / 2.0), galley, visuals.text_color());
+    painter.hline(strip.x_range(), strip.bottom() - 0.5, egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color));
+
+    let id = egui::Id::unique(("connection-line", session.id));
+    let response = ui.interact(strip, id, Sense::click());
+    let site = session.site().map(str::to_owned);
+    let hint = match &site {
+        Some(_) => t("클릭: 사이트 설정 · 우클릭: 주소 복사", "Click: site settings · Right-click: copy the address"),
+        None => t("우클릭: 주소 복사", "Right-click: copy the address"),
+    };
+    let response = response.on_hover_text(hint);
+    if site.is_some() {
+        response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    response.context_menu(|ui| {
+        if let Some(address) = session.address()
+            && ui.button(tr!("주소 복사: {}", "Copy the address: {}", address)).clicked()
+        {
+            ui.ctx().copy_text(address);
+            ui.close();
+        }
+    });
+    site.filter(|_| response.clicked()).map(crate::menu::Command::EditSite)
 }
 
 /// Space between the edge of the terminal area and its text.
