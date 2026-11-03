@@ -381,6 +381,11 @@ impl Session {
         }
     }
 
+    /// The site's label ("운영"), if it has one.
+    pub fn site_label(&self) -> Option<&str> {
+        self.profile.as_ref().map(|p| p.tab_label.trim()).filter(|l| !l.is_empty())
+    }
+
     /// Where input goes, to copy: `user@host:22`, `COM3`. `None` for a local tab.
     pub fn address(&self) -> Option<String> {
         let Remote { params: p, .. } = self.remote.as_ref()?;
@@ -403,7 +408,12 @@ impl Session {
             SessionState::Closed => t("연결 끊김", "Disconnected").into(),
             SessionState::Local => return None,
         };
-        let mut parts = vec![p.protocol.to_string(), self.address()?];
+        let mut parts = Vec::new();
+        if let Some(label) = self.site_label() {
+            parts.push(format!("[{label}]"));
+        }
+        parts.push(p.protocol.to_string());
+        parts.push(self.address()?);
         if p.protocol == Protocol::Serial {
             parts.push(p.serial.line_summary());
         }

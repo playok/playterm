@@ -52,7 +52,16 @@ pub struct Awake {
 
 pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
     let locks = lit_locks(lock_keys());
+    // The site's color at the left edge, as on its tab and connection line.
+    let site_color = session.and_then(|s| s.tab_color).map(crate::menu::color32);
+    if let Some(color) = site_color {
+        let bar = ui.max_rect();
+        ui.painter().rect_filled(egui::Rect::from_min_size(bar.min, egui::vec2(4.0, bar.height())), 0.0, color);
+    }
     ui.horizontal(|ui| {
+        if site_color.is_some() {
+            ui.add_space(4.0);
+        }
         if let Some(s) = session {
             let (text, color) = state_text(&s.state);
             ui.label(RichText::new("●").color(color));

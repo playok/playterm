@@ -144,6 +144,9 @@ pub struct SessionProfile {
     pub keepalive: KeepAlive,
     /// Color of the site's tabs; `None` for the usual look.
     pub tab_color: Option<TabColor>,
+    /// A short word shown with the site's tabs, its connection line and the window title
+    /// ("운영", "PROD"); empty for none.
+    pub tab_label: String,
     /// Options for RDP sites.
     pub rdp: RdpSettings,
 }
@@ -169,6 +172,7 @@ impl Default for SessionProfile {
             auto_login: AutoLogin::default(),
             keepalive: KeepAlive::default(),
             tab_color: None,
+            tab_label: String::new(),
             rdp: RdpSettings::default(),
         }
     }
@@ -476,6 +480,19 @@ impl ProfileStore {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn tab_label_is_saved_and_optional() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        std::fs::write(&path, "[[session]]\nid = \"a\"\nname = \"old\"\nhost = \"h\"\n").unwrap();
+        let mut store = ProfileStore::load(&path).unwrap();
+        assert_eq!(store.get("a").unwrap().tab_label, "", "older files have no label");
+        let mut p = store.get("a").unwrap().clone();
+        p.tab_label = "운영".into();
+        store.upsert(p).unwrap();
+        assert_eq!(ProfileStore::load(&path).unwrap().get("a").unwrap().tab_label, "운영");
+    }
     use super::*;
 
     #[test]

@@ -553,7 +553,19 @@ impl ProfileForm {
                 ui.end_row();
 
                 ui.label(t("탭 색상", "Tab color"));
-                tab_color_row(ui, &mut p.tab_color);
+                ui.horizontal(|ui| {
+                    tab_color_row(ui, &mut p.tab_color);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut p.tab_label)
+                            .hint_text(t("라벨 (예: 운영)", "Label (e.g. PROD)"))
+                            .char_limit(12)
+                            .desired_width(110.0),
+                    )
+                    .on_hover_text(t(
+                        "탭, 터미널 위 연결 줄, 창 제목에 함께 보입니다",
+                        "Shown with the tab, the connection line and the window title",
+                    ));
+                });
                 ui.end_row();
             }
 
