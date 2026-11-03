@@ -7,18 +7,19 @@ use playterm_i18n::t;
 use crate::session::{Session, SessionState};
 use crate::sftp_view::human_size;
 
-/// Caps Lock and Num Lock as the keyboard has them now.
+/// Caps Lock and Num Lock as the keyboard has them now; `None` where they cannot be read
+/// (outside Windows), so nothing claims they are off.
 #[cfg(windows)]
-pub fn lock_keys() -> (bool, bool) {
+pub fn lock_keys() -> Option<(bool, bool)> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CAPITAL, VK_NUMLOCK};
     // SAFETY: plain query; the low bit is the toggle state.
     let on = |vk: u16| unsafe { GetKeyState(i32::from(vk)) } & 1 != 0;
-    (on(VK_CAPITAL), on(VK_NUMLOCK))
+    Some((on(VK_CAPITAL), on(VK_NUMLOCK)))
 }
 
 #[cfg(not(windows))]
-pub fn lock_keys() -> (bool, bool) {
-    (false, false)
+pub fn lock_keys() -> Option<(bool, bool)> {
+    None
 }
 
 fn state_text(state: &SessionState) -> (&'static str, Color32) {
@@ -30,11 +31,16 @@ fn state_text(state: &SessionState) -> (&'static str, Color32) {
     }
 }
 
-/// A lock key indicator: lit when on, dim when off.
-fn lock(ui: &mut egui::Ui, label: &str, on: bool) {
-    let text = RichText::new(label).small().monospace();
-    let text = if on { text.strong().color(ui.visuals().strong_text_color()) } else { text.weak() };
-    ui.label(text).on_hover_text(format!("{label} {}", if on { t("켜짐", "on") } else { t("꺼짐", "off") }));
+/// The lock keys to show: only those that are on (a dim "CAPS" looked the same on and off).
+fn lit_locks(keys: Option<(bool, bool)>) -> Vec<&'static str> {
+    let Some((caps, num)) = keys else { return Vec::new() };
+    [(num, "NUM"), (caps, "CAPS")].into_iter().filter(|(on, _)| *on).map(|(_, label)| label).collect()
+}
+
+/// A lock key that is on.
+fn lock(ui: &mut egui::Ui, label: &str) {
+    let text = RichText::new(label).small().monospace().strong().color(ui.visuals().warn_fg_color);
+    ui.label(text).on_hover_text(format!("{label} {}", t("켜짐", "on")));
 }
 
 /// What playterm is keeping Windows from doing.
@@ -45,7 +51,7 @@ pub struct Awake {
 }
 
 pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
-    let (caps, num) = lock_keys();
+    let locks = lit_locks(lock_keys());
     ui.horizontal(|ui| {
         if let Some(s) = session {
             let (text, color) = state_text(&s.state);
@@ -66,8 +72,9 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            lock(ui, "NUM", num);
-            lock(ui, "CAPS", caps);
+            for label in &locks {
+                lock(ui, label);
+            }
             if awake.screensaver {
                 ui.separator();
                 ui.label(RichText::new(t("화면보호기 방지", "No screen saver")).small()).on_hover_text(t(
@@ -102,4 +109,17 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_lit_lock_keys_show() {
+        assert!(lit_locks(None).is_empty(), "unknown: nothing shown");
+        assert!(lit_locks(Some((false, false))).is_empty());
+        assert_eq!(lit_locks(Some((true, false))), ["CAPS"]);
+        assert_eq!(lit_locks(Some((true, true))), ["NUM", "CAPS"], "right to left: CAPS ends up first");
+    }
 }
