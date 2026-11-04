@@ -33,15 +33,16 @@ impl Language {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UiTheme {
-    #[default]
     Dark,
     Light,
-    /// Follow the Windows light/dark app mode.
+    /// Follow the light/dark mode of the system (Windows app mode, macOS appearance), also
+    /// when it changes while playterm runs. The default.
+    #[default]
     System,
 }
 
 impl UiTheme {
-    pub const ALL: [UiTheme; 3] = [UiTheme::Dark, UiTheme::Light, UiTheme::System];
+    pub const ALL: [UiTheme; 3] = [UiTheme::System, UiTheme::Dark, UiTheme::Light];
 }
 
 /// How the site manager lists the sites.
@@ -237,7 +238,7 @@ impl Default for AppSettings {
             status_bar: true,
             compose_bar: false,
             language: Language::Korean,
-            ui_theme: UiTheme::Dark,
+            ui_theme: UiTheme::System,
             prevent_sleep: PreventSleep::System,
             prevent_screensaver: false,
             connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
@@ -285,7 +286,7 @@ mod tests {
             status_bar: false,
             compose_bar: true,
             language: Language::English,
-            ui_theme: UiTheme::System,
+            ui_theme: UiTheme::Light,
             prevent_sleep: PreventSleep::Display,
             prevent_screensaver: true,
             connect_timeout: 60,
@@ -310,6 +311,9 @@ mod tests {
         std::fs::write(&path, "theme = \"Dracula\"\n").unwrap();
         assert_eq!(AppSettings::load(&path).unwrap().connect_timeout, 15, "older files get the default");
         assert_eq!(AppSettings::load(&path).unwrap().clipboard, ClipboardKeys::default());
+        assert_eq!(AppSettings::load(&path).unwrap().ui_theme, UiTheme::System, "the system's light or dark by default");
+        std::fs::write(&path, "ui_theme = \"dark\"\n").unwrap();
+        assert_eq!(AppSettings::load(&path).unwrap().ui_theme, UiTheme::Dark, "a choice made is kept");
         std::fs::write(&path, "[clipboard]\ncopy_on_select = true\n").unwrap();
         let keys = AppSettings::load(&path).unwrap().clipboard;
         assert!(keys.copy_on_select && keys.ctrl_shift_c, "keys left out keep their defaults");

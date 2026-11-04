@@ -190,7 +190,7 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 
 ## Display and search
 
-- **Tools → Settings**: language (한국어 / English), UI theme (dark / light / follow Windows), font, size, color theme, scrollback lines. Changes preview
+- **Tools → Settings**: language (한국어 / English), UI theme (follow the system (default) / dark / light), font, size, color theme, scrollback lines. Changes preview
   in the open tabs right away, and [Cancel] puts them back.
   - Font: any font installed on this PC (system and per-user, monospaced fonts first, searchable) or a TTF/OTF/TTC file via [From file…].
     Hangul missing from the font is drawn with Malgun Gothic.
