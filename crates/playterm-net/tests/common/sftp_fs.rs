@@ -62,7 +62,11 @@ pub fn normalize(path: &str) -> String {
 }
 
 fn attrs(meta: &fs::Metadata) -> FileAttributes {
-    let kind = if meta.is_dir() { 0o040000 | 0o755 } else { 0o100000 | 0o644 };
+    #[cfg(unix)]
+    let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o7777;
+    #[cfg(not(unix))]
+    let mode = if meta.is_dir() { 0o755 } else { 0o644 };
+    let kind = if meta.is_dir() { 0o040000 | mode } else { 0o100000 | mode };
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs() as u32);
     FileAttributes { size: Some(meta.len()), permissions: Some(kind), mtime, ..FileAttributes::empty() }
 }
@@ -185,7 +189,22 @@ impl russh_sftp::server::Handler for FsHandler {
     }
 
     async fn rename(&mut self, id: u32, from: String, to: String) -> Result<Status, Self::Error> {
+        // Like OpenSSH's sftp-server (SFTP v3): an existing target is not replaced.
+        if fs::symlink_metadata(self.real(&to)).is_ok() {
+            return Err(StatusCode::Failure);
+        }
         fs::rename(self.real(&from), self.real(&to)).map_err(io_code)?;
+        Ok(ok(id))
+    }
+
+    async fn setstat(&mut self, id: u32, path: String, attrs: FileAttributes) -> Result<Status, Self::Error> {
+        #[cfg(unix)]
+        if let Some(mode) = attrs.permissions {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(self.real(&path), fs::Permissions::from_mode(mode & 0o7777)).map_err(io_code)?;
+        }
+        #[cfg(not(unix))]
+        let _ = (&path, attrs);
         Ok(ok(id))
     }
 }
