@@ -1,4 +1,4 @@
-# Checks every pull request and every push to master: clippy and the workspace tests on the
+# Checks every pull request and every push to master: formatting (rustfmt), clippy and the workspace tests on the
 # platforms the releases are built for (Windows, macOS), and the ZMODEM tests against lrzsz.
 #
 # The lrzsz interop tests skip when rz/sz are missing; here PLAYTERM_REQUIRE_LRZSZ makes a
@@ -39,7 +39,7 @@ jobs:
         run: |
           rustup update stable --no-self-update
           rustup default stable
-          rustup component add clippy
+          rustup component add clippy rustfmt
           rustc --version
 
       - uses: Swatinem/rust-cache@v2
@@ -47,6 +47,9 @@ jobs:
       - name: lrzsz
         if: runner.os == 'macOS'
         run: brew install lrzsz
+
+      - name: Format
+        run: cargo fmt --all -- --check
 
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings

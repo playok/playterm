@@ -452,7 +452,9 @@ cargo run -p playterm-net --example dev_sshd -- --authorized-keys key.pub --sftp
 cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 ```
 
-- PR 과 `master` push 마다 GitHub Actions(`.github/workflows/ci.yml`)가 Windows·macOS 에서 clippy(`-D warnings`)와 전체 테스트를, Linux 에서 `playterm-net` 테스트를 실행합니다.
+- 코드는 `cargo fmt --all` 로 정리합니다(설정: `rustfmt.toml`). 포맷만 바꾼 커밋은 `.git-blame-ignore-revs` 에 넣어 두며, 로컬 `git blame` 에서 건너뛰려면
+  `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
+- PR 과 `master` push 마다 GitHub Actions(`.github/workflows/ci.yml`)가 Windows·macOS 에서 포맷 검사(`cargo fmt --check`), clippy(`-D warnings`)와 전체 테스트를, Linux 에서 `playterm-net` 테스트를 실행합니다.
 - ZMODEM 연동 테스트는 lrzsz(`rz`/`sz`)가 없으면 건너뛰지만, `PLAYTERM_REQUIRE_LRZSZ=1` 이면 실패로 처리합니다(CI 의 macOS·Linux 는 lrzsz 를 설치하고 이 값을 켭니다).
 
 ## 로드맵
