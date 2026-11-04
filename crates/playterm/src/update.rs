@@ -437,7 +437,7 @@ impl Updater {
         let mut keep = true;
         let mut action = None;
         let mut install = None;
-        let close = egui::Modal::new(egui::Id::unique("update")).show(ctx, |ui| {
+        let close = egui::Modal::new(egui::Id::unique("update")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
             ui.set_width(420.0);
             ui.heading(t("업데이트", "Update"));
             ui.add_space(6.0);

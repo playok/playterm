@@ -125,17 +125,29 @@ pub(crate) fn keys(other: &'static str, mac: &'static str) -> &'static str {
 }
 
 fn item(ui: &mut egui::Ui, out: &mut Option<Command>, label: &str, shortcut: &str, enabled: bool, command: Command) {
-    let button = Button::new(label).shortcut_text(shortcut);
+    let button = Button::new((lead(ui, false), label)).shortcut_text(shortcut);
     if ui.add_enabled(enabled, button).clicked() {
         *out = Some(command);
         ui.close();
     }
 }
 
+/// The slot in front of a menu item's text: a check mark, or the same space left blank, so
+/// every item's text starts at the same place (#135).
+pub(crate) fn lead(ui: &egui::Ui, checked: bool) -> egui::RichText {
+    let color = if checked { ui.visuals().strong_text_color() } else { egui::Color32::TRANSPARENT };
+    crate::icon::OK.rich_text().color(color)
+}
+
+/// A submenu inside a menu, its title lined up with the items around it.
+pub(crate) fn submenu<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) {
+    let lead = lead(ui, false);
+    ui.menu_button((lead, title), add);
+}
+
 /// A menu item with a check mark.
 fn check(ui: &mut egui::Ui, out: &mut Option<Command>, label: &str, shortcut: &str, checked: bool, command: Command) {
-    let mark = if checked { "✔" } else { "  " };
-    if ui.add(Button::new(format!("{mark} {label}")).shortcut_text(shortcut)).clicked() {
+    if ui.add(Button::new((lead(ui, checked), label)).shortcut_text(shortcut)).clicked() {
         *out = Some(command);
         ui.close();
     }
@@ -148,7 +160,7 @@ pub fn color32(c: TabColor) -> egui::Color32 {
 
 /// "Tab color" submenu for tab `i`, whose color is `current`.
 pub fn tab_color_menu(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, current: Option<TabColor>) {
-    ui.menu_button(t("탭 색상", "Tab color"), |ui| {
+    submenu(ui, t("탭 색상", "Tab color"), |ui| {
         if ui.add(Button::selectable(current.is_none(), t("없음", "None"))).clicked() {
             *out = Some(Command::SetTabColor(i, None));
             ui.close();
@@ -171,7 +183,7 @@ pub fn tab_color_menu(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, cu
 /// BREAK and logging for tab `i`. Used by the tools menu and the tab context menu.
 pub fn session_items(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, s: &Session) {
     item(ui, out, t("BREAK 신호 보내기", "Send BREAK"), "", s.can_break(), Command::Break(i));
-    ui.menu_button(t("로그", "Log"), |ui| {
+    submenu(ui, t("로그", "Log"), |ui| {
         if s.terminal.log().is_some() {
             item(ui, out, t("로그 기록 중지", "Stop logging"), "", true, Command::StopLog(i));
             item(ui, out, t("로그 파일 위치 열기", "Show log file"), "", true, Command::RevealLog(i));
@@ -199,7 +211,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("빠른 연결…", "Quick Connect…"), "Ctrl+Shift+T", true, Command::QuickConnect);
             item(ui, out, t("사이트 관리…", "Site Manager…"), "Ctrl+Shift+S", true, Command::SiteManager);
             item(ui, out, t("새 사이트…", "New site…"), "", true, Command::NewSite);
-            ui.menu_button(t("가져오기", "Import"), |ui| {
+            submenu(ui, t("가져오기", "Import"), |ui| {
                 item(ui, out, t("PuTTY 세션…", "PuTTY sessions…"), "", true, Command::ImportPutty);
                 item(ui, out, t("Xshell 세션…", "Xshell sessions…"), "", true, Command::ImportXshell);
             });
@@ -245,7 +257,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 st.sftp_panel,
                 Command::ToggleSftpPanel,
             );
-            ui.menu_button(t("매크로", "Macros"), |ui| {
+            submenu(ui, t("매크로", "Macros"), |ui| {
                 let connected = active.is_some_and(|s| s.state == crate::session::SessionState::Connected);
                 for (k, m) in st.macros.iter().enumerate() {
                     item(ui, out, &m.name, "", connected, Command::RunMacro(k));
@@ -305,8 +317,8 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             check(ui, out, t("모든 탭에 동시 입력", "Type into all tabs"), "Ctrl+Shift+I", st.broadcast, Command::ToggleBroadcast);
             if n > 0 {
                 ui.separator();
-                for (k, s) in st.sessions.iter().enumerate() {
-                    if ui.add(Button::selectable(k == i, s.tab_title())).clicked() {
+                for (k, title) in Session::numbered_titles(st.sessions).into_iter().enumerate() {
+                    if ui.add(Button::new((lead(ui, k == i), title))).clicked() {
                         *out = Some(Command::Activate(k));
                         ui.close();
                     }

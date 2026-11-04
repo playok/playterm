@@ -10,7 +10,7 @@ use crate::profile_form::{FormOptions, ProfileForm};
 use crate::session::Session;
 
 fn modal(id: impl std::hash::Hash + std::fmt::Debug, ctx: &egui::Context, add: impl FnOnce(&mut egui::Ui)) -> bool {
-    egui::Modal::new(egui::Id::unique(id)).show(ctx, add).should_close()
+    egui::Modal::new(egui::Id::unique(id)).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, add).should_close()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -160,7 +160,7 @@ impl VaultDialog {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let label = if self.mode == VaultMode::Unlock { t("잠금 해제", "Unlock") } else { t("만들기", "Create") };
-                let icon = if self.mode == VaultMode::Unlock { icon::UNLOCK } else { icon::ADD };
+                let icon = if self.mode == VaultMode::Unlock { icon::UNLOCK } else { icon::VAULT_SET_UP };
                 if ui.add(icon::primary(ui, icon, label)).clicked() || enter {
                     if self.master.is_empty() {
                         self.error = Some(t("마스터 비밀번호를 입력하세요", "Enter the master password").into());
@@ -190,7 +190,7 @@ impl VaultDialog {
                         ),
                     );
                     ui.horizontal(|ui| {
-                        if ui.add(icon::button(icon::RESET, t("초기화", "Reset"))).clicked() {
+                        if ui.add(icon::danger(ui, icon::RESET, t("초기화", "Reset"))).clicked() {
                             result = VaultResult::Reset;
                         }
                         if ui.add(icon::button(icon::BACK, t("돌아가기", "Back"))).clicked() {
@@ -210,7 +210,8 @@ impl VaultDialog {
 // ---------------------------------------------------------------------------------------------
 // Simple confirmation
 
-/// `Some(true)` = confirmed, `Some(false)` = cancelled, `None` = still open.
+/// Asks before deleting something. `Some(true)` = confirmed, `Some(false)` = cancelled, `None` =
+/// still open.
 pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> Option<bool> {
     let mut answer = None;
     let close = modal(("confirm", title), ctx, |ui| {
@@ -218,7 +219,8 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
         ui.heading(title);
         ui.label(text);
         ui.add_space(8.0);
-        let ok = icon::primary(ui, icon::OK, ok_label);
+        // Its callers delete something: it looks like it (#133).
+        let ok = icon::danger(ui, icon::DELETE, ok_label);
         let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
         if main.clicked() {
             answer = Some(true);
@@ -403,6 +405,14 @@ fn shortcut_list(keys: &ClipboardKeys) -> Vec<(String, &'static str)> {
             ("F11", t("전체 화면", "Full screen")),
             ("Ctrl+= / Ctrl+- / Ctrl+0", t("글꼴 크게 / 작게 / 기본 크기", "Larger / smaller / default font size")),
             (t("Ctrl+휠", "Ctrl+wheel"), t("글꼴 크기", "Font size")),
+            (
+                t("탭 끌기", "Drag a tab"),
+                t(
+                    "다른 탭 옆·위아래에 놓으면 화면 분할, 창 밖에 놓으면 새 창",
+                    "Beside, above or below another tab: split the view; outside the window: a window of its own",
+                ),
+            ),
+            (t("탭 가운데 클릭", "Middle-click a tab"), t("탭 닫기", "Close the tab")),
         ]
         .into_iter()
         .map(|(k, what)| (k.to_owned(), what)),
@@ -466,7 +476,7 @@ pub fn about(ctx: &egui::Context) -> bool {
 
 pub fn host_key(ctx: &egui::Context, session: &mut Session) {
     let mut decision = None;
-    egui::Modal::new(egui::Id::unique(("host-key", session.id))).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique(("host-key", session.id))).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
         let check = session.host_key.as_ref().expect("checked by caller");
         ui.set_width(460.0);
         ui.heading(t("알 수 없는 호스트", "Unknown host"));
@@ -527,7 +537,7 @@ pub struct Relogin {
 /// whose password can be saved ("save password", stored once the login succeeds).
 pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Option<Relogin> {
     let mut submit = None;
-    egui::Modal::new(egui::Id::unique(("auth", session.id))).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique(("auth", session.id))).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
         let pending = session.auth.as_mut().expect("checked by caller");
         ui.set_width(380.0);
         ui.heading(&pending.prompt.title);

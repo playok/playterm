@@ -144,7 +144,7 @@ impl SettingsDialog {
 
     pub fn show(&mut self, ctx: &egui::Context) -> SettingsResult {
         let mut result = None;
-        let modal = egui::Modal::new(egui::Id::unique("settings")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("settings")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
             ui.set_width(SECTION_LIST_WIDTH + SECTION_WIDTH + 16.0);
             ui.heading(t("설정", "Settings"));
             ui.add_space(6.0);
@@ -514,7 +514,17 @@ Help → Check for updates checks at any time.",
     fn theme_row(&mut self, ui: &mut egui::Ui) {
         ui.label(t("색 테마", "Color theme"));
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("theme").width(200.0).selected_text(&self.draft.theme).show_ui(ui, |ui| {
+            let dark = ui.visuals().dark_mode;
+            let auto = t("화면 테마 따라가기", "Follow the UI theme");
+            let shown = if self.draft.theme.eq_ignore_ascii_case(Theme::AUTO) { auto.to_owned() } else { self.draft.theme.clone() };
+            egui::ComboBox::from_id_salt("theme").width(200.0).selected_text(shown).show_ui(ui, |ui| {
+                // First: the scheme that goes with the light or dark look (#162).
+                ui.selectable_value(&mut self.draft.theme, Theme::AUTO.to_owned(), auto).on_hover_text(tr!(
+                    "다크: {} · 라이트: {}",
+                    "Dark: {} · Light: {}",
+                    Theme::AUTO_DARK,
+                    Theme::AUTO_LIGHT
+                ));
                 for theme in THEMES {
                     ui.horizontal(|ui| {
                         swatch(ui, theme);
@@ -522,14 +532,14 @@ Help → Check for updates checks at any time.",
                     });
                 }
             });
-            swatch(ui, Theme::named(&self.draft.theme));
+            swatch(ui, Theme::effective(&self.draft.theme, dark));
         });
         ui.end_row();
     }
 
     /// Sample output in the chosen scheme (the font is already the previewed one).
     fn preview(&self, ui: &mut egui::Ui) {
-        let theme = Theme::named(&self.draft.theme);
+        let theme = Theme::effective(&self.draft.theme, ui.visuals().dark_mode);
         let font = FontId::monospace(self.draft.font_size.min(20.0));
         let c = |i: usize| color(theme.ansi[i]);
         let fg = color(theme.foreground);

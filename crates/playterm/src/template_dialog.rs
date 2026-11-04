@@ -32,6 +32,7 @@ impl TemplateDialog {
     pub fn show(&mut self, ctx: &egui::Context, store: &ProfileStore) -> TemplateResult {
         let mut result = TemplateResult::Open;
         let close = egui::Modal::new(egui::Id::unique("template-dialog"))
+            .backdrop_color(crate::app::theme::MODAL_BACKDROP)
             .show(ctx, |ui| {
                 ui.set_width(420.0);
                 ui.heading(if self.is_new { t("템플릿 만들기", "New template") } else { t("템플릿 편집", "Edit template") });

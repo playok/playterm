@@ -150,7 +150,7 @@ impl ImportDialog {
     pub fn show(&mut self, ctx: &egui::Context, store: &ProfileStore) -> ImportResult {
         let mut result = ImportResult::Open;
         let source = self.source.name();
-        let modal = egui::Modal::new(egui::Id::unique(("session-import", source))).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique(("session-import", source))).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
             ui.set_width(600.0);
             ui.heading(tr!("{source} 세션 가져오기", "Import {source} sessions"));
             ui.add_space(4.0);

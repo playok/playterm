@@ -14,7 +14,7 @@ use crate::autologin::LoginScript;
 use crate::compose_bar::{self, ComposeBar};
 use crate::console::Request;
 use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultMode, VaultResult};
-use crate::dock::{BROADCAST_COLOR, Dock};
+use crate::dock::Dock;
 use crate::icon;
 use crate::import_dialog::{ImportDialog, ImportResult, ImportSource};
 use crate::licenses::LicensesDialog;
@@ -39,7 +39,7 @@ mod frame;
 mod prompt;
 mod sessions;
 mod settings;
-mod theme;
+pub(crate) mod theme;
 mod ui;
 mod vault;
 mod windows;
@@ -280,6 +280,10 @@ pub struct PlaytermApp {
     closed_tabs: Vec<ClosedTab>,
     /// The user agreed to quit with connections up: the next close request goes through.
     quit_confirmed: bool,
+    /// The windows have the dark look (for the "auto" terminal colors).
+    dark: bool,
+    /// The terminal scheme the open tabs were last given.
+    palette_theme: &'static str,
 }
 
 impl PlaytermApp {
@@ -352,6 +356,8 @@ impl PlaytermApp {
             updater: Updater::default(),
             closed_tabs: Vec::new(),
             quit_confirmed: false,
+            dark: true,
+            palette_theme: "",
         };
         // Development builds (cargo run) are not replaced by releases unless asked.
         if app.settings.check_updates && !cfg!(debug_assertions) {

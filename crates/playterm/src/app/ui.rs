@@ -327,9 +327,9 @@ impl PlaytermApp {
                 .pivot(egui::Align2::RIGHT_TOP)
                 .fixed_pos(egui::pos2(right, top))
                 .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.5, BROADCAST_COLOR)).show(ui, |ui| {
+                    egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.5, theme::broadcast_color(ui.visuals()))).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(text).strong().color(BROADCAST_COLOR)).on_hover_text(tip);
+                            ui.label(RichText::new(text).strong().color(theme::broadcast_color(ui.visuals()))).on_hover_text(tip);
                             if ui.add(icon::button(icon::TURN_OFF, t("끄기", "Turn off")).small()).on_hover_text("Ctrl+Shift+I").clicked()
                             {
                                 action = Some(Command::ToggleBroadcast);

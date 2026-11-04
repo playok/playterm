@@ -60,7 +60,7 @@ impl LicensesDialog {
     /// Shows the dialog. Returns `true` once it is closed.
     pub fn show(&mut self, ctx: &egui::Context) -> bool {
         let mut done = false;
-        let close = egui::Modal::new(egui::Id::unique("licenses"))
+        let close = egui::Modal::new(egui::Id::unique("licenses")).backdrop_color(crate::app::theme::MODAL_BACKDROP)
             .show(ctx, |ui| {
                 ui.set_width(WIDTH);
                 ui.heading(t("오픈소스 라이선스", "Open-source licenses"));
