@@ -60,6 +60,10 @@ impl PlaytermApp {
             }
 
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            Command::ToggleToolbar => {
+                self.settings.toolbar = !self.settings.toolbar;
+                self.save_settings();
+            }
             Command::ToggleStatusBar => {
                 self.settings.status_bar = !self.settings.status_bar;
                 self.save_settings();
@@ -153,6 +157,11 @@ impl PlaytermApp {
             Command::Reconnect(i) if i < n => {
                 self.reconnect(i);
                 self.active = i;
+            }
+            Command::Disconnect(i) => {
+                if let Some(s) = self.sessions.get_mut(i) {
+                    s.close();
+                }
             }
             Command::Close(i) if i < n => self.close_session(i),
             Command::Reconnect(_) | Command::Close(_) => {}

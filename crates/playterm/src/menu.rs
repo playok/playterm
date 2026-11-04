@@ -31,6 +31,7 @@ pub enum Command {
     ClearScrollback,
 
     ToggleSidebar,
+    ToggleToolbar,
     ToggleStatusBar,
     ToggleComposeBar,
     ToggleFullscreen,
@@ -61,6 +62,8 @@ pub enum Command {
     /// Another playterm window (a new process) with a local prompt.
     NewWindow,
     Reconnect(usize),
+    /// Ends tab `i`'s connection; the tab stays, to reconnect.
+    Disconnect(usize),
     Close(usize),
     CloseOthers(usize),
     CloseAll,
@@ -95,6 +98,7 @@ pub struct MenuState<'a> {
     pub sessions: &'a [Session],
     pub active: usize,
     pub show_sidebar: bool,
+    pub show_toolbar: bool,
     pub show_status_bar: bool,
     pub show_compose_bar: bool,
     pub vault: VaultState,
@@ -112,7 +116,7 @@ pub struct MenuState<'a> {
 
 /// Adds a menu item; a click records `command` and closes the menu.
 /// The shortcut shown in a menu: the Windows one, or the Mac one on macOS.
-fn keys(other: &'static str, mac: &'static str) -> &'static str {
+pub(crate) fn keys(other: &'static str, mac: &'static str) -> &'static str {
     if cfg!(target_os = "macos") { mac } else { other }
 }
 
@@ -211,6 +215,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
 
         ui.menu_button(t("보기", "View"), |ui| {
             check(ui, out, t("사이트 목록", "Site list"), "Ctrl+Shift+B", st.show_sidebar, Command::ToggleSidebar);
+            check(ui, out, t("도구 모음", "Toolbar"), "", st.show_toolbar, Command::ToggleToolbar);
             check(ui, out, t("상태 표시줄", "Status bar"), "", st.show_status_bar, Command::ToggleStatusBar);
             check(ui, out, t("명령 입력창", "Command input bar"), "Ctrl+Shift+M", st.show_compose_bar, Command::ToggleComposeBar);
             check(ui, out, t("전체 화면", "Full screen"), "F11", fullscreen, Command::ToggleFullscreen);

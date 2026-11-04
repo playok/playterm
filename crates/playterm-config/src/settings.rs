@@ -126,6 +126,8 @@ pub struct AppSettings {
     pub theme: String,
     /// Lines of history kept per tab.
     pub scrollback: usize,
+    /// Show the toolbar under the menu bar.
+    pub toolbar: bool,
     /// Show the status bar under the terminal.
     pub status_bar: bool,
     /// Show the command input bar under the terminal.
@@ -235,6 +237,7 @@ impl Default for AppSettings {
             font_size: Self::DEFAULT_FONT_SIZE,
             theme: "Campbell".into(),
             scrollback: 10_000,
+            toolbar: true,
             status_bar: true,
             compose_bar: false,
             language: Language::Korean,
@@ -283,6 +286,7 @@ mod tests {
             font_size: 18.5,
             theme: "Dracula".into(),
             scrollback: 5000,
+            toolbar: false,
             status_bar: false,
             compose_bar: true,
             language: Language::English,
