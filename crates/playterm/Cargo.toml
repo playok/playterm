@@ -31,6 +31,8 @@ zeroize = "1.9.1"
 zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
+# The SSH test server, for the screen-flow tests.
+playterm-net = { version = "0.4.0", path = "../playterm-net", features = ["testing"] }
 egui_kittest = { version = "0.37.0", features = ["eframe"] }
 tempfile = "3.27.0"
 

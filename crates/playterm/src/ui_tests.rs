@@ -352,3 +352,140 @@ fn dialogs_stay_in_place() {
     click(&mut harness, "새 사이트");
     settles(&mut harness, "Site Manager", |h| h.get_by_role_and_label(Role::Window, "사이트 관리").rect());
 }
+
+#[test]
+fn ssh_login_then_sftp_explorer_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    // The server's SFTP folder is not there yet: the explorer's first listing fails.
+    let root = dir.path().join("remote");
+    let server = playterm_net::testing::SshServer::start(&root);
+    let mut harness = app(dir.path());
+
+    // Quick Connect over SSH.
+    click(&mut harness, "빠른 연결");
+    let dialog = harness.get_by_role(Role::Dialog);
+    let inputs: Vec<Node<'_>> = dialog.query_all_by_role(Role::TextInput).collect();
+    type_into(&harness, &inputs[0], "127.0.0.1");
+    type_into(&harness, &inputs[1], &server.port.to_string());
+    type_into(&harness, &inputs[2], playterm_net::testing::USER);
+    harness.run_steps(2);
+    click(&mut harness, "연결");
+
+    // An unknown host: its key is shown, and trusting it is remembered.
+    run_until(&mut harness, "the host key question", |h| has_label_text(h, "알 수 없는 호스트"));
+    click(&mut harness, "신뢰하고 연결");
+    // The password, asked for in a dialog.
+    run_until(&mut harness, "the password question", |h| h.query_by_role(Role::PasswordInput).is_some());
+    harness.get_by_role(Role::PasswordInput).type_text(playterm_net::testing::PASSWORD);
+    harness.run_steps(2);
+    click(&mut harness, "확인");
+    run_until(&mut harness, "the shell", |h| {
+        let s = &mut h.state_mut().test_sessions()[0];
+        s.state == SessionState::Connected && s.screen_contains("test shell ready")
+    });
+    let known = std::fs::read_to_string(dir.path().join("known_hosts")).unwrap();
+    assert!(known.contains(&format!("[127.0.0.1]:{}", server.port)), "the trusted key is in known_hosts: {known}");
+
+    // The SFTP explorer: the folder cannot be listed, so it says so and offers to try again
+    // (instead of asking again and again).
+    menu(&mut harness, "도구", "SFTP 탐색기");
+    run_until(&mut harness, "the retry button", |h| has_button(h, "다시 시도"));
+    harness.run_steps(30);
+    assert!(has_button(&harness, "다시 시도"), "it waits for the user");
+
+    // The folder is there now: trying again lists it.
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("hello.txt"), "hi").unwrap();
+    click(&mut harness, "다시 시도");
+    run_until(&mut harness, "the listing", |h| {
+        has_label_text(h, "hello.txt") || h.query_all_by_role(Role::Button).any(|n| label(&n) == "hello.txt")
+    });
+    assert!(!has_button(&harness, "다시 시도"));
+}
+
+/// A Telnet device on this PC whose `rz` takes a file over ZMODEM into `dir` (with the
+/// project's own receiver). Returns its port, and a channel that gets the files it saved.
+fn rz_device(dir: std::path::PathBuf) -> (u16, std::sync::mpsc::Receiver<Vec<std::path::PathBuf>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else { return };
+        let _ = stream.write_all(b"device$ ");
+        let mut typed = Vec::new();
+        let mut buf = [0u8; 4096];
+        // Echo until "rz" and Enter (Telnet sends Enter as CR NUL or CR LF).
+        while !typed.windows(3).any(|w| w == b"rz\r") {
+            let Ok(n) = stream.read(&mut buf) else { return };
+            if n == 0 {
+                return;
+            }
+            typed.extend_from_slice(&buf[..n]);
+            let _ = stream.write_all(&buf[..n]);
+        }
+        // rz: the receiver's first header (ZRINIT), then take what the app sends.
+        let now = std::time::Instant::now();
+        let (mut download, reply) = playterm_net::zmodem::Download::begin(dir, b"000000000000\r\n", now);
+        let _ = stream.write_all(&reply);
+        stream.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while download.outcome().is_none() && Instant::now() < deadline {
+            let reply = match stream.read(&mut buf) {
+                Ok(0) => return,
+                Ok(n) => download.feed(&buf[..n], std::time::Instant::now()),
+                Err(_) => download.tick(std::time::Instant::now()),
+            };
+            let _ = stream.write_all(&reply);
+        }
+        let _ = tx.send(download.saved().to_vec());
+        let _ = stream.write_all(b"\r\ndevice$ ");
+        std::thread::sleep(Duration::from_secs(5));
+    });
+    (port, rx)
+}
+
+#[test]
+fn rz_on_the_device_asks_for_files_and_sends_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let device_dir = dir.path().join("device");
+    std::fs::create_dir_all(&device_dir).unwrap();
+    let local = dir.path().join("firmware.bin");
+    let data: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    std::fs::write(&local, &data).unwrap();
+    // The file picker the app opens is answered with that file.
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _picker = {
+        let (asked, local) = (asked.clone(), local.clone());
+        crate::picker::fake::answer_with(move |p| {
+            asked.lock().unwrap().push((p.kind, p.title.clone()));
+            Some(vec![local.clone()])
+        })
+    };
+    let (port, saved) = rz_device(device_dir.clone());
+    let mut harness = app(dir.path());
+
+    click(&mut harness, "빠른 연결");
+    harness.get_by_role(Role::Dialog).get_by_role_and_label(Role::RadioButton, "Telnet").click();
+    harness.run_steps(2);
+    let dialog = harness.get_by_role(Role::Dialog);
+    let inputs: Vec<Node<'_>> = dialog.query_all_by_role(Role::TextInput).collect();
+    type_into(&harness, &inputs[0], "127.0.0.1");
+    type_into(&harness, &inputs[1], &port.to_string());
+    harness.run_steps(2);
+    click(&mut harness, "연결");
+    run_until(&mut harness, "the device's prompt", |h| h.state_mut().test_sessions()[0].screen_contains("device$"));
+
+    // Typed into the terminal, as the user would.
+    harness.event(egui::Event::Text("rz".into()));
+    harness.key_press(egui::Key::Enter);
+    run_until(&mut harness, "the upload to finish", |h| h.state_mut().test_sessions()[0].screen_contains("ZMODEM 보내기 완료"));
+
+    let files = saved.recv_timeout(Duration::from_secs(5)).expect("the device received");
+    assert_eq!(files.len(), 1);
+    assert_eq!(std::fs::read(&files[0]).unwrap(), data, "the file arrived whole");
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.len(), 1, "asked once");
+    assert_eq!(asked[0].0, crate::picker::Kind::Files);
+    assert!(asked[0].1.contains("ZMODEM"), "{:?}", asked[0].1);
+}
