@@ -22,6 +22,11 @@ use crate::rdp_view::RdpScreen;
 use crate::search_bar::SearchBar;
 use crate::sftp_view::{SftpBrowser, human_size};
 
+/// Output one frame takes from the connection at most (bytes, and time spent on it), so a
+/// flood does not freeze the window; the rest waits for the next frame.
+const POLL_OUTPUT_BUDGET: usize = 1024 * 1024;
+const POLL_TIME_BUDGET: Duration = Duration::from_millis(12);
+
 /// How often the progress line of a ZMODEM download is redrawn.
 const ZMODEM_REDRAW: Duration = Duration::from_millis(200);
 
@@ -707,8 +712,22 @@ impl Session {
             self.rdp.pending = Some(frame);
             changed = true;
         }
-        while let Some(event) = self.remote.as_ref().and_then(|r| r.handle.try_recv()) {
+        // A flood of output is drawn over several frames, so the window keeps answering: each
+        // frame takes events for a while, then asks for the next frame to go on.
+        let started = Instant::now();
+        let mut taken = 0usize;
+        loop {
+            if taken >= POLL_OUTPUT_BUDGET || started.elapsed() >= POLL_TIME_BUDGET {
+                if let Some(remote) = &self.remote {
+                    remote.handle.wake();
+                }
+                break;
+            }
+            let Some(event) = self.remote.as_ref().and_then(|r| r.handle.try_recv()) else { break };
             changed = true;
+            if let SessionEvent::Data(bytes) = &event {
+                taken += bytes.len();
+            }
             match event {
                 SessionEvent::Connected => {
                     self.state = SessionState::Connected;
@@ -1783,6 +1802,89 @@ mod tests {
         assert!(shows(&mut session, "'site'"));
         // Its spec carries the macro, so a reconnect runs it again.
         assert!(session.spec().unwrap().after_connect.is_some());
+    }
+
+    /// A tab connected over Telnet to a server that sends `total` bytes of text at once.
+    fn flood_tab(total: usize) -> (Session, NetRuntime) {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let line = b"0123456789 abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 ......\r\n";
+            let block: Vec<u8> = line.iter().copied().cycle().take(64 * 1024).collect();
+            let mut sent = 0;
+            while sent < total {
+                let n = block.len().min(total - sent);
+                if stream.write_all(&block[..n]).is_err() {
+                    return;
+                }
+                sent += n;
+            }
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        let net = NetRuntime::new().unwrap();
+        let params = ConnectParams {
+            protocol: Protocol::Telnet,
+            host: "127.0.0.1".into(),
+            port,
+            username: String::new(),
+            password: None,
+            identity_file: None,
+            default_identity_files: Vec::new(),
+            use_agent: false,
+            agent_pipe: None,
+            forwards: Vec::new(),
+            serial: Default::default(),
+            keepalive: Default::default(),
+            rdp: Default::default(),
+            desktop: (1024, 768),
+            term_type: "xterm-256color".into(),
+            cols: 80,
+            rows: 24,
+            known_hosts: std::env::temp_dir().join("playterm-flood-test-known_hosts"),
+            connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
+            jump: None,
+            x11: None,
+        };
+        let spec = SessionSpec {
+            params,
+            charset: Charset::Utf8,
+            name: None,
+            log: None,
+            login: None,
+            site: None,
+            tab_color: None,
+            profile: None,
+            after_connect: None,
+        };
+        let setup = TermSetup { palette: Palette::default(), scrollback: 1000 };
+        (Session::connect(1, spec, &net, std::sync::Arc::new(|| {}), &setup), net)
+    }
+
+    #[test]
+    fn a_flood_of_output_keeps_frames_short_and_memory_bounded() {
+        const TOTAL: usize = 32 * 1024 * 1024;
+        let (mut session, _net) = flood_tab(TOTAL);
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let (mut longest, mut most_pending, mut frames) = (Duration::ZERO, 0, 0);
+        while (session.rx_bytes as usize) < TOTAL {
+            assert!(Instant::now() < deadline, "only {} of {TOTAL} bytes arrived", session.rx_bytes);
+            let start = Instant::now();
+            session.poll(Path::new(""), false);
+            longest = longest.max(start.elapsed());
+            if let Some(remote) = &session.remote {
+                most_pending = most_pending.max(remote.handle.pending_output());
+            }
+            frames += 1;
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        eprintln!("{frames} frames, longest {longest:?}, most pending {most_pending} bytes");
+        // Each frame took a bounded share (no frame drew the whole flood) ...
+        assert!(frames > 10, "drawn over many frames ({frames})");
+        assert!(longest < Duration::from_millis(500), "a frame took {longest:?}");
+        // ... and what waited for the window stayed under the limit (plus one read).
+        assert!(most_pending <= playterm_net::MAX_PENDING_OUTPUT + 256 * 1024, "{most_pending} bytes waited");
     }
 
     #[test]

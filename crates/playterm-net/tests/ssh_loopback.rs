@@ -940,6 +940,60 @@ fn sftp_folder_download_does_not_follow_local_links() {
     assert_eq!(std::fs::read_to_string(real.join("b.txt")).unwrap(), "b");
 }
 
+/// Files whose name marks them as an unfinished upload, under `dir`.
+fn upload_parts(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".part"))
+        .collect()
+}
+
+#[test]
+fn sftp_upload_replaces_an_existing_file_only_when_complete() {
+    let fx = Fixture::new("sftp-replace", &[]);
+    fx.trust_host();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+    let root = fx.dir.join("sftp");
+    let existing = root.join("app.sh");
+    std::fs::write(&existing, b"#!/bin/sh\necho old\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o750)).unwrap();
+    }
+
+    // A local file that cannot be opened: the remote one is untouched.
+    let id = sftp.upload(&fx.dir.join("missing.sh"), "/app.sh");
+    assert!(matches!(transfer_result(&sftp, id), TransferState::Failed(_)));
+    assert_eq!(std::fs::read(&existing).unwrap(), b"#!/bin/sh\necho old\n");
+
+    // Cancelled half way: the old file stays, the partial upload is gone.
+    let huge = fx.dir.join("huge.sh");
+    std::fs::write(&huge, vec![b'x'; 64 * 1024 * 1024]).unwrap();
+    let id = sftp.upload(&huge, "/app.sh");
+    sftp.cancel(id);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Cancelled);
+    assert_eq!(std::fs::read(&existing).unwrap(), b"#!/bin/sh\necho old\n");
+    assert_eq!(upload_parts(&root), Vec::<String>::new());
+
+    // Complete: it replaces the old file (the server refuses to rename over it, as OpenSSH's
+    // does) and keeps its permissions.
+    let new = fx.dir.join("new.sh");
+    std::fs::write(&new, b"#!/bin/sh\necho new\n").unwrap();
+    let id = sftp.upload(&new, "/app.sh");
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read(&existing).unwrap(), b"#!/bin/sh\necho new\n");
+    assert_eq!(upload_parts(&root), Vec::<String>::new());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&existing).unwrap().permissions().mode() & 0o777, 0o750);
+    }
+}
+
 #[test]
 fn sftp_cancelled_download_keeps_the_existing_file() {
     let fx = Fixture::new("sftp-cancel-down", &[]);

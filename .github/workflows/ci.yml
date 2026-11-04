@@ -1,0 +1,94 @@
+# Checks every pull request and every push to master: clippy and the workspace tests on the
+# platforms the releases are built for (Windows, macOS), and the ZMODEM tests against lrzsz.
+#
+# The lrzsz interop tests skip when rz/sz are missing; here PLAYTERM_REQUIRE_LRZSZ makes a
+# missing lrzsz a failure, so a green run means they really ran (macOS and Linux; lrzsz has no
+# Windows build).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: clippy + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add clippy
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: lrzsz
+        if: runner.os == 'macOS'
+        run: brew install lrzsz
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then export PLAYTERM_REQUIRE_LRZSZ=1; fi
+          cargo test --locked --workspace
+
+  # The network crate (SSH, Telnet, serial, ZMODEM) on Linux, with lrzsz required.
+  zmodem-linux:
+    name: playterm-net + lrzsz (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      # lrzsz for the interop tests; ALSA (RDP sound), udev (serial ports) and OpenSSL (RDP TLS) for the build.
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lrzsz libasound2-dev libudev-dev libssl-dev pkg-config
+          command -v rz sz
+
+      - name: Test
+        env:
+          PLAYTERM_REQUIRE_LRZSZ: "1"
+        run: cargo test --locked -p playterm-net
+
+      - name: The lrzsz tests ran
+        env:
+          PLAYTERM_REQUIRE_LRZSZ: "1"
+        run: |
+          out=$(cargo test --locked -p playterm-net --lib lrzsz -- --nocapture 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "test result: ok. 2 passed"

@@ -275,7 +275,7 @@ pub(crate) async fn run(
         tokio::select! {
             msg = reader.wait() => match msg {
                 Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
-                    sink.send(SessionEvent::Data(data.to_vec()));
+                    sink.data(data.to_vec()).await;
                 }
                 Some(ChannelMsg::ExitStatus { exit_status }) if exit_status != 0 => {
                     sink.notice(tr!("원격 셸 종료 코드: {exit_status}", "Remote shell exit code: {exit_status}"));

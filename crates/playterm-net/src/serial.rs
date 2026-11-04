@@ -223,7 +223,7 @@ where
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     continue;
                 }
-                sink.send(SessionEvent::Data(buf[..n].to_vec()));
+                sink.data(buf[..n].to_vec()).await;
             }
             cmd = commands.recv() => match cmd {
                 Some(SessionCommand::Input(data)) => {

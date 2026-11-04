@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use playterm_i18n::{t, tr};
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::session::Waker;
@@ -382,12 +383,40 @@ async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress:
     result
 }
 
+/// The remote file an upload is written to before it replaces `remote`: next to it (same
+/// folder, so the rename stays on one filesystem), hidden, with a random name nobody can
+/// prepare (say, as a link to elsewhere) in advance.
+fn remote_part_path(remote: &str) -> anyhow::Result<String> {
+    let (dir, name) = match remote.rsplit_once('/') {
+        Some((dir, name)) => (format!("{dir}/"), name),
+        None => (String::new(), remote),
+    };
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|e| anyhow::anyhow!("random: {e}"))?;
+    let token: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!("{dir}.{name}.{token}.part"))
+}
+
+/// Uploads `local` to `remote` through a temporary remote file that replaces it only once
+/// complete: a failed or cancelled upload (or a local file that cannot be read) leaves a file
+/// already at `remote` as it was, and removes only the temporary one.
 async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: Progress) -> anyhow::Result<()> {
+    // Before anything is created on the server.
+    let mut src = tokio::fs::File::open(local)
+        .await
+        .with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", local.display()))?;
+    let part = remote_part_path(remote)?;
+    // A file being replaced keeps its permissions (an executable script, a private file): the
+    // temporary file is created with them, so its data is never open to more than the old was.
+    let permissions = sftp.metadata(remote).await.ok().and_then(|old| old.permissions).map(|mode| mode & 0o7777);
+    let attributes = russh_sftp::protocol::FileAttributes { permissions, ..russh_sftp::protocol::FileAttributes::empty() };
+    // Exclusive: never an existing file, nor a link to one.
+    let flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
+    let mut dst = sftp
+        .open_with_flags_and_attributes(part.as_str(), flags, attributes)
+        .await
+        .with_context(|| tr!("{remote} 을(를) 만들 수 없습니다", "Cannot create {remote}"))?;
     let result = async {
-        let mut src = tokio::fs::File::open(local)
-            .await
-            .with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", local.display()))?;
-        let mut dst = sftp.create(remote).await.with_context(|| tr!("{remote} 을(를) 만들 수 없습니다", "Cannot create {remote}"))?;
         let mut buf = vec![0u8; CHUNK];
         loop {
             let n = src.read(&mut buf).await?;
@@ -398,13 +427,47 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
             progress.advance(n)?;
         }
         dst.shutdown().await?;
+        progress.advance(0)?;
         anyhow::Ok(())
     }
     .await;
-    if result.is_err() {
-        let _ = sftp.remove_file(remote).await;
+    match result {
+        Ok(()) => replace_remote(sftp, &part, remote).await,
+        Err(e) => {
+            // Only the temporary file is ours to remove.
+            let _ = sftp.remove_file(part.as_str()).await;
+            Err(e)
+        }
     }
-    result
+}
+
+/// Renames the complete upload `part` onto `remote`. SFTP's rename refuses an existing target
+/// on many servers (OpenSSH's among them): the old file is then removed first, and should the
+/// rename still fail, the upload is kept under its temporary name and the error says where.
+async fn replace_remote(sftp: &SftpSession, part: &str, remote: &str) -> anyhow::Result<()> {
+    if sftp.rename(part, remote).await.is_ok() {
+        return Ok(());
+    }
+    if !sftp.try_exists(remote).await.unwrap_or(false) {
+        // Not an existing target that got in the way: the upload is of no use then.
+        let r = sftp.rename(part, remote).await;
+        if r.is_err() {
+            let _ = sftp.remove_file(part).await;
+        }
+        return r.with_context(|| tr!("{remote} 을(를) 만들 수 없습니다", "Cannot create {remote}"));
+    }
+    if let Err(e) = sftp.remove_file(remote).await {
+        // The old file stays as it was.
+        let _ = sftp.remove_file(part).await;
+        return Err(anyhow::Error::new(e).context(tr!("{remote} 을(를) 바꿀 수 없습니다", "Cannot replace {remote}")));
+    }
+    match sftp.rename(part, remote).await {
+        Ok(()) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!(tr!(
+            "{remote} 을(를) 바꾸지 못했습니다 ({e}). 올린 파일은 {part} 에 있습니다",
+            "Could not replace {remote} ({e}). The uploaded file is at {part}"
+        ))),
+    }
 }
 
 /// Remote tree as (relative path, is_dir, size), parents before children. The walk stops when
@@ -571,6 +634,85 @@ mod tests {
         ] {
             assert!(!is_safe_local_name(bad), "{bad:?} must be refused");
         }
+    }
+
+    #[test]
+    fn upload_temporary_names_are_unpredictable() {
+        let a = remote_part_path("/srv/app.sh").unwrap();
+        let b = remote_part_path("/srv/app.sh").unwrap();
+        assert_ne!(a, b);
+        assert!(a.starts_with("/srv/.app.sh.") && a.ends_with(".part"), "{a}");
+        assert_eq!(a.len(), "/srv/.app.sh.".len() + 32 + ".part".len(), "a 128-bit token");
+        assert!(remote_part_path("plain").unwrap().starts_with(".plain."));
+    }
+
+    /// OpenSSH's own `sftp-server` on this machine, when it has one.
+    fn openssh_sftp_server() -> Option<&'static str> {
+        ["/usr/libexec/sftp-server", "/usr/lib/openssh/sftp-server", "/usr/lib/ssh/sftp-server", "/usr/libexec/openssh/sftp-server"]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+    }
+
+    /// Against OpenSSH's sftp-server (its rename does not replace an existing file): an upload
+    /// replaces the file once complete, keeps its permissions, and a failed one leaves it alone.
+    #[tokio::test]
+    async fn uploads_replace_files_on_openssh() {
+        let Some(server) = openssh_sftp_server() else {
+            eprintln!("no OpenSSH sftp-server: skipped");
+            return;
+        };
+        let mut child = tokio::process::Command::new(server)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let stream = tokio::io::join(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        let sftp = SftpSession::new(stream).await.unwrap();
+        let conn = SftpConnection::new(sftp, Arc::new(|| {}));
+        let progress = || Progress::new(1, conn.inner.clone(), Arc::new(AtomicBool::new(false)));
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("app.sh");
+        std::fs::write(&target, b"old").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&target, std::os::unix::fs::PermissionsExt::from_mode(0o750)).unwrap();
+        let remote = target.to_string_lossy().into_owned();
+        let parts = || std::fs::read_dir(dir.path()).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".part")).count();
+
+        assert!(upload_file(&conn.inner.sftp, &dir.path().join("missing"), &remote, progress()).await.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+
+        let cancelled = Progress::new(2, conn.inner.clone(), Arc::new(AtomicBool::new(true)));
+        let big = dir.path().join("big.local");
+        std::fs::write(&big, vec![1u8; 3 * CHUNK]).unwrap();
+        assert!(upload_file(&conn.inner.sftp, &big, &remote, cancelled).await.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+        assert_eq!(parts(), 0);
+
+        let new = dir.path().join("new.local");
+        std::fs::write(&new, b"new contents").unwrap();
+        upload_file(&conn.inner.sftp, &new, &remote, progress()).await.unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new contents");
+        assert_eq!(parts(), 0);
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&target).unwrap().permissions()) & 0o777, 0o750);
+
+        // A private file stays private: the temporary file is created with its mode, so the
+        // data is never readable by others, not even while uploading.
+        #[cfg(unix)]
+        {
+            let secret = dir.path().join("secret.txt");
+            std::fs::write(&secret, b"x").unwrap();
+            std::fs::set_permissions(&secret, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+            upload_file(&conn.inner.sftp, &new, &secret.to_string_lossy(), progress()).await.unwrap();
+            assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&secret).unwrap().permissions()) & 0o777, 0o600);
+        }
+
+        // A new file is simply created.
+        let fresh = dir.path().join("fresh.txt");
+        upload_file(&conn.inner.sftp, &new, &fresh.to_string_lossy(), progress()).await.unwrap();
+        assert_eq!(std::fs::read(&fresh).unwrap(), b"new contents");
     }
 
     #[test]
