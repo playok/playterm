@@ -452,6 +452,8 @@ cargo run -p playterm-net --example dev_sshd -- --authorized-keys key.pub --sftp
 cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 ```
 
+- 화면 흐름 테스트(`crates/playterm/src/ui_tests.rs`, egui_kittest): 앱 전체를 창 없이 띄워 사용자가 하듯 버튼을 라벨로 찾아 누르고 입력합니다
+  (빠른 연결 → 텔넷 접속, 사이트 관리 저장·저장 여부 질문·Esc, 설정 미리보기·취소, 매크로 관리, 동시 입력, 대화상자가 제자리에 있는지).
 - 코드는 `cargo fmt --all` 로 정리합니다(설정: `rustfmt.toml`). 포맷만 바꾼 커밋은 `.git-blame-ignore-revs` 에 넣어 두며, 로컬 `git blame` 에서 건너뛰려면
   `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
 - PR 과 `master` push 마다 GitHub Actions(`.github/workflows/ci.yml`)가 Windows·macOS 에서 포맷 검사(`cargo fmt --check`), clippy(`-D warnings`)와 전체 테스트를, Linux 에서 `playterm-net` 테스트를 실행합니다.
