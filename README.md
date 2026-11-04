@@ -56,6 +56,11 @@ cargo build --release
 macOS 에서 테스트 → arm64·x64 `playterm.app` zip(ad-hoc 서명)을 만들고, 둘 다 성공하면 그 태그의 릴리스에 zip 네 개와 `SHA256SUMS.txt`,
 그 서명 `SHA256SUMS.txt.sig`, macOS zip 의 `SHA256SUMS-macos.txt` 를 올립니다. 태그는 `Cargo.toml` 의 버전과 같아야 합니다.
 
+코드 서명은 저장소 시크릿이 있을 때만 합니다(없으면 지금처럼 서명 없이 / ad-hoc). 릴리스 설명도 그에 맞춰 바뀝니다.
+- Windows: `WINDOWS_CERT_PFX`(.pfx 의 base64), `WINDOWS_CERT_PASSWORD` → UPX 압축 뒤 `signtool` 로 서명(SHA-256, 타임스탬프). 직접 할 때는 `package.ps1 -CodeSign`.
+- macOS: `MACOS_CERT_P12`(Developer ID Application .p12 의 base64), `MACOS_CERT_PASSWORD` → hardened runtime 서명,
+  `MACOS_NOTARY_APPLE_ID`·`MACOS_NOTARY_TEAM_ID`·`MACOS_NOTARY_PASSWORD` 까지 있으면 공증. 인증서는 작업 전용 키체인에 넣고 끝나면 지웁니다.
+
 앱 안의 업데이트는 서명이 맞는 릴리스만 설치하므로, 저장소 시크릿 `PLAYTERM_SIGNING_KEY` 에 서명 개인 키(hex)가 있어야 태그 빌드가 성공합니다.
 키는 `cargo run -p playterm-sign -- keygen > 키파일` 로 만들고(공개 키는 화면에 출력 → `crates/playterm/src/update.rs` 의 `PUBLIC_KEY`),
 `gh secret set PLAYTERM_SIGNING_KEY < 키파일` 로 등록합니다. 개인 키는 저장소 밖에 안전하게 보관하세요. 잃어버리면 새 키를 만들고
@@ -102,7 +107,8 @@ RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh arm64   # 기본이 아닌 툴체
 - zip 을 풀어 `playterm.app` 을 응용 프로그램 폴더로 옮기면 됩니다. zip 들의 SHA-256 은 `dist/SHA256SUMS-macos.txt` 에 씁니다.
 - 기본은 **ad-hoc 서명**입니다. 인터넷에서 받은 앱은 처음 실행할 때 Gatekeeper 가 막으므로 우클릭 → 열기(또는 시스템 설정 → 개인정보 보호 및 보안 →
   그래도 열기)로 엽니다. 환경변수 `MACOS_SIGN_IDENTITY` 에 "Developer ID Application" 인증서 이름을 주면 hardened runtime 과 타임스탬프로
-  서명하므로, `xcrun notarytool submit <zip> --wait` 와 `xcrun stapler staple` 로 공증할 수 있습니다.
+  서명합니다. `MACOS_NOTARY_APPLE_ID`·`MACOS_NOTARY_TEAM_ID`·`MACOS_NOTARY_PASSWORD`(앱 암호)까지 주면 공증(`notarytool submit --wait`)하고
+  티켓을 붙인(`stapler staple`) 뒤 Gatekeeper 판정을 확인하고 zip 을 다시 만듭니다.
 - 터미널 기본 글꼴은 Menlo, 한글은 Apple SD Gothic Neo 로 그립니다. SSH 기본 사용자는 `USER`, 에이전트는 `SSH_AUTH_SOCK` 을 씁니다.
 - 앱 안의 자동 설치는 Windows 에서만 됩니다. macOS 에서는 새 버전(그 릴리스에 이 Mac 용 zip 이 있을 때)을 알려 주고 릴리스 페이지를 엽니다.
 

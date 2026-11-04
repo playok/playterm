@@ -56,6 +56,11 @@ Pushing a tag that starts with `v` runs GitHub Actions (`.github/workflows/relea
 (UPX-compressed), on macOS tests → arm64 and x64 `playterm.app` zips (signed ad hoc). When both succeed, the four zips are uploaded with
 `SHA256SUMS.txt`, its signature `SHA256SUMS.txt.sig` and `SHA256SUMS-macos.txt` (for the macOS zips) to that tag's release. The tag must match the version in `Cargo.toml`.
 
+Code signing happens only when its repository secrets are set (without them, as before: unsigned / ad hoc); the release notes follow.
+- Windows: `WINDOWS_CERT_PFX` (base64 of the .pfx), `WINDOWS_CERT_PASSWORD` → signed with `signtool` after UPX (SHA-256, timestamped). By hand: `package.ps1 -CodeSign`.
+- macOS: `MACOS_CERT_P12` (base64 of a Developer ID Application .p12), `MACOS_CERT_PASSWORD` → hardened-runtime signature, and with
+  `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_TEAM_ID`, `MACOS_NOTARY_PASSWORD` notarized too. The certificate goes into a keychain of the job's own, deleted at its end.
+
 The in-app updater installs only releases with a valid signature, so a tag build needs the signing private key (hex) in the repository secret
 `PLAYTERM_SIGNING_KEY`. Make a key with `cargo run -p playterm-sign -- keygen > keyfile` (the public key it prints goes into `PUBLIC_KEY` in
 `crates/playterm/src/update.rs`) and store it with `gh secret set PLAYTERM_SIGNING_KEY < keyfile`. Keep the private key safe, outside the repository.
@@ -102,7 +107,8 @@ RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh arm64   # with a toolchain other 
 - Unzip and move `playterm.app` to Applications. The SHA-256 sums of the zips go to `dist/SHA256SUMS-macos.txt`.
 - The app is **signed ad hoc** by default. Gatekeeper stops such an app downloaded from the internet on its first run: right-click → Open (or
   System Settings → Privacy & Security → Open Anyway). With `MACOS_SIGN_IDENTITY` set to a "Developer ID Application" certificate, the app is
-  signed with the hardened runtime and a timestamp, ready for `xcrun notarytool submit <zip> --wait` and `xcrun stapler staple`.
+  signed with the hardened runtime and a timestamp. With `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_TEAM_ID` and `MACOS_NOTARY_PASSWORD` (an
+  app-specific password) too, it is notarized (`notarytool submit --wait`), the ticket stapled, Gatekeeper's verdict checked and the zip made again.
 - The terminal font defaults to Menlo, with Apple SD Gothic Neo for Hangul. The default SSH user is `USER`, and the agent is `SSH_AUTH_SOCK`.
 - Installing updates from within the app works on Windows only. On macOS a new version (when its release has a zip for this Mac) is announced
   and its release page opened.

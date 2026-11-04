@@ -9,6 +9,15 @@
 # runner: ARM64 is cross-compiled (clang, preinstalled with LLVM, builds the crypto library).
 # Both macOS architectures are built on one Apple silicon runner (x64 cross-compiled). The
 # release is published only when every build succeeded.
+#
+# Code signing, when its repository secrets are set (without them the builds are as before):
+#   Windows  WINDOWS_CERT_PFX (base64 of the .pfx), WINDOWS_CERT_PASSWORD
+#            -> playterm.exe signed with signtool (SHA-256, timestamped) after UPX
+#   macOS    MACOS_CERT_P12 (base64 of a "Developer ID Application" .p12), MACOS_CERT_PASSWORD
+#            -> the apps signed with the hardened runtime; with MACOS_NOTARY_APPLE_ID,
+#            MACOS_NOTARY_TEAM_ID and MACOS_NOTARY_PASSWORD (app-specific) also notarized and stapled
+# Secrets are given only to the steps that package and sign, which run no cargo: the builds (and
+# with them every dependency's build script) run first, without any secret in their environment.
 name: Release
 
 on:
@@ -27,6 +36,8 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 90
+    outputs:
+      codesigned: ${{ steps.package.outputs.codesigned }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,14 +67,25 @@ jobs:
       - name: Test
         run: cargo test --locked --workspace
 
+      - name: Build (x64, ARM64)
+        shell: pwsh
+        run: ./scripts/package.ps1 -BuildOnly
+
       # A tagged release must be signed (repository secret PLAYTERM_SIGNING_KEY): the in-app
       # updater installs only releases whose SHA256SUMS.txt.sig matches its public key.
-      - name: Package (x64, ARM64)
+      - name: Package and sign (x64, ARM64)
+        id: package
         shell: pwsh
         env:
           PLAYTERM_SIGNING_KEY: ${{ secrets.PLAYTERM_SIGNING_KEY }}
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
-          if ($env:GITHUB_REF -like "refs/tags/*") { ./scripts/package.ps1 -Upx -Sign } else { ./scripts/package.ps1 -Upx }
+          $options = @{ Upx = $true; SkipBuild = $true }
+          if ($env:GITHUB_REF -like "refs/tags/*") { $options.Sign = $true }
+          if ($env:WINDOWS_CERT_PFX) { $options.CodeSign = $true }
+          ./scripts/package.ps1 @options
+          "codesigned=$(if ($options.CodeSign) { 'true' } else { 'false' })" >> $env:GITHUB_OUTPUT
 
       - name: Keep the packages
         uses: actions/upload-artifact@v4
@@ -76,7 +98,10 @@ jobs:
 
   macos:
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+    outputs:
+      signed: ${{ steps.certificate.outputs.signed }}
+      notarized: ${{ steps.package.outputs.notarized }}
     steps:
       - uses: actions/checkout@v4
 
@@ -102,9 +127,57 @@ jobs:
       - name: Test
         run: cargo test --locked --workspace
 
-      # Signed ad hoc: the apps are not notarized, so Gatekeeper asks on the first run.
-      - name: Package (arm64, x64)
-        run: scripts/package-macos.sh arm64 x64
+      - name: Build (arm64, x64)
+        run: scripts/package-macos.sh --build-only arm64 x64
+
+      # Whether the signing secrets are set (not their values).
+      - name: Signing secrets
+        id: secrets
+        run: |
+          echo "certificate=${{ secrets.MACOS_CERT_P12 != '' }}" >> "$GITHUB_OUTPUT"
+          echo "notary=${{ secrets.MACOS_NOTARY_APPLE_ID != '' }}" >> "$GITHUB_OUTPUT"
+
+      # The certificate goes into a keychain of its own, deleted at the end of the job.
+      - name: Developer ID certificate
+        id: certificate
+        if: steps.secrets.outputs.certificate == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -eu
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1)
+          if [ -z "$identity" ]; then
+            echo "MACOS_CERT_P12 holds no Developer ID Application certificate" >&2
+            exit 1
+          fi
+          echo "MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      # Without the certificate the apps are signed ad hoc, and Gatekeeper asks on the first run.
+      - name: Package, sign and notarize (arm64, x64)
+        id: package
+        env:
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        run: |
+          scripts/package-macos.sh --skip-build arm64 x64
+          if [ "${{ steps.secrets.outputs.notary }}" = true ]; then echo "notarized=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Remove the signing keychain
+        if: always() && steps.certificate.outcome == 'success'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
       - name: Keep the packages
         uses: actions/upload-artifact@v4
@@ -132,10 +205,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+          CODESIGNED: ${{ needs.windows.outputs.codesigned }}
+          MACOS_SIGNED: ${{ needs.macos.outputs.signed }}
+          NOTARIZED: ${{ needs.macos.outputs.notarized }}
         run: |
           set -eu
           cd dist
           ls -l
+          if [ "$CODESIGNED" = true ]; then
+            windows_note="The Windows executables are code-signed. They are compressed with UPX, which some antivirus products flag by mistake."
+          else
+            windows_note="The Windows executables are not code-signed, so Windows SmartScreen may warn on the first run (More info -> Run anyway). They are compressed with UPX, which some antivirus products flag by mistake."
+          fi
+          if [ "$NOTARIZED" = true ]; then
+            macos_note="The macOS apps are signed with a Developer ID and notarized by Apple."
+          elif [ "$MACOS_SIGNED" = true ]; then
+            macos_note="The macOS apps are signed with a Developer ID but not notarized, so macOS asks before the first run of a downloaded app: right-click playterm.app -> Open."
+          else
+            macos_note="The macOS apps are signed ad hoc and not notarized, so macOS stops the first run of a downloaded app: right-click playterm.app -> Open, or System Settings -> Privacy & Security -> Open Anyway."
+          fi
           windows_sums=$(tr -d '\r' < SHA256SUMS.txt)
           macos_sums=$(cat SHA256SUMS-macos.txt)
           tick='`'
@@ -150,13 +238,9 @@ jobs:
           | ${tick}playterm-*-macos-arm64.zip${tick} | Apple silicon Macs, macOS 11 or later (unzip and move ${tick}playterm.app${tick} to Applications) |
           | ${tick}playterm-*-macos-x64.zip${tick} | Intel Macs, macOS 11 or later |
 
-          The Windows executables are not code-signed, so Windows SmartScreen may warn on the first run
-          (More info -> Run anyway). They are compressed with UPX, which some antivirus products
-          flag by mistake.
+          $windows_note
 
-          The macOS apps are signed ad hoc and not notarized, so macOS stops the first run of a
-          downloaded app: right-click ${tick}playterm.app${tick} -> Open, or System Settings -> Privacy & Security
-          -> Open Anyway.
+          $macos_note
 
           SHA-256 of the Windows packages (${tick}SHA256SUMS.txt.sig${tick} is its Ed25519 signature, checked by the in-app updater):
           ${fence}

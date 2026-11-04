@@ -4,6 +4,18 @@
 #   pwsh scripts\package.ps1 -Targets x64    # x64 only
 #   pwsh scripts\package.ps1 -Upx            # executables compressed with UPX
 #   pwsh scripts\package.ps1 -Sign           # SHA256SUMS.txt must be signed (fails without a key)
+#   pwsh scripts\package.ps1 -CodeSign       # playterm.exe code-signed (fails without a certificate)
+#   pwsh scripts\package.ps1 -BuildOnly      # only build (playterm and playterm-sign), no packages
+#   pwsh scripts\package.ps1 -SkipBuild ...  # package what -BuildOnly built, running no cargo
+#
+# Keys and certificates should not be in the environment while cargo builds: every dependency's
+# build script runs then and could read them. The release workflow therefore builds with
+# -BuildOnly (no secrets), then packages and signs with -SkipBuild (secrets, but no build).
+#
+# -CodeSign signs each playterm.exe with signtool (SHA-256, RFC 3161 timestamp) after UPX, so the
+# signature covers the compressed file: the certificate is a .pfx in $env:WINDOWS_CERT_PFX_FILE
+# or base64 in $env:WINDOWS_CERT_PFX, its password in $env:WINDOWS_CERT_PASSWORD, the timestamp
+# server $env:WINDOWS_TIMESTAMP_URL (default DigiCert's). signtool comes from the Windows SDK.
 #
 # SHA256SUMS.txt is signed (SHA256SUMS.txt.sig, Ed25519, by crates/playterm-sign) whenever the
 # private key is given in $env:PLAYTERM_SIGNING_KEY (hex) or $env:PLAYTERM_SIGNING_KEY_FILE; the
@@ -23,8 +35,12 @@ param(
     [ValidateSet("arm64", "x64")]
     [string[]]$Targets = @("arm64", "x64"),
     [switch]$Upx,
-    [switch]$Sign
+    [switch]$Sign,
+    [switch]$CodeSign,
+    [switch]$BuildOnly,
+    [switch]$SkipBuild
 )
+if ($BuildOnly -and ($SkipBuild -or $Upx -or $Sign -or $CodeSign)) { throw "-BuildOnly only builds: no -SkipBuild, -Upx, -Sign or -CodeSign" }
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
@@ -112,17 +128,72 @@ $triples = @{ arm64 = "aarch64-pc-windows-msvc"; x64 = "x86_64-pc-windows-msvc" 
 $dist = Join-Path $root "dist"
 New-Item -ItemType Directory -Force $dist | Out-Null
 
+# signtool.exe of the newest Windows SDK (x64 tools; they sign ARM64 files too).
+function Get-SignTool {
+    $found = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($found) { return $found.Source }
+    $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+    $tool = Get-ChildItem -Path $kits -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like "*\x64\signtool.exe" } |
+        Sort-Object FullName -Descending | Select-Object -First 1
+    if (-not $tool) { throw "-CodeSign: signtool.exe not found (install the Windows SDK)" }
+    return $tool.FullName
+}
+
+# The certificate for -CodeSign as a file (a temporary one for $env:WINDOWS_CERT_PFX).
+function Get-CodeSignCert {
+    if ($env:WINDOWS_CERT_PFX_FILE) {
+        if (-not (Test-Path -LiteralPath $env:WINDOWS_CERT_PFX_FILE -PathType Leaf)) { throw "-CodeSign: $env:WINDOWS_CERT_PFX_FILE not found" }
+        return @{ Path = $env:WINDOWS_CERT_PFX_FILE; Temporary = $false }
+    }
+    if (-not $env:WINDOWS_CERT_PFX) { throw "-CodeSign: set WINDOWS_CERT_PFX (base64) or WINDOWS_CERT_PFX_FILE" }
+    $path = Join-Path ([IO.Path]::GetTempPath()) ("playterm-cert-" + [guid]::NewGuid() + ".pfx")
+    [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX))
+    return @{ Path = $path; Temporary = $true }
+}
+
+function Invoke-CodeSign([string]$SignTool, [hashtable]$Cert, [string]$Exe) {
+    $url = if ($env:WINDOWS_TIMESTAMP_URL) { $env:WINDOWS_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+    $arguments = @("sign", "/fd", "SHA256", "/tr", $url, "/td", "SHA256", "/f", $Cert.Path)
+    if ($env:WINDOWS_CERT_PASSWORD) { $arguments += @("/p", $env:WINDOWS_CERT_PASSWORD) }
+    & $SignTool @arguments $Exe | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $Exe" }
+    & $SignTool verify /pa $Exe | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "signtool verify failed for $Exe" }
+}
+
+$signExe = Join-Path $root "target\release\playterm-sign.exe"
+if ($BuildOnly) {
+    foreach ($arch in $Targets) {
+        Write-Host "== build $arch ($($triples[$arch]))"
+        cargo build --release --locked -p playterm --target $triples[$arch]
+        if ($LASTEXITCODE -ne 0) { throw "cargo build failed for $($triples[$arch])" }
+    }
+    Write-Host "== build playterm-sign"
+    cargo build --release --locked -p playterm-sign
+    if ($LASTEXITCODE -ne 0) { throw "cargo build failed for playterm-sign" }
+    Write-Host "built; package with -SkipBuild"
+    exit 0
+}
+
 # Before any build, so a missing or bad UPX stops the run early.
 $upxExe = if ($Upx) { Get-Upx } else { $null }
 # UPX takes default options from $env:UPX (e.g. -k leaves a backup file that would be zipped).
 Remove-Item Env:UPX -ErrorAction SilentlyContinue
+# Likewise for code signing: no certificate or signtool stops the run before building.
+$signTool = if ($CodeSign) { Get-SignTool } else { $null }
+$cert = if ($CodeSign) { Get-CodeSignCert } else { $null }
 
 $sums = @()
 foreach ($arch in $Targets) {
     $triple = $triples[$arch]
     Write-Host "== $arch ($triple)"
-    cargo build --release --locked -p playterm --target $triple
-    if ($LASTEXITCODE -ne 0) { throw "cargo build failed for $triple" }
+    if ($SkipBuild) {
+        if (-not (Test-Path -LiteralPath "target\$triple\release\playterm.exe" -PathType Leaf)) { throw "-SkipBuild: target\$triple\release\playterm.exe is not built (run -BuildOnly first)" }
+    } else {
+        cargo build --release --locked -p playterm --target $triple
+        if ($LASTEXITCODE -ne 0) { throw "cargo build failed for $triple" }
+    }
 
     $stage = Join-Path $dist "playterm-$version-windows-$arch"
     Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
@@ -137,6 +208,10 @@ foreach ($arch in $Targets) {
         if ((Invoke-Upx $upxExe @("--best", "-q", $exe)) -ne 0) { throw "UPX failed for $arch" }
         if ((Invoke-Upx $upxExe @("-t", "-q", $exe)) -ne 0) { throw "UPX test failed for $arch" }
         Write-Host ("   UPX: {0:N1} MB -> {1:N1} MB" -f ($before / 1MB), ((Get-Item $exe).Length / 1MB))
+    }
+    if ($signTool) {
+        Write-Host "   code signing"
+        Invoke-CodeSign $signTool $cert (Join-Path $stage "playterm.exe")
     }
     $extra = @(Get-ChildItem $stage | Where-Object { $_.Name -notin (@("playterm.exe") + $docs) })
     if ($extra) { throw "unexpected files in the package: $($extra.Name -join ', ')" }
@@ -157,12 +232,18 @@ $haveKey = [bool]($env:PLAYTERM_SIGNING_KEY -or $env:PLAYTERM_SIGNING_KEY_FILE)
 if ($Sign -and -not $haveKey) { throw "-Sign: set PLAYTERM_SIGNING_KEY or PLAYTERM_SIGNING_KEY_FILE" }
 if ($haveKey) {
     Write-Host "== Signing SHA256SUMS.txt"
-    cargo run --release --locked -q -p playterm-sign -- sign $sumsFile
+    if (-not $SkipBuild) {
+        cargo build --release --locked -q -p playterm-sign
+        if ($LASTEXITCODE -ne 0) { throw "cargo build failed for playterm-sign" }
+    }
+    if (-not (Test-Path -LiteralPath $signExe -PathType Leaf)) { throw "$signExe is not built (run -BuildOnly first)" }
+    & $signExe sign $sumsFile
     if ($LASTEXITCODE -ne 0) { throw "signing failed" }
     $public = (Select-String -Path "crates\playterm\src\update.rs" -Pattern 'const PUBLIC_KEY: &str = "([0-9a-f]{64})"').Matches[0].Groups[1].Value
-    cargo run --release --locked -q -p playterm-sign -- verify $sumsFile $public
+    & $signExe verify $sumsFile $public
     if ($LASTEXITCODE -ne 0) { throw "the signing key does not match PUBLIC_KEY in crates\playterm\src\update.rs" }
 } else {
     Write-Host "   SHA256SUMS.txt not signed (no PLAYTERM_SIGNING_KEY): the in-app updater will not install these packages"
 }
+if ($cert -and $cert.Temporary) { Remove-Item -Force -LiteralPath $cert.Path -ErrorAction SilentlyContinue }
 Write-Host "done: $dist"

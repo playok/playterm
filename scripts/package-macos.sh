@@ -6,10 +6,20 @@
 #   scripts/package-macos.sh arm64            # one architecture
 #   scripts/package-macos.sh universal        # one app for both (lipo)
 #   RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh   # a toolchain other than the default
+#   scripts/package-macos.sh --build-only arm64 x64    # only build
+#   scripts/package-macos.sh --skip-build arm64 x64    # package what --build-only built (no cargo)
+#
+# Certificates and notarization passwords should not be in the environment (or the keychain)
+# while cargo builds: every dependency's build script runs then. The release workflow builds with
+# --build-only first, then imports the certificate and packages with --skip-build.
 #
 # The app is signed ad hoc unless $MACOS_SIGN_IDENTITY names a "Developer ID Application"
-# certificate in the keychain; it is then signed with the hardened runtime and a timestamp,
-# ready for notarization (xcrun notarytool submit <zip> --wait, then xcrun stapler staple).
+# certificate in the keychain; it is then signed with the hardened runtime and a timestamp.
+# With $MACOS_NOTARY_APPLE_ID, $MACOS_NOTARY_TEAM_ID and $MACOS_NOTARY_PASSWORD (an app-specific
+# password) too, each app is notarized (xcrun notarytool submit --wait), the ticket stapled to it
+# and Gatekeeper's verdict checked, before it is zipped again. The app needs no entitlements under
+# the hardened runtime (no JIT, no unsigned libraries; network and serial ports need none outside
+# the App Sandbox).
 # An app signed ad hoc and downloaded from the internet is stopped by Gatekeeper on first run
 # (right-click → Open, or System Settings → Privacy & Security → Open Anyway).
 #
@@ -24,7 +34,40 @@ cd "$root"
 version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
 [ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
 
+step=all
+case "${1:-}" in
+    --build-only) step=build; shift ;;
+    --skip-build) step=package; shift ;;
+esac
 targets=${*:-arm64 x64}
+
+notarize=
+if [ -n "${MACOS_NOTARY_APPLE_ID:-}${MACOS_NOTARY_TEAM_ID:-}${MACOS_NOTARY_PASSWORD:-}" ]; then
+    [ -n "${MACOS_NOTARY_APPLE_ID:-}" ] && [ -n "${MACOS_NOTARY_TEAM_ID:-}" ] && [ -n "${MACOS_NOTARY_PASSWORD:-}" ] ||
+        { echo "notarization needs MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID and MACOS_NOTARY_PASSWORD" >&2; exit 1; }
+    [ -n "${MACOS_SIGN_IDENTITY:-}" ] ||
+        { echo "notarization needs a Developer ID signature (MACOS_SIGN_IDENTITY)" >&2; exit 1; }
+    notarize=1
+fi
+
+# notarize_app <app> <zip>: has Apple notarize the zipped app, staples the ticket to the app and
+# checks that Gatekeeper accepts it.
+notarize_app() {
+    echo "== notarizing $(basename "$2")"
+    result=$(xcrun notarytool submit "$2" --apple-id "$MACOS_NOTARY_APPLE_ID" --team-id "$MACOS_NOTARY_TEAM_ID" \
+        --password "$MACOS_NOTARY_PASSWORD" --wait --timeout 1h --output-format plist)
+    status=$(printf '%s' "$result" | plutil -extract status raw -o - -)
+    if [ "$status" != Accepted ]; then
+        id=$(printf '%s' "$result" | plutil -extract id raw -o - - 2>/dev/null || true)
+        echo "notarization: $status" >&2
+        [ -n "$id" ] && xcrun notarytool log "$id" --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" --password "$MACOS_NOTARY_PASSWORD" >&2
+        exit 1
+    fi
+    xcrun stapler staple "$1"
+    xcrun stapler validate "$1"
+    spctl --assess --type execute --verbose=2 "$1"
+}
 # Oldest macOS the app runs on (also the Rust minimum for Apple silicon).
 min_macos=11.0
 export MACOSX_DEPLOYMENT_TARGET=$min_macos
@@ -37,14 +80,28 @@ triple() {
     esac
 }
 
-# Builds playterm for one architecture; prints the path of the executable.
+# Builds playterm for one architecture (with --skip-build: checks it was built); prints the
+# path of the executable.
 build() {
     t=$(triple "$1")
-    rustup target add "$t" >/dev/null 2>&1 || true
-    echo "== cargo build ($t)" >&2
-    cargo build --release --locked -p playterm --target "$t" >&2
-    echo "target/$t/release/playterm"
+    exe="target/$t/release/playterm"
+    if [ "$step" = package ]; then
+        [ -f "$exe" ] || { echo "--skip-build: $exe is not built (run --build-only first)" >&2; exit 1; }
+    else
+        rustup target add "$t" >/dev/null 2>&1 || true
+        echo "== cargo build ($t)" >&2
+        cargo build --release --locked -p playterm --target "$t" >&2
+    fi
+    echo "$exe"
 }
+
+if [ "$step" = build ]; then
+    for arch in $targets; do
+        if [ "$arch" = universal ]; then build arm64 >/dev/null; build x64 >/dev/null; else build "$arch" >/dev/null; fi
+    done
+    echo "built; package with --skip-build"
+    exit 0
+fi
 
 # make_app <executable> <app path>
 make_app() {
@@ -126,6 +183,12 @@ for arch in $targets; do
     rm -f "$dist/$zip"
     # ditto keeps the bundle's symbolic links and extended attributes (the signature).
     ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/$zip"
+    if [ -n "$notarize" ]; then
+        notarize_app "$app" "$dist/$zip"
+        # Again, with the ticket in the app (it then opens without asking Apple first).
+        rm -f "$dist/$zip"
+        ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/$zip"
+    fi
     echo "== $zip ($(lipo -archs "$app/Contents/MacOS/playterm"))"
     zips="$zips $zip"
 done

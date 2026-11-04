@@ -18,6 +18,8 @@ pub fn sessions_key() -> String {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+// Read from the Windows registry; elsewhere only the tests make them.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 pub enum RegValue {
     Str(String),
     Dword(u32),
