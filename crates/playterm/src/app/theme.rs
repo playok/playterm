@@ -64,6 +64,7 @@ pub(super) fn soft_light() -> egui::Visuals {
 mod tests {
     use super::*;
 
+    /// WCAG relative luminance of a gray.
     fn luminance(gray: u8) -> f64 {
         let c = gray as f64 / 255.0;
         if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
