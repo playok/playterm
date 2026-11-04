@@ -299,7 +299,10 @@ pub fn confirm_close(ctx: &egui::Context, q: &CloseQuestion<'_>, dont_ask: &mut 
         ui.add_space(6.0);
         let ok = icon::primary(ui, icon::CLOSE, q.ok_label);
         let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
-        if main.clicked() {
+        // Enter is the highlighted button, as in the system's dialogs; Esc cancels. (Cancel
+        // with the keyboard focus takes Enter for itself.)
+        let enter = !cancel.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        if main.clicked() || enter {
             answer = Some(true);
         }
         if cancel.clicked() {
