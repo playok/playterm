@@ -453,6 +453,42 @@ async fn walk_remote(
     Ok(out)
 }
 
+/// Whether `meta` is a link: a symbolic link, or on Windows a junction or other reparse point,
+/// any of which can lead outside the folder it is in.
+fn is_link(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    meta.file_type().is_symlink()
+}
+
+/// Refuses a download target under `base` (the folder the user chose) whose path goes through
+/// a link that already exists there: a link to a folder elsewhere would have the download
+/// write, or replace files, outside `base`. `base` itself may be a link (the user picked it).
+fn ensure_no_links(base: &Path, rel: &str) -> anyhow::Result<()> {
+    let mut path = base.to_owned();
+    for part in rel.split('/') {
+        path.push(part);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if is_link(&meta) => anyhow::bail!(tr!(
+                "{} 은(는) 다른 곳을 가리키는 링크라 그 안에 받지 않았습니다",
+                "Not downloaded: {} is a link that leads elsewhere",
+                path.display()
+            )),
+            Ok(_) => {}
+            // Not there yet: nothing below it can be a link either.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(anyhow::Error::new(e).context(path.display().to_string())),
+        }
+    }
+    Ok(())
+}
+
 async fn download_tree(sftp: &SftpSession, remote: &str, local: &Path, progress: Progress) -> anyhow::Result<()> {
     let entries = walk_remote(sftp, remote, Some(&progress)).await?;
     progress.add_total(entries.iter().filter(|e| !e.1).map(|e| e.2).sum());
@@ -464,6 +500,8 @@ async fn download_tree(sftp: &SftpSession, remote: &str, local: &Path, progress:
             target.starts_with(local) && target.components().count() == local.components().count() + rel.split('/').count(),
             "unsafe path {rel:?}"
         );
+        // Checked right before each use, so links made along the way count too.
+        ensure_no_links(local, &rel)?;
         if is_dir {
             tokio::fs::create_dir_all(&target).await?;
         } else {

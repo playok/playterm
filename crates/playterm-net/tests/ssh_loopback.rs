@@ -889,6 +889,57 @@ fn sftp_cancel_removes_partial_upload() {
     assert!(!fx.dir.join("sftp").join("huge.bin").exists(), "partial upload must be removed");
 }
 
+#[cfg(unix)]
+#[test]
+fn sftp_folder_download_does_not_follow_local_links() {
+    let fx = Fixture::new("sftp-links", &[]);
+    fx.trust_host();
+    let root = fx.dir.join("sftp");
+    std::fs::create_dir_all(root.join("docs").join("deep")).unwrap();
+    std::fs::write(root.join("docs").join("deep").join("a.txt"), "from the server").unwrap();
+    std::fs::write(root.join("docs").join("b.txt"), "b").unwrap();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+
+    // A folder elsewhere, and a link to it inside the download target.
+    let outside = fx.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("a.txt"), "precious").unwrap();
+    let target = fx.dir.join("dl");
+    std::fs::create_dir_all(&target).unwrap();
+    std::os::unix::fs::symlink(&outside, target.join("deep")).unwrap();
+    let id = sftp.download("/docs", &target, true);
+    match transfer_result(&sftp, id) {
+        TransferState::Failed(e) => assert!(e.contains("deep"), "{e}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert_eq!(std::fs::read_to_string(outside.join("a.txt")).unwrap(), "precious", "nothing written through the link");
+
+    // A link to a file elsewhere is not replaced either.
+    let target = fx.dir.join("dl-file");
+    std::fs::create_dir_all(&target).unwrap();
+    std::os::unix::fs::symlink(outside.join("a.txt"), target.join("b.txt")).unwrap();
+    let id = sftp.download("/docs", &target, true);
+    assert!(matches!(transfer_result(&sftp, id), TransferState::Failed(_)));
+    assert_eq!(std::fs::read_to_string(outside.join("a.txt")).unwrap(), "precious");
+
+    // Plain folders already there are fine, and a target folder that is itself a link (the
+    // user's choice) too.
+    let target = fx.dir.join("dl-plain");
+    std::fs::create_dir_all(target.join("deep")).unwrap();
+    let id = sftp.download("/docs", &target, true);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(target.join("deep").join("a.txt")).unwrap(), "from the server");
+    let chosen = fx.dir.join("chosen-link");
+    let real = fx.dir.join("real-target");
+    std::fs::create_dir_all(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &chosen).unwrap();
+    let id = sftp.download("/docs", &chosen, true);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(real.join("b.txt")).unwrap(), "b");
+}
+
 #[test]
 fn sftp_cancelled_download_keeps_the_existing_file() {
     let fx = Fixture::new("sftp-cancel-down", &[]);
