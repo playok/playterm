@@ -33,6 +33,7 @@ use crate::view::UserInput;
 use crate::{clip_keys, clipboard, fonts, local_fs, status_bar, view};
 
 mod broadcast;
+mod closing;
 mod commands;
 mod frame;
 mod prompt;
@@ -45,6 +46,7 @@ mod windows;
 mod zmodem;
 
 use self::broadcast::broadcast_status;
+use self::closing::{CloseRequest, ClosedTab};
 use self::theme::apply_ui;
 pub use self::windows::MAIN_WINDOW;
 use self::windows::Windows;
@@ -156,6 +158,8 @@ enum Modal {
     Settings(Box<SettingsDialog>),
     Import(Box<ImportDialog>),
     Macros(Box<crate::macros::MacroDialog>),
+    /// Closing would end connections: asks first; the flag is the "do not ask again" box.
+    ConfirmClose(CloseRequest, bool),
 }
 
 /// Font size changes from zooming are saved once they have settled for this long.
@@ -272,6 +276,10 @@ pub struct PlaytermApp {
     windows: Windows,
     /// New releases on GitHub.
     updater: Updater,
+    /// Tabs closed lately, to open again (see [`closing`]).
+    closed_tabs: Vec<ClosedTab>,
+    /// The user agreed to quit with connections up: the next close request goes through.
+    quit_confirmed: bool,
 }
 
 impl PlaytermApp {
@@ -342,6 +350,8 @@ impl PlaytermApp {
             current_window: MAIN_WINDOW,
             windows: Windows::new(),
             updater: Updater::default(),
+            closed_tabs: Vec::new(),
+            quit_confirmed: false,
         };
         // Development builds (cargo run) are not replaced by releases unless asked.
         if app.settings.check_updates && !cfg!(debug_assertions) {

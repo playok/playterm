@@ -19,7 +19,7 @@ impl PlaytermApp {
             Command::ImportXshell => {
                 self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::Xshell))));
             }
-            Command::Quit => ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
+            Command::Quit => self.request_close(ctx, CloseRequest::Quit),
 
             Command::Copy => {
                 if let Some(s) = self.sessions.get_mut(self.active) {
@@ -163,14 +163,17 @@ impl PlaytermApp {
                     s.close();
                 }
             }
-            Command::Close(i) if i < n => self.close_session(i),
-            Command::Reconnect(_) | Command::Close(_) => {}
-            Command::CloseOthers(i) if i < n => {
-                // The other tabs of this window; those of other windows stay.
-                let (keep, window) = (self.sessions[i].id, self.sessions[i].window);
-                self.close_where(|s| s.window == window && s.id != keep);
-                self.active = self.index_of(keep).unwrap_or(0);
+            Command::Close(i) if i < n => {
+                let id = self.sessions[i].id;
+                self.request_close(ctx, CloseRequest::Tab(id));
             }
+            Command::Reconnect(_) | Command::Close(_) => {}
+            // The other tabs of this window; those of other windows stay.
+            Command::CloseOthers(i) if i < n => {
+                let keep = self.sessions[i].id;
+                self.request_close(ctx, CloseRequest::Others(keep));
+            }
+            Command::ReopenClosed => self.reopen_closed(),
             Command::CloseOthers(_) => {}
             Command::ToggleBroadcast => {
                 self.broadcast = !self.broadcast;
@@ -191,10 +194,7 @@ impl PlaytermApp {
             }
             Command::CloseAll => {
                 let window = self.current_window;
-                self.close_where(|s| s.window == window);
-                self.active = 0;
-                self.fix_active();
-                self.ensure_main_tab();
+                self.request_close(ctx, CloseRequest::All(window));
             }
 
             Command::TogglePreventScreensaver => {
@@ -242,10 +242,11 @@ impl PlaytermApp {
 
 impl PlaytermApp {
     /// Closes the tabs matching `which`.
-    fn close_where(&mut self, which: impl Fn(&Session) -> bool) {
+    pub(super) fn close_where(&mut self, which: impl Fn(&Session) -> bool) {
         let (closing, keep): (Vec<Session>, Vec<Session>) = std::mem::take(&mut self.sessions).into_iter().partition(|s| which(s));
         self.sessions = keep;
         for mut s in closing {
+            self.remember_closed(&s);
             s.close();
         }
     }

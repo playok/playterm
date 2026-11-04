@@ -67,6 +67,8 @@ pub enum Command {
     Close(usize),
     CloseOthers(usize),
     CloseAll,
+    /// Opens the tab closed last again.
+    ReopenClosed,
     /// Simultaneous input: what is typed in the active tab also goes to the other tabs.
     ToggleBroadcast,
     /// Whether this tab receives simultaneous input.
@@ -112,6 +114,8 @@ pub struct MenuState<'a> {
     /// A newer release that was found and not installed or skipped.
     pub update: Option<String>,
     pub macros: &'a [playterm_config::Macro],
+    /// A closed tab can be opened again.
+    pub can_reopen: bool,
 }
 
 /// Adds a menu item; a click records `command` and closes the menu.
@@ -290,10 +294,13 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             }
             let can_reconnect = active.is_some_and(|s| s.has_target());
             item(ui, out, t("다시 연결", "Reconnect"), "", can_reconnect, Command::Reconnect(i));
+            let can_disconnect = active.is_some_and(Session::can_disconnect);
+            item(ui, out, t("연결 끊기", "Disconnect"), "", can_disconnect, Command::Disconnect(i));
             ui.separator();
             item(ui, out, t("탭 닫기", "Close tab"), keys("Ctrl+Shift+W", "⌘W"), active.is_some(), Command::Close(i));
             item(ui, out, t("다른 탭 모두 닫기", "Close other tabs"), "", n > 1, Command::CloseOthers(i));
             item(ui, out, t("모든 탭 닫기", "Close all tabs"), "", n > 0, Command::CloseAll);
+            item(ui, out, t("닫은 탭 다시 열기", "Reopen closed tab"), "", st.can_reopen, Command::ReopenClosed);
             ui.separator();
             check(ui, out, t("모든 탭에 동시 입력", "Type into all tabs"), "Ctrl+Shift+I", st.broadcast, Command::ToggleBroadcast);
             if n > 0 {

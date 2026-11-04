@@ -139,6 +139,8 @@ pub struct AppSettings {
     pub prevent_screensaver: bool,
     /// Seconds to wait for a server while connecting before giving up (prompts not counted).
     pub connect_timeout: u32,
+    /// Ask before closing tabs (or quitting) while their connections are up.
+    pub confirm_close: bool,
     /// Copy / paste keys of the terminal.
     pub clipboard: ClipboardKeys,
     /// Tree or grid in the site manager.
@@ -245,6 +247,7 @@ impl Default for AppSettings {
             prevent_sleep: PreventSleep::System,
             prevent_screensaver: false,
             connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
+            confirm_close: true,
             clipboard: ClipboardKeys::default(),
             site_view: SiteView::Tree,
             zmodem_dir: String::new(),
@@ -294,6 +297,7 @@ mod tests {
             prevent_sleep: PreventSleep::Display,
             prevent_screensaver: true,
             connect_timeout: 60,
+            confirm_close: false,
             clipboard: ClipboardKeys { copy_on_select: true, ctrl_v: false, right_click_paste: true, ..Default::default() },
             site_view: SiteView::Grid,
             zmodem_dir: "D:\\받은 파일".into(),
