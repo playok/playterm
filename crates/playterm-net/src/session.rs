@@ -220,12 +220,25 @@ pub(crate) enum SessionCommand {
 pub const MAX_PENDING_OUTPUT: usize = 8 * 1024 * 1024;
 
 /// Received output waiting in the event queue, shared by the connection and the UI.
-#[derive(Default)]
 struct Backlog {
     bytes: std::sync::atomic::AtomicUsize,
     /// The UI took some, or went away.
     taken: tokio::sync::Notify,
     closed: std::sync::atomic::AtomicBool,
+    /// Set when the UI closes the session: a connection still being set up stops at once
+    /// (the command queue is only read once connected).
+    cancel: tokio::sync::watch::Sender<bool>,
+}
+
+impl Default for Backlog {
+    fn default() -> Self {
+        Self {
+            bytes: Default::default(),
+            taken: Default::default(),
+            closed: Default::default(),
+            cancel: tokio::sync::watch::Sender::new(false),
+        }
+    }
 }
 
 /// UI-side handle to a running session. Dropping it closes the session.
@@ -243,6 +256,7 @@ impl Drop for SessionHandle {
         // A connection waiting for the UI to take output must not wait for ever.
         self.backlog.closed.store(true, std::sync::atomic::Ordering::Release);
         self.backlog.taken.notify_waiters();
+        self.backlog.cancel.send_replace(true);
     }
 }
 
@@ -281,6 +295,8 @@ impl SessionHandle {
 
     pub fn close(&self) {
         let _ = self.commands.send(SessionCommand::Close);
+        // Still connecting (or waiting on a host key / password answer): stop that too.
+        self.backlog.cancel.send_replace(true);
     }
 
     /// Sends a BREAK signal (serial line break, Telnet `IAC BRK`).
@@ -336,7 +352,13 @@ impl EventSink {
         params: &ConnectParams,
         connecting: impl Future<Output = anyhow::Result<T>>,
     ) -> anyhow::Result<T> {
-        self.deadline.limit(params.connect_timeout, connecting).await
+        let mut cancel = self.backlog.cancel.subscribe();
+        tokio::select! {
+            result = self.deadline.limit(params.connect_timeout, connecting) => result,
+            _ = cancel.wait_for(|&cancelled| cancelled) => {
+                Err(anyhow::anyhow!(playterm_i18n::t("연결을 취소했습니다", "Connection cancelled")))
+            }
+        }
     }
 
     pub fn send(&self, event: SessionEvent) {
@@ -472,5 +494,55 @@ mod tests {
         assert!(!waiting.is_finished(), "full: it waits");
         drop(handle);
         tokio::time::timeout(std::time::Duration::from_secs(1), waiting).await.expect("released when the tab closed").unwrap();
+    }
+
+    /// Disconnecting while the host key question is still open ends the connecting at once,
+    /// instead of after the answer (the command queue is only read once connected).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn closing_stops_a_connection_waiting_on_a_question() {
+        let (handle, _commands, sink) = SessionHandle::new(Arc::new(|| {}));
+        let params = ConnectParams {
+            protocol: Protocol::Ssh,
+            host: "example.com".into(),
+            port: 22,
+            username: String::new(),
+            password: None,
+            identity_file: None,
+            default_identity_files: Vec::new(),
+            use_agent: false,
+            agent_pipe: None,
+            forwards: Vec::new(),
+            serial: Default::default(),
+            keepalive: Default::default(),
+            rdp: Default::default(),
+            desktop: (1024, 768),
+            term_type: "xterm".into(),
+            cols: 80,
+            rows: 24,
+            known_hosts: Default::default(),
+            connect_timeout: Duration::from_secs(60),
+            jump: None,
+            x11: None,
+        };
+        let asking = sink.clone();
+        let connecting = tokio::spawn(async move {
+            sink.connecting(&params, async move {
+                let trusted = asking.confirm_host_key("example.com", 22, "ssh-ed25519".into(), "SHA256:x".into()).await;
+                Ok(trusted)
+            })
+            .await
+        });
+        // The question reaches the UI; nobody answers it.
+        let question = loop {
+            match handle.try_recv() {
+                Some(SessionEvent::HostKeyCheck(q)) => break q,
+                Some(_) => {}
+                None => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        };
+        handle.close();
+        let result = tokio::time::timeout(Duration::from_secs(1), connecting).await.expect("stopped at once").unwrap();
+        assert!(result.is_err(), "cancelled, not connected: {result:?}");
+        drop(question);
     }
 }

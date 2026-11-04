@@ -120,6 +120,17 @@ impl PlaytermApp {
                     }
                 }
             }
+            Modal::ConfirmClose(request, mut dont_ask) => match self.ask_close(ctx, request, &mut dont_ask) {
+                None => self.modal = Some(Modal::ConfirmClose(request, dont_ask)),
+                Some(false) => {}
+                Some(true) => {
+                    if dont_ask {
+                        self.settings.confirm_close = false;
+                        self.save_settings();
+                    }
+                    self.close_now(ctx, request);
+                }
+            },
             Modal::ConfirmDelete(id) => {
                 let name = self.store.get(&id).map(|p| p.display_name()).unwrap_or_default();
                 let text = tr!("'{name}' 사이트를 삭제할까요?", "Delete site '{name}'?");
@@ -164,7 +175,8 @@ impl PlaytermApp {
         if let Some(index) = self.sessions.iter().position(|s| s.window == window && s.pending_paste.is_some()) {
             self.active = index;
             let text = self.sessions[index].pending_paste.clone().unwrap_or_default();
-            match dialogs::confirm_paste(ctx, &text) {
+            let others: Vec<String> = self.broadcast_targets().into_iter().map(|k| self.sessions[k].tab_title()).collect();
+            match dialogs::confirm_paste(ctx, &text, &others) {
                 None => {}
                 Some(false) => self.sessions[index].pending_paste = None,
                 Some(true) => {
@@ -187,7 +199,11 @@ impl PlaytermApp {
                 self.save_settings();
             }
             Some(update::Action::Restart(exe)) => match std::process::Command::new(&exe).spawn() {
-                Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                // The update dialog already said how many connections end.
+                Ok(_) => {
+                    self.quit_confirmed = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close)
+                }
                 Err(e) => self.status = Some(tr!("{} 를 시작할 수 없습니다: {e}", "Cannot start {}: {e}", exe.display())),
             },
         }
@@ -268,6 +284,7 @@ impl PlaytermApp {
             paste_hint: clip_keys::paste_hint(&self.settings.clipboard),
             update: self.updater.pending().map(|v| v.to_string()),
             macros: &self.settings.macros,
+            can_reopen: self.can_reopen(),
         };
         if let Some(command) = menu::menu_bar(ui, &state) {
             let ctx = ui.ctx().clone();

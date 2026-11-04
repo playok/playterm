@@ -157,17 +157,92 @@ fn fake_device() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        let Ok((mut stream, _)) = listener.accept() else { return };
-        let _ = stream.write_all(b"router# ");
-        let reader = BufReader::new(stream.try_clone().unwrap());
-        for line in reader.split(b'\r').map_while(Result::ok) {
-            let line = String::from_utf8_lossy(&line).trim_matches(['\n', '\0']).to_owned();
-            if stream.write_all(format!("\r\nout:{line}\r\nrouter# ").as_bytes()).is_err() {
-                break;
-            }
+        // Every connection made to it (a tab opened again connects anew).
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            std::thread::spawn(move || {
+                let _ = stream.write_all(b"router# ");
+                let reader = BufReader::new(stream.try_clone().unwrap());
+                for line in reader.split(b'\r').map_while(Result::ok) {
+                    let line = String::from_utf8_lossy(&line).trim_matches(['\n', '\0']).to_owned();
+                    if stream.write_all(format!("\r\nout:{line}\r\nrouter# ").as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            });
         }
     });
     port
+}
+
+/// Connects the start screen's tab to a fake Telnet device through Quick Connect.
+fn connect_telnet(harness: &mut App, port: u16) {
+    click(harness, "빠른 연결");
+    let dialog = harness.get_by_role(Role::Dialog);
+    dialog.get_by_role_and_label(Role::RadioButton, "Telnet").click();
+    harness.run_steps(2);
+    let dialog = harness.get_by_role(Role::Dialog);
+    let inputs: Vec<Node<'_>> = dialog.query_all_by_role(Role::TextInput).collect();
+    type_into(harness, &inputs[0], "127.0.0.1");
+    type_into(harness, &inputs[1], &port.to_string());
+    harness.run_steps(2);
+    click(harness, "연결");
+    run_until(harness, "the device's prompt", |h| {
+        let s = &mut h.state_mut().test_sessions()[0];
+        s.state == SessionState::Connected && s.screen_contains("router#")
+    });
+}
+
+/// Closing a connected tab asks first (#122); a closed tab opens again (#123).
+#[test]
+fn closing_a_connected_tab_asks_and_it_opens_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = app(dir.path());
+    let port = fake_device();
+    connect_telnet(&mut harness, port);
+
+    // Asked, and Cancel keeps the connection.
+    menu(&mut harness, "탭", "탭 닫기");
+    assert!(harness.state().test_modal_open(), "asked before closing");
+    assert!(has_label_text(&harness, "연결 1개가 끊어집니다."));
+    click(&mut harness, "취소");
+    assert!(!harness.state().test_modal_open());
+    assert_eq!(harness.state_mut().test_sessions()[0].state, SessionState::Connected, "still connected");
+
+    // Agreed: the tab goes (a fresh prompt takes its place).
+    menu(&mut harness, "탭", "탭 닫기");
+    click(&mut harness, "닫기");
+    assert_eq!(harness.state_mut().test_sessions().len(), 1);
+    assert_eq!(harness.state_mut().test_sessions()[0].state, SessionState::Local);
+
+    // Opened again: the same device, connected anew.
+    menu(&mut harness, "탭", "닫은 탭 다시 열기");
+    run_until(&mut harness, "the device again", |h| {
+        h.state_mut().test_sessions().iter_mut().any(|s| s.state == SessionState::Connected && s.screen_contains("router#"))
+    });
+
+    // A closed (not connected) tab closes without a question.
+    let n = harness.state_mut().test_sessions().len();
+    let local = harness.state_mut().test_sessions().iter().position(|s| s.state == SessionState::Local);
+    if let Some(i) = local {
+        let ctx = harness.ctx.clone();
+        harness.state_mut().test_run(&ctx, Command::Close(i));
+        harness.run_steps(2);
+        assert!(!harness.state().test_modal_open(), "nothing to lose: no question");
+        assert_eq!(harness.state_mut().test_sessions().len(), n - 1);
+    }
+}
+
+/// "Disconnect" is in the tab menu (#117) and ends the connection, keeping the tab.
+#[test]
+fn the_tab_menu_disconnects() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = app(dir.path());
+    let port = fake_device();
+    connect_telnet(&mut harness, port);
+    menu(&mut harness, "탭", "연결 끊기");
+    run_until(&mut harness, "the tab to close its connection", |h| h.state_mut().test_sessions()[0].state == SessionState::Closed);
+    assert_eq!(harness.state_mut().test_sessions().len(), 1, "the tab stays");
 }
 
 #[test]

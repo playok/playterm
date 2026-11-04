@@ -87,6 +87,36 @@ impl Section {
             Section::Updates => t("업데이트", "Updates"),
         }
     }
+
+    /// Puts the settings shown in this section back to their defaults. Everything else stays,
+    /// above all what the user made (macros, recent sites, the skipped update, the site view)
+    /// and the language.
+    fn reset(self, draft: &mut AppSettings) {
+        let d = AppSettings::default();
+        match self {
+            Section::Display => {
+                draft.ui_theme = d.ui_theme;
+                draft.font = d.font;
+                draft.font_size = d.font_size;
+                draft.theme = d.theme;
+            }
+            Section::Terminal => draft.scrollback = d.scrollback,
+            Section::Clipboard => {
+                draft.clipboard = d.clipboard;
+                draft.option_as_meta = d.option_as_meta;
+            }
+            Section::Connection => {
+                draft.connect_timeout = d.connect_timeout;
+                draft.confirm_close = d.confirm_close;
+                draft.prevent_sleep = d.prevent_sleep;
+            }
+            Section::Transfers => {
+                draft.zmodem_dir = d.zmodem_dir;
+                draft.zmodem_ask = d.zmodem_ask;
+            }
+            Section::Updates => draft.check_updates = d.check_updates,
+        }
+    }
 }
 
 impl SettingsDialog {
@@ -149,8 +179,13 @@ impl SettingsDialog {
                     result = Some(SettingsResult::Cancel(self.original.clone()));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(icon::button(icon::RESET, t("기본값으로", "Reset to defaults"))).clicked() {
-                        self.draft = AppSettings::default();
+                    let tip = tr!(
+                        "'{}' 섹션의 설정만 기본값으로 되돌립니다 (확인을 눌러야 저장됩니다)",
+                        "Puts only the '{}' settings back to their defaults (saved with OK)",
+                        self.section.name()
+                    );
+                    if ui.add(icon::button(icon::RESET, t("기본값으로", "Reset to defaults"))).on_hover_text(tip).clicked() {
+                        self.section.reset(&mut self.draft);
                     }
                 });
             });
@@ -376,6 +411,14 @@ impl SettingsDialog {
             ));
         });
         ui.end_row();
+
+        ui.label(t("닫기 확인", "Confirm close"));
+        ui.checkbox(&mut self.draft.confirm_close, t("연결된 탭을 닫거나 끝낼 때 확인", "Ask before closing connected tabs or quitting"))
+            .on_hover_text(t(
+                "연결 중이거나 연결된 탭을 닫으면 그 연결이 끊어지므로, 미리 보여 주고 확인을 받습니다.",
+                "Closing a connected (or connecting) tab ends its connection, so it is shown first for confirmation.",
+            ));
+        ui.end_row();
     }
 
     fn zmodem_row(&mut self, ui: &mut egui::Ui) {
@@ -534,5 +577,30 @@ mod section_tests {
         // The dialog keeps its height (the OK row stays put) from section to section.
         let (min, max) = heights.iter().fold((f32::MAX, 0.0f32), |(a, b), &h| (a.min(h), b.max(h)));
         assert!(max - min < 2.0, "heights {heights:?}");
+    }
+
+    /// "Reset to defaults" (#121) resets the section on show and nothing else: macros, recent
+    /// sites and the other sections stay.
+    #[test]
+    fn reset_keeps_what_the_user_made() {
+        let mut s = AppSettings {
+            font_size: 22.0,
+            scrollback: 1234,
+            macros: vec![playterm_config::Macro { name: "deploy".into(), script: "ls".into() }],
+            recent_sites: vec!["site".into()],
+            skipped_update: "9.9.9".into(),
+            language: Language::English,
+            ..AppSettings::default()
+        };
+        Section::Display.reset(&mut s);
+        assert_eq!(s.font_size, AppSettings::default().font_size, "the section on show is reset");
+        assert_eq!(s.scrollback, 1234, "other sections stay");
+        assert_eq!(s.macros.len(), 1);
+        assert_eq!(s.recent_sites, ["site"]);
+        assert_eq!(s.skipped_update, "9.9.9");
+        assert_eq!(s.language, Language::English);
+        Section::Terminal.reset(&mut s);
+        assert_eq!(s.scrollback, AppSettings::default().scrollback);
+        assert_eq!(s.macros.len(), 1);
     }
 }

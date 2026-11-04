@@ -42,10 +42,12 @@ pub fn show(ui: &mut egui::Ui, st: &ToolbarState<'_>) -> Option<Command> {
     tool(ui, out, icon::SITE_MANAGER, t("사이트 관리", "Site Manager"), "Ctrl+Shift+S", true, None, Command::SiteManager);
     ui.separator();
 
-    let can_reconnect = active.is_some_and(|s| s.has_target());
-    let connected = active.is_some_and(|s| matches!(s.state, SessionState::Connected | SessionState::Connecting));
+    // One click on the toolbar must not end a working session: reconnecting is for a closed
+    // tab here (the menus still offer it for a connected one).
+    let can_reconnect = active.is_some_and(|s| s.has_target() && s.state == SessionState::Closed);
+    let can_disconnect = active.is_some_and(Session::can_disconnect);
     tool(ui, out, icon::RECONNECT, t("다시 연결", "Reconnect"), "", can_reconnect, None, Command::Reconnect(i));
-    tool(ui, out, icon::DISCONNECT, t("연결 끊기", "Disconnect"), "", connected, None, Command::Disconnect(i));
+    tool(ui, out, icon::DISCONNECT, t("연결 끊기", "Disconnect"), "", can_disconnect, None, Command::Disconnect(i));
     ui.separator();
 
     let has_selection = active.is_some_and(|s| s.terminal.has_selection());

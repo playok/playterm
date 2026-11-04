@@ -404,12 +404,21 @@ impl Behavior<u64> for DockView<'_> {
             if self.detached {
                 entries.push((t("메인 창으로 합치기", "Move to main window"), Command::MoveToMain(i)));
             }
-            entries.extend([
-                (t("다시 연결", "Reconnect"), Command::Reconnect(i)),
-                (t("닫기", "Close"), Command::Close(i)),
-                (t("다른 탭 모두 닫기", "Close other tabs"), Command::CloseOthers(i)),
-            ]);
+            entries.push((t("다시 연결", "Reconnect"), Command::Reconnect(i)));
             for (label, c) in entries {
+                if ui.button(label).clicked() {
+                    *command = Some(c);
+                    ui.close();
+                }
+            }
+            if ui.add_enabled(s.can_disconnect(), egui::Button::new(t("연결 끊기", "Disconnect"))).clicked() {
+                *command = Some(Command::Disconnect(i));
+                ui.close();
+            }
+            ui.separator();
+            for (label, c) in
+                [(t("닫기", "Close"), Command::Close(i)), (t("다른 탭 모두 닫기", "Close other tabs"), Command::CloseOthers(i))]
+            {
                 if ui.button(label).clicked() {
                     *command = Some(c);
                     ui.close();

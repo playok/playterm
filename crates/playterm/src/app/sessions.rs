@@ -324,6 +324,7 @@ impl PlaytermApp {
 
     pub(super) fn close_session(&mut self, index: usize) {
         let mut session = self.sessions.remove(index);
+        self.remember_closed(&session);
         session.close();
         if self.active > index || self.active >= self.sessions.len() {
             self.active = self.active.saturating_sub(1);

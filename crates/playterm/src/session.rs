@@ -1656,6 +1656,15 @@ impl Session {
         if let Some(remote) = &self.remote {
             remote.handle.close();
         }
+        // A question the connection was waiting on goes with it (the connecting stops).
+        self.host_key = None;
+        self.auth = None;
+    }
+
+    /// Whether the connection can be ended (the tab stays): connected, or still connecting
+    /// (also while a host key or login question waits).
+    pub fn can_disconnect(&self) -> bool {
+        matches!(self.state, SessionState::Connected | SessionState::Connecting) && self.remote.is_some()
     }
 }
 

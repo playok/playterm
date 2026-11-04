@@ -230,11 +230,66 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
     if close && answer.is_none() { Some(false) } else { answer }
 }
 
+/// What closing would end, for [`confirm_close`].
+pub struct CloseQuestion<'a> {
+    pub title: &'a str,
+    /// The button that closes (`닫기`, `끝내기`).
+    pub ok_label: &'a str,
+    /// Titles of the tabs whose connections would end.
+    pub tabs: &'a [String],
+    /// How many of them are moving files (ZMODEM, SFTP).
+    pub transferring: usize,
+}
+
+/// Asks before closing tabs whose connections are up. `Some(true)` = close; `dont_ask` is the
+/// "do not ask again" box.
+pub fn confirm_close(ctx: &egui::Context, q: &CloseQuestion<'_>, dont_ask: &mut bool) -> Option<bool> {
+    const SHOWN: usize = 6;
+    let mut answer = None;
+    let close = modal(("confirm-close", q.title), ctx, |ui| {
+        ui.set_width(380.0);
+        ui.heading(q.title);
+        ui.label(tr!("연결 {}개가 끊어집니다.", "{} connections will end.", q.tabs.len()));
+        ui.add_space(4.0);
+        for name in q.tabs.iter().take(SHOWN) {
+            ui.label(format!("• {name}"));
+        }
+        if q.tabs.len() > SHOWN {
+            ui.weak(tr!("… 외 {}개", "… and {} more", q.tabs.len() - SHOWN));
+        }
+        if q.transferring > 0 {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(tr!(
+                    "⚠ 파일 전송 중인 탭 {}개: 전송이 중단됩니다.",
+                    "⚠ {} tabs are transferring files: the transfers stop.",
+                    q.transferring
+                ))
+                .strong()
+                .color(ui.visuals().warn_fg_color),
+            );
+        }
+        ui.add_space(8.0);
+        ui.checkbox(dont_ask, t("다시 묻지 않기 (설정 → 연결에서 되돌림)", "Do not ask again (undo in Settings → Connection)"));
+        ui.add_space(6.0);
+        let ok = icon::primary(ui, icon::CLOSE, q.ok_label);
+        let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
+        if main.clicked() {
+            answer = Some(true);
+        }
+        if cancel.clicked() {
+            answer = Some(false);
+        }
+    });
+    if close && answer.is_none() { Some(false) } else { answer }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Help
 
 /// Asks before pasting several lines that would each run as a command. `Some(true)`: paste.
-pub fn confirm_paste(ctx: &egui::Context, text: &str) -> Option<bool> {
+/// `others`: the titles of the other tabs the paste also goes to (simultaneous input).
+pub fn confirm_paste(ctx: &egui::Context, text: &str, others: &[String]) -> Option<bool> {
     const SHOWN_LINES: usize = 8;
     const SHOWN_CHARS: usize = 100;
     let lines: Vec<&str> = text.lines().collect();
@@ -258,6 +313,16 @@ pub fn confirm_paste(ctx: &egui::Context, text: &str) -> Option<bool> {
             "This pastes {} lines. Each ends with Enter, so every line may run as a command right away.",
             lines.len()
         ));
+        if !others.is_empty() {
+            ui.add_space(4.0);
+            let warning = tr!(
+                "⚠ 동시 입력 중: 이 탭과 다른 탭 {}개에 함께 붙여넣습니다 — {}",
+                "⚠ Simultaneous input: this also pastes into {} other tabs — {}",
+                others.len(),
+                others.join(", ")
+            );
+            ui.label(egui::RichText::new(warning).strong().color(ui.visuals().warn_fg_color));
+        }
         ui.add_space(6.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(ui.available_width());
