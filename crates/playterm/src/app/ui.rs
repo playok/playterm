@@ -138,12 +138,14 @@ impl PlaytermApp {
 
     /// Prompts from the network layer take priority over app dialogs.
     pub(super) fn show_session_prompts(&mut self, ctx: &egui::Context) -> bool {
-        if let Some(index) = self.sessions.iter().position(|s| s.host_key.is_some()) {
+        // Each window asks for its own tabs.
+        let window = self.current_window;
+        if let Some(index) = self.sessions.iter().position(|s| s.window == window && s.host_key.is_some()) {
             self.active = index;
             dialogs::host_key(ctx, &mut self.sessions[index]);
             return true;
         }
-        if let Some(index) = self.sessions.iter().position(|s| s.auth.is_some()) {
+        if let Some(index) = self.sessions.iter().position(|s| s.window == window && s.auth.is_some()) {
             self.active = index;
             let site = self.sessions[index].site().and_then(|id| self.store.get(id)).cloned();
             if let Some(relogin) = dialogs::auth(ctx, &mut self.sessions[index], site.is_some()) {
@@ -159,7 +161,7 @@ impl PlaytermApp {
             }
             return true;
         }
-        if let Some(index) = self.sessions.iter().position(|s| s.pending_paste.is_some()) {
+        if let Some(index) = self.sessions.iter().position(|s| s.window == window && s.pending_paste.is_some()) {
             self.active = index;
             let text = self.sessions[index].pending_paste.clone().unwrap_or_default();
             match dialogs::confirm_paste(ctx, &text) {
@@ -201,6 +203,23 @@ impl PlaytermApp {
                 Shortcut::Paste => !keys.ctrl_shift_v,
                 _ => false,
             };
+            // A window tabs were moved to has no menus or side panels: only what works on its tabs.
+            let tab_only = matches!(
+                what,
+                Shortcut::Find
+                    | Shortcut::Broadcast
+                    | Shortcut::PrevTab
+                    | Shortcut::NextTab
+                    | Shortcut::CloseTab
+                    | Shortcut::DuplicateTab
+                    | Shortcut::Copy
+                    | Shortcut::Paste
+                    | Shortcut::Fullscreen
+                    | Shortcut::ZoomIn
+                    | Shortcut::ZoomOut
+                    | Shortcut::ZoomReset
+            );
+            let off = off || (self.current_window != MAIN_WINDOW && !tab_only);
             if off || !ctx.input_mut(|i| i.consume_shortcut(shortcut)) {
                 continue;
             }

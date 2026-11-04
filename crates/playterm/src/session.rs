@@ -221,6 +221,8 @@ pub struct Session {
     pub in_broadcast: bool,
     /// Color of the tab in the tab bar.
     pub tab_color: Option<TabColor>,
+    /// The window the tab is in: [`crate::app::MAIN_WINDOW`] or one it was moved out to.
+    pub window: u64,
     /// The remote screen of an RDP connection.
     pub rdp: RdpScreen,
     /// An SFTP channel was requested and has not answered yet.
@@ -322,6 +324,7 @@ impl Session {
             search: None,
             in_broadcast: true,
             tab_color: None,
+            window: crate::app::MAIN_WINDOW,
             rdp: RdpScreen::default(),
             sftp_pending: false,
             sftp_start: None,

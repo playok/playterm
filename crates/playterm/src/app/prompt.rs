@@ -5,9 +5,11 @@ use super::*;
 impl PlaytermApp {
     /// Carries out commands typed at the prompt of any tab.
     pub(super) fn console_requests(&mut self) {
+        let window = self.current_window;
         let pending: Vec<(u64, Request)> = self
             .sessions
             .iter_mut()
+            .filter(|s| s.window == window)
             .flat_map(|s| {
                 let id = s.id;
                 std::mem::take(&mut s.requests).into_iter().map(move |r| (id, r))

@@ -12,7 +12,8 @@ use egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, Node};
 
-use crate::app::PlaytermApp;
+use crate::app::{MAIN_WINDOW, PlaytermApp};
+use crate::menu::Command;
 use crate::session::SessionState;
 
 type App = Harness<'static, PlaytermApp>;
@@ -309,6 +310,40 @@ fn macros_are_checked_saved_and_listed() {
     menu(&mut harness, "도구", "매크로");
     let item = harness.query_all_by_role(Role::Button).find(|n| label(n).trim_start().starts_with("점검")).expect("listed in the menu");
     assert!(item.accesskit_node().is_disabled(), "off without a connected tab");
+}
+
+/// Each tab's id and window.
+fn tab_windows(harness: &mut App) -> Vec<(u64, u64)> {
+    harness.state_mut().test_sessions().iter().map(|s| (s.id, s.window)).collect()
+}
+
+#[test]
+fn a_tab_moves_to_a_window_of_its_own_and_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = app(dir.path());
+    let first = tab_windows(&mut harness)[0].0;
+    menu(&mut harness, "탭", "새 창으로 분리");
+    let tabs = tab_windows(&mut harness);
+    assert!(tabs.iter().any(|&(id, w)| id == first && w != MAIN_WINDOW), "moved out: {tabs:?}");
+    assert!(tabs.iter().any(|&(_, w)| w == MAIN_WINDOW), "the main window got a prompt: {tabs:?}");
+    assert_eq!(harness.state().test_window_count(), 1);
+
+    // A second tab joins the new window, then both come back.
+    let i = tabs.iter().position(|&(_, w)| w == MAIN_WINDOW).unwrap();
+    let ctx = harness.ctx.clone();
+    harness.state_mut().test_run(&ctx, Command::OpenInNewWindow(i));
+    harness.run_steps(3);
+    assert_eq!(harness.state().test_window_count(), 2, "a window of its own");
+    assert_eq!(tab_windows(&mut harness).iter().filter(|&&(_, w)| w == MAIN_WINDOW).count(), 1, "a new prompt again");
+
+    for k in 0..tab_windows(&mut harness).len() {
+        let ctx = harness.ctx.clone();
+        harness.state_mut().test_run(&ctx, Command::MoveToMain(k));
+    }
+    harness.run_steps(3);
+    assert!(tab_windows(&mut harness).iter().all(|&(_, w)| w == MAIN_WINDOW));
+    assert_eq!(harness.state().test_window_count(), 0, "windows without tabs close");
+    assert!(tab_windows(&mut harness).iter().any(|&(id, _)| id == first), "the same session, not a new connection");
 }
 
 #[test]
