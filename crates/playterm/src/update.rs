@@ -127,8 +127,9 @@ fn parse_latest(json: &str, current: Version) -> Result<Option<Release>, String>
     }
     let url = |name: &str| gh.assets.iter().find(|a| a.name == name).map(|a| a.browser_download_url.clone());
     let Some(package) = package_name(version) else { return Ok(None) };
-    let package_url = url(&package)
-        .ok_or_else(|| tr!("{version} 릴리스에 이 PC 용 패키지({package})가 없습니다", "Release {version} has no package for this PC ({package})"))?;
+    let package_url = url(&package).ok_or_else(|| {
+        tr!("{version} 릴리스에 이 PC 용 패키지({package})가 없습니다", "Release {version} has no package for this PC ({package})")
+    })?;
     let (Some(sums_url), Some(sig_url)) = (url(SUMS), url(SUMS_SIG)) else {
         return Err(tr!(
             "{version} 릴리스에 서명된 체크섬({SUMS_SIG})이 없어 자동으로 설치할 수 없습니다",
@@ -155,7 +156,13 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 
 /// Checks the signature of `SHA256SUMS.txt` against `public` (hex).
 fn verify_sums(sums: &[u8], sig_hex: &str, public: &str) -> Result<(), String> {
-    let bad = || t("체크섬 파일의 서명이 맞지 않습니다. 설치하지 않았습니다.", "The signature of the checksums does not match. Nothing was installed.").to_owned();
+    let bad = || {
+        t(
+            "체크섬 파일의 서명이 맞지 않습니다. 설치하지 않았습니다.",
+            "The signature of the checksums does not match. Nothing was installed.",
+        )
+        .to_owned()
+    };
     let sig = unhex(sig_hex.trim()).ok_or_else(bad)?;
     let public = unhex(public).expect("PUBLIC_KEY is hex");
     UnparsedPublicKey::new(&ED25519, public).verify(sums, &sig).map_err(|_| bad())
@@ -253,8 +260,7 @@ fn agent() -> ureq::Agent {
 }
 
 fn get_small(agent: &ureq::Agent, url: &str) -> Result<String, String> {
-    let mut response =
-        agent.get(url).header("Accept", "application/vnd.github+json").call().map_err(|e| format!("{url}: {e}"))?;
+    let mut response = agent.get(url).header("Accept", "application/vnd.github+json").call().map_err(|e| format!("{url}: {e}"))?;
     response.body_mut().with_config().limit(MAX_SMALL).read_to_string().map_err(|e| format!("{url}: {e}"))
 }
 
@@ -276,9 +282,8 @@ fn install(release: &Release, progress: &Progress, ctx: &egui::Context) -> Resul
     let agent = agent();
     let sums = get_small(&agent, &release.sums_url)?;
     verify_sums(sums.as_bytes(), &get_small(&agent, &release.sig_url)?, PUBLIC_KEY)?;
-    let expected = expected_hash(&sums, &release.package).ok_or_else(|| {
-        tr!("서명된 체크섬에 {} 가 없습니다", "The signed checksums do not list {}", release.package)
-    })?;
+    let expected = expected_hash(&sums, &release.package)
+        .ok_or_else(|| tr!("서명된 체크섬에 {} 가 없습니다", "The signed checksums do not list {}", release.package))?;
 
     let url = &release.package_url;
     let mut response = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
@@ -470,7 +475,8 @@ impl Updater {
                             if ui.add(icon::primary(ui, icon::UPDATE, t("업데이트", "Update"))).clicked() {
                                 install = Some(release.clone());
                             }
-                        } else if ui.add(icon::button(icon::WEB_PAGE, t("다운로드 페이지 열기", "Open the download page"))).clicked() {
+                        } else if ui.add(icon::button(icon::WEB_PAGE, t("다운로드 페이지 열기", "Open the download page"))).clicked()
+                        {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(&release.page));
                             keep = false;
                         }
@@ -490,8 +496,7 @@ impl Updater {
                     let total = self.progress.total.load(Ordering::Relaxed);
                     let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
                     let bar = if total > 0 {
-                        egui::ProgressBar::new((done as f64 / total as f64) as f32)
-                            .text(format!("{:.1} / {:.1} MB", mb(done), mb(total)))
+                        egui::ProgressBar::new((done as f64 / total as f64) as f32).text(format!("{:.1} / {:.1} MB", mb(done), mb(total)))
                     } else {
                         egui::ProgressBar::new(0.0).text(format!("{:.1} MB", mb(done))).animate(true)
                     };
@@ -505,7 +510,10 @@ impl Updater {
                     if connected > 0 {
                         ui.colored_label(
                             ui.visuals().warn_fg_color,
-                            tr!("지금 다시 시작하면 연결된 세션 {connected}개가 끊어집니다.", "Restarting now closes {connected} connected session(s)."),
+                            tr!(
+                                "지금 다시 시작하면 연결된 세션 {connected}개가 끊어집니다.",
+                                "Restarting now closes {connected} connected session(s)."
+                            ),
                         );
                     }
                     ui.add_space(8.0);
@@ -559,14 +567,9 @@ mod tests {
     }
 
     fn latest_json(tag: &str, assets: &[&str]) -> String {
-        let assets: Vec<String> = assets
-            .iter()
-            .map(|n| format!(r#"{{"name":"{n}","browser_download_url":"https://example.com/{n}"}}"#))
-            .collect();
-        format!(
-            r#"{{"tag_name":"{tag}","html_url":"https://example.com/r","body":"notes\r\nline","assets":[{}]}}"#,
-            assets.join(",")
-        )
+        let assets: Vec<String> =
+            assets.iter().map(|n| format!(r#"{{"name":"{n}","browser_download_url":"https://example.com/{n}"}}"#)).collect();
+        format!(r#"{{"tag_name":"{tag}","html_url":"https://example.com/r","body":"notes\r\nline","assets":[{}]}}"#, assets.join(","))
     }
 
     #[test]

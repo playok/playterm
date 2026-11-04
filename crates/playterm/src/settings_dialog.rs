@@ -7,8 +7,8 @@ use playterm_i18n::{t, tr};
 use playterm_term::{THEMES, Theme};
 
 use crate::fonts::{self, FontChoice};
-use crate::local_fs;
 use crate::icon;
+use crate::local_fs;
 
 pub enum SettingsResult {
     Open,
@@ -117,25 +117,23 @@ impl SettingsDialog {
             // The same height for every section, so the dialog does not jump when switching.
             ui.allocate_ui(egui::vec2(ui.available_width(), SECTION_HEIGHT), |ui| {
                 ui.set_min_height(SECTION_HEIGHT);
-                egui::Grid::new(("settings-grid", self.section)).num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                    match self.section {
-                        Section::Display => {
-                            self.ui_rows(ui);
-                            self.font_row(ui);
-                            self.size_row(ui);
-                            self.theme_row(ui);
-                        }
-                        Section::Terminal => self.scrollback_row(ui),
-                        Section::Clipboard => self.clipboard_rows(ui),
-                        Section::Connection => {
-                            self.timeout_row(ui);
-                            if crate::power::SUPPORTED {
-                                self.sleep_row(ui);
-                            }
-                        }
-                        Section::Transfers => self.zmodem_row(ui),
-                        Section::Updates => self.update_row(ui),
+                egui::Grid::new(("settings-grid", self.section)).num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| match self.section {
+                    Section::Display => {
+                        self.ui_rows(ui);
+                        self.font_row(ui);
+                        self.size_row(ui);
+                        self.theme_row(ui);
                     }
+                    Section::Terminal => self.scrollback_row(ui),
+                    Section::Clipboard => self.clipboard_rows(ui),
+                    Section::Connection => {
+                        self.timeout_row(ui);
+                        if crate::power::SUPPORTED {
+                            self.sleep_row(ui);
+                        }
+                    }
+                    Section::Transfers => self.zmodem_row(ui),
+                    Section::Updates => self.update_row(ui),
                 });
                 if self.section == Section::Display {
                     ui.add_space(8.0);
@@ -226,18 +224,12 @@ impl SettingsDialog {
             UiTheme::System => t("시스템 설정 따르기", "Follow the system"),
         };
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("ui-theme").width(200.0).selected_text(name(self.draft.ui_theme)).show_ui(
-                ui,
-                |ui| {
-                    for t in UiTheme::ALL {
-                        ui.selectable_value(&mut self.draft.ui_theme, t, name(t));
-                    }
-                },
-            );
-            ui.weak(t(
-                "메뉴·창의 밝기 (터미널 색은 아래 색 테마)",
-                "Brightness of menus and windows (terminal colors: color theme below)",
-            ));
+            egui::ComboBox::from_id_salt("ui-theme").width(200.0).selected_text(name(self.draft.ui_theme)).show_ui(ui, |ui| {
+                for t in UiTheme::ALL {
+                    ui.selectable_value(&mut self.draft.ui_theme, t, name(t));
+                }
+            });
+            ui.weak(t("메뉴·창의 밝기 (터미널 색은 아래 색 테마)", "Brightness of menus and windows (terminal colors: color theme below)"));
         });
         ui.end_row();
     }
@@ -251,9 +243,8 @@ impl SettingsDialog {
         );
         ui.separator();
         let filter = self.font_filter.trim().to_lowercase();
-        let shown = |f: &&FontChoice| {
-            filter.is_empty() || f.name.to_lowercase().contains(&filter) || f.key.to_lowercase().contains(&filter)
-        };
+        let shown =
+            |f: &&FontChoice| filter.is_empty() || f.name.to_lowercase().contains(&filter) || f.key.to_lowercase().contains(&filter);
         let mut picked = None;
         let mut list = |ui: &mut egui::Ui, monospace: bool| {
             let mut fonts: Vec<&FontChoice> = self.fonts.iter().filter(|f| f.monospace == monospace).filter(shown).collect();
@@ -421,13 +412,12 @@ impl SettingsDialog {
 
     fn update_row(&mut self, ui: &mut egui::Ui) {
         ui.label(t("업데이트", "Updates"));
-        ui.checkbox(&mut self.draft.check_updates, t("시작할 때 새 버전 확인", "Check for a new version at start-up"))
-            .on_hover_text(t(
-                "GitHub 의 최신 릴리스를 확인해 새 버전이 있으면 알려 줍니다. 설치는 확인을 받은 뒤에만 합니다.
+        ui.checkbox(&mut self.draft.check_updates, t("시작할 때 새 버전 확인", "Check for a new version at start-up")).on_hover_text(t(
+            "GitHub 의 최신 릴리스를 확인해 새 버전이 있으면 알려 줍니다. 설치는 확인을 받은 뒤에만 합니다.
 도움말 → 업데이트 확인 으로 언제든 직접 확인할 수 있습니다.",
-                "Looks up the latest release on GitHub and tells you about a new version. Nothing is installed without asking.
+            "Looks up the latest release on GitHub and tells you about a new version. Nothing is installed without asking.
 Help → Check for updates checks at any time.",
-            ));
+        ));
         ui.end_row();
     }
 

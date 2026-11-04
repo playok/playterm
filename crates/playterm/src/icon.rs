@@ -195,11 +195,7 @@ mod tests {
         let face = ttf_parser::Face::parse(FONT, 0).expect("the icon font parses");
         for (name, icon) in ALL {
             let c = icon.codepoint.chars().next().unwrap();
-            assert!(
-                face.glyph_index(c).is_some(),
-                "{name} (U+{:04X}) is not in the icon font: run assets/make_icon_font.py",
-                c as u32
-            );
+            assert!(face.glyph_index(c).is_some(), "{name} (U+{:04X}) is not in the icon font: run assets/make_icon_font.py", c as u32);
         }
     }
 }

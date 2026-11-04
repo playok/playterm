@@ -1,8 +1,8 @@
-use std::borrow::Cow;
 use crate::x11::{self, X11Forward};
+use std::borrow::Cow;
 use std::future::Future;
-use std::pin::Pin;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,10 +35,7 @@ pub(crate) struct ClientHandler {
 impl client::Handler for ClientHandler {
     type Error = anyhow::Error;
 
-    async fn check_server_key(
-        &mut self,
-        server_key: &PublicKeyOrCertificate,
-    ) -> Result<bool, Self::Error> {
+    async fn check_server_key(&mut self, server_key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
         let PublicKeyOrCertificate::PublicKey { key, .. } = server_key else {
             bail!(t("인증서 기반 호스트 키는 아직 지원하지 않습니다", "Certificate host keys are not supported yet"));
         };
@@ -65,19 +62,14 @@ impl client::Handler for ClientHandler {
             ));
         }
         let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
-        let accepted =
-            self.sink.confirm_host_key(&self.host, self.port, key.algorithm().to_string(), fingerprint).await;
+        let accepted = self.sink.confirm_host_key(&self.host, self.port, key.algorithm().to_string(), fingerprint).await;
         if accepted && let Err(e) = known_hosts::learn_known_hosts_path(&self.host, self.port, key, &self.known_hosts) {
             self.sink.notice(tr!("known_hosts 저장 실패: {e}", "Could not save known_hosts: {e}"));
         }
         Ok(accepted)
     }
 
-    async fn auth_banner(
-        &mut self,
-        banner: &str,
-        _session: &mut client::Session,
-    ) -> Result<(), Self::Error> {
+    async fn auth_banner(&mut self, banner: &str, _session: &mut client::Session) -> Result<(), Self::Error> {
         self.sink.notice(banner.to_owned());
         Ok(())
     }
@@ -94,8 +86,7 @@ impl client::Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         // Servers report the bound address in different spellings (``, `localhost`,
         // `127.0.0.1`), so rules are matched by port; two -R rules cannot share one anyway.
-        let Some(rule) = self.remote_forwards.iter().find(|r| u32::from(r.bind_port) == connected_port).cloned()
-        else {
+        let Some(rule) = self.remote_forwards.iter().find(|r| u32::from(r.bind_port) == connected_port).cloned() else {
             reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
         };
@@ -151,8 +142,7 @@ fn prefer(order: &[Algorithm], known: &[Algorithm]) -> Vec<Algorithm> {
         (Algorithm::Rsa { .. }, Algorithm::Rsa { .. }) => true,
         _ => a == b,
     };
-    let (mut first, rest): (Vec<Algorithm>, Vec<Algorithm>) =
-        order.iter().cloned().partition(|a| known.iter().any(|k| same_kind(a, k)));
+    let (mut first, rest): (Vec<Algorithm>, Vec<Algorithm>) = order.iter().cloned().partition(|a| known.iter().any(|k| same_kind(a, k)));
     first.extend(rest);
     first
 }
@@ -165,16 +155,11 @@ type Connecting<'a> = Pin<Box<dyn Future<Output = anyhow::Result<(client::Handle
 /// An authenticated SSH session with `params.host`: over TCP, or through `params.jump` (a
 /// direct-tcpip channel of the jump host's session, which may itself go through another).
 /// Returns the session and the jump hosts' sessions, outermost last.
-fn connect_ssh<'a>(
-    params: &'a ConnectParams,
-    sink: &'a EventSink,
-    x11: Option<Arc<X11Forward>>,
-) -> Connecting<'a> {
+fn connect_ssh<'a>(params: &'a ConnectParams, sink: &'a EventSink, x11: Option<Arc<X11Forward>>) -> Connecting<'a> {
     Box::pin(async move {
         // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
         let mut preferred = russh::Preferred::default();
-        preferred.key =
-            Cow::Owned(prefer_known_host_keys(&preferred.key, &params.host, params.port, &params.known_hosts));
+        preferred.key = Cow::Owned(prefer_known_host_keys(&preferred.key, &params.host, params.port, &params.known_hosts));
         let config = Arc::new(client::Config {
             keepalive_interval: (params.keepalive.mode != KeepAliveMode::Off).then(|| params.keepalive.period()),
             preferred,
@@ -190,9 +175,9 @@ fn connect_ssh<'a>(
         };
         let (mut session, hops) = match &params.jump {
             None => {
-                let stream = TcpStream::connect((params.host.as_str(), params.port)).await.with_context(|| {
-                    tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port)
-                })?;
+                let stream = TcpStream::connect((params.host.as_str(), params.port))
+                    .await
+                    .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
                 stream.set_nodelay(true)?;
                 (client::connect_stream(config, stream, handler).await?, Hops::new())
             }
@@ -237,22 +222,16 @@ async fn open(
     forward::start(&session, &params.forwards, sink, &mut tasks).await;
 
     let channel = session.channel_open_session().await?;
-    channel
-        .request_pty(
-            false,
-            &params.term_type,
-            params.cols.into(),
-            params.rows.into(),
-            0,
-            0,
-            &[],
-        )
-        .await?;
+    channel.request_pty(false, &params.term_type, params.cols.into(), params.rows.into(), 0, 0, &[]).await?;
     if let Some(x11) = &x11 {
         channel.request_x11(false, false, x11::AUTH_PROTOCOL, x11.fake_cookie_hex(), x11.screen).await?;
         match x11.refusal() {
             Some(why) => sink.notice(tr!("X11 포워딩: {why}", "X11 forwarding: {why}")),
-            None => sink.notice(tr!("X11 포워딩: 서버의 X 프로그램을 {} 에 표시합니다", "X11 forwarding: X programs on the server show on {}", x11.display)),
+            None => sink.notice(tr!(
+                "X11 포워딩: 서버의 X 프로그램을 {} 에 표시합니다",
+                "X11 forwarding: X programs on the server show on {}",
+                x11.display
+            )),
         }
     }
     channel.request_shell(false).await?;

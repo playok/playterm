@@ -124,13 +124,7 @@ mod tests {
         assert_eq!(terminal_action(Key::Insert, Modifiers::NONE, &all, false), None);
         assert_eq!(terminal_action(Key::V, CTRL.plus(SHIFT), &all, false), None, "an app shortcut");
 
-        let none = ClipboardKeys {
-            ctrl_c: false,
-            ctrl_insert: false,
-            ctrl_v: false,
-            shift_insert: false,
-            ..ClipboardKeys::default()
-        };
+        let none = ClipboardKeys { ctrl_c: false, ctrl_insert: false, ctrl_v: false, shift_insert: false, ..ClipboardKeys::default() };
         for (key, m) in [(Key::C, CTRL), (Key::Insert, CTRL), (Key::V, CTRL), (Key::Insert, SHIFT)] {
             assert_eq!(terminal_action(key, m, &none, true), None, "{key:?} goes to the terminal");
         }

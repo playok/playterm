@@ -20,9 +20,9 @@ mod logging;
 mod macros;
 mod menu;
 mod mouse;
+mod platform;
 mod power;
 mod profile_form;
-mod platform;
 mod putty;
 mod rdp_view;
 mod search_bar;
@@ -72,10 +72,8 @@ fn main() -> eframe::Result {
             std::process::exit(if e.is_empty() { 0 } else { 2 });
         }
     };
-    let icon = Arc::new(
-        eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/playterm.png"))
-            .expect("embedded icon is a valid PNG"),
-    );
+    let icon =
+        Arc::new(eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/playterm.png")).expect("embedded icon is a valid PNG"));
 
     let mut last_error = None;
     for renderer in renderers() {
@@ -105,9 +103,7 @@ fn main() -> eframe::Result {
         };
         match result {
             // OpenGL could not start (no driver, remote session, VM): try the next renderer.
-            Err(e @ (eframe::Error::Glutin(_) | eframe::Error::NoGlutinConfigs(..) | eframe::Error::OpenGL(_)))
-                if !started.get() =>
-            {
+            Err(e @ (eframe::Error::Glutin(_) | eframe::Error::NoGlutinConfigs(..) | eframe::Error::OpenGL(_))) if !started.get() => {
                 log::warn!("{renderer:?} renderer unavailable: {e}");
                 last_error = Some(e);
             }
@@ -119,10 +115,7 @@ fn main() -> eframe::Result {
         }
     }
     let error = last_error.expect("at least one renderer was tried");
-    show_message(
-        &tr!("화면 렌더러를 초기화할 수 없습니다:\n{error}", "Cannot initialize the display renderer:\n{error}"),
-        false,
-    );
+    show_message(&tr!("화면 렌더러를 초기화할 수 없습니다:\n{error}", "Cannot initialize the display renderer:\n{error}"), false);
     Err(error)
 }
 
@@ -208,9 +201,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<SessionProfile>,
                     "-R" => ForwardKind::Remote,
                     _ => ForwardKind::Dynamic,
                 };
-                let spec = args
-                    .next()
-                    .ok_or_else(|| tr!("{arg} 다음에 포워딩 설정이 필요합니다", "Missing forwarding spec after {arg}"))?;
+                let spec =
+                    args.next().ok_or_else(|| tr!("{arg} 다음에 포워딩 설정이 필요합니다", "Missing forwarding spec after {arg}"))?;
                 forwards.push(ForwardRule::parse(kind, &spec)?);
             }
             "-h" | "--help" => return Err(String::new()),

@@ -1,9 +1,6 @@
 //! Terminal widget: paints the grid and turns keyboard/IME/wheel input into session input.
 
-use eframe::egui::{
-    self, Color32, Event, EventFilter, FontFamily, FontId, ImeEvent, Pos2, Rect, Sense,
-    Shape, Stroke, Vec2,
-};
+use eframe::egui::{self, Color32, Event, EventFilter, FontFamily, FontId, ImeEvent, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 use playterm_config::ClipboardKeys;
 use playterm_i18n::{t, tr};
 use playterm_term::{Cell, CursorShape, Flags, Point, Rgb, SearchMatch, SelectionType, Side, TermMode};
@@ -53,7 +50,10 @@ pub struct ViewOutput {
 #[derive(Clone, Debug)]
 pub enum UserInput {
     Text(String),
-    Key { key: egui::Key, modifiers: egui::Modifiers },
+    Key {
+        key: egui::Key,
+        modifiers: egui::Modifiers,
+    },
     /// Control bytes that are the same everywhere (Ctrl+C, Ctrl+X).
     Bytes(Vec<u8>),
     Paste(String),
@@ -144,10 +144,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     if focused {
         // Keep Tab/arrows/Escape for the terminal instead of egui focus navigation.
         ui.memory_mut(|m| {
-            m.set_focus_lock_filter(
-                response.id,
-                EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true },
-            )
+            m.set_focus_lock_filter(response.id, EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
         });
     }
 
@@ -172,8 +169,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     // except with Shift held, which always selects locally like xterm and Windows Terminal.
     // A gesture already in progress keeps its route until the button is released.
     let shift = ui.input(|i| i.modifiers.shift);
-    let report = !session.click.dragging
-        && (session.mouse.pressed.is_some() || (mouse::reporting(mode) && !shift && !behind_modal));
+    let report = !session.click.dragging && (session.mouse.pressed.is_some() || (mouse::reporting(mode) && !shift && !behind_modal));
     if report {
         report_mouse(ui, session, &response, rect, cell, mode);
     } else {
@@ -361,17 +357,9 @@ fn cell_at(session: &Session, rect: Rect, cell: CellSize, pos: Pos2) -> (Point, 
     (session.terminal.viewport_point(y.floor() as usize, col), side)
 }
 
-fn handle_mouse(
-    ui: &egui::Ui,
-    session: &mut Session,
-    response: &egui::Response,
-    rect: Rect,
-    cell: CellSize,
-    keys: &ClipboardKeys,
-) {
-    let (pressed, down, pos, shift, time) = ui.input(|i| {
-        (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.interact_pos(), i.modifiers.shift, i.time)
-    });
+fn handle_mouse(ui: &egui::Ui, session: &mut Session, response: &egui::Response, rect: Rect, cell: CellSize, keys: &ClipboardKeys) {
+    let (pressed, down, pos, shift, time) =
+        ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.interact_pos(), i.modifiers.shift, i.time));
     let Some(pos) = pos else { return };
 
     if pressed && response.hovered() {
@@ -432,14 +420,7 @@ fn mouse_mods(m: egui::Modifiers) -> MouseMods {
 }
 
 /// Forwards clicks, drags and motion to the application as xterm mouse reports.
-fn report_mouse(
-    ui: &egui::Ui,
-    session: &mut Session,
-    response: &egui::Response,
-    rect: Rect,
-    cell: CellSize,
-    mode: TermMode,
-) {
+fn report_mouse(ui: &egui::Ui, session: &mut Session, response: &egui::Response, rect: Rect, cell: CellSize, mode: TermMode) {
     let (events, modifiers) = ui.input(|i| (i.events.clone(), i.modifiers));
     let over_terminal = |pos: Pos2| response.hovered() && rect.contains(pos);
 
@@ -568,10 +549,7 @@ fn cursor_rect(session: &Session, origin: Pos2, cell: CellSize) -> Rect {
     let term = session.terminal.term();
     let point = term.grid().cursor.point;
     let row = point.line.0 + term.grid().display_offset() as i32;
-    Rect::from_min_size(
-        Pos2::new(origin.x + point.column.0 as f32 * cell.w, origin.y + row as f32 * cell.h),
-        Vec2::new(cell.w, cell.h),
-    )
+    Rect::from_min_size(Pos2::new(origin.x + point.column.0 as f32 * cell.w, origin.y + row as f32 * cell.h), Vec2::new(cell.w, cell.h))
 }
 
 /// A horizontal run of narrow ASCII glyphs sharing one style, drawn as a single galley.
@@ -834,8 +812,7 @@ fn paint(
     let cursor_row = cursor.point.line.0 + offset;
     let cursor_col = cursor.point.column.0;
     let cursor_visible = cursor.shape != CursorShape::Hidden && content.mode.contains(TermMode::SHOW_CURSOR);
-    let block_cursor =
-        focused && cursor_visible && cursor.shape == CursorShape::Block && session.preedit.is_empty();
+    let block_cursor = focused && cursor_visible && cursor.shape == CursorShape::Block && session.preedit.is_empty();
 
     let mut frame = Frame {
         painter: &painter,
@@ -899,11 +876,7 @@ fn paint(
 
     if focused && !session.preedit.is_empty() {
         // Show the IME composition (e.g. a Hangul syllable being assembled) at the cursor.
-        let galley = painter.layout_no_wrap(
-            session.preedit.clone(),
-            FontId::monospace(style.font_size),
-            c32(default_bg),
-        );
+        let galley = painter.layout_no_wrap(session.preedit.clone(), FontId::monospace(style.font_size), c32(default_bg));
         let preedit_rect = Rect::from_min_size(cursor_cell.min, Vec2::new(galley.size().x.max(cell.w), cell.h));
         painter.rect_filled(preedit_rect, 0.0, cursor_color);
         painter.galley(cursor_cell.min, galley, c32(default_bg));

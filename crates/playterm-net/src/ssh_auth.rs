@@ -59,17 +59,14 @@ pub(crate) async fn authenticate(session: &mut Session, params: &ConnectParams, 
 enum KeyAttempt {
     Accepted,
     /// Rejected; `false` once the server no longer offers public-key auth.
-    Rejected { keep_trying: bool },
+    Rejected {
+        keep_trying: bool,
+    },
     /// The key could not be used (missing file, cancelled passphrase, agent refused).
     Unusable,
 }
 
-async fn public_keys(
-    session: &mut Session,
-    params: &ConnectParams,
-    sink: &EventSink,
-    methods: &mut MethodSet,
-) -> anyhow::Result<bool> {
+async fn public_keys(session: &mut Session, params: &ConnectParams, sink: &EventSink, methods: &mut MethodSet) -> anyhow::Result<bool> {
     if let Some(path) = &params.identity_file {
         match key_file(session, params, sink, path, true, methods).await? {
             KeyAttempt::Accepted => return Ok(true),
@@ -125,11 +122,7 @@ async fn key_file(
         Ok(text) => Zeroizing::new(text),
         Err(e) => {
             if explicit {
-                sink.notice(tr!(
-                    "키 파일을 읽을 수 없습니다 ({}): {e}",
-                    "Cannot read the key file ({}): {e}",
-                    path.display()
-                ));
+                sink.notice(tr!("키 파일을 읽을 수 없습니다 ({}): {e}", "Cannot read the key file ({}): {e}", path.display()));
             }
             return Ok(KeyAttempt::Unusable);
         }
@@ -138,9 +131,7 @@ async fn key_file(
         return Ok(KeyAttempt::Unusable);
     };
     let hash = rsa_hash(session, key.algorithm()).await?;
-    let result = session
-        .authenticate_publickey(params.username.as_str(), PrivateKeyWithHashAlg::new(Arc::new(key), hash))
-        .await?;
+    let result = session.authenticate_publickey(params.username.as_str(), PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await?;
     Ok(record(result, methods))
 }
 
@@ -161,11 +152,7 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> Option<Private
     match keys::decode_secret_key(text, None) {
         Ok(key) => return Some(key),
         Err(e) if !looks_encrypted(text, &e) => {
-            sink.notice(tr!(
-                "키 파일을 해석할 수 없습니다 ({}): {e}",
-                "Cannot parse the key file ({}): {e}",
-                path.display()
-            ));
+            sink.notice(tr!("키 파일을 해석할 수 없습니다 ({}): {e}", "Cannot parse the key file ({}): {e}", path.display()));
             return None;
         }
         Err(_) => {}
@@ -198,9 +185,7 @@ async fn agents(session: &mut Session, params: &ConnectParams, methods: &mut Met
     {
         // An explicitly configured pipe (or SSH_AUTH_SOCK naming a pipe, as set by e.g.
         // 1Password or KeePassXC) replaces the default OpenSSH service pipe.
-        let configured = params.agent_pipe.clone().or_else(|| {
-            std::env::var("SSH_AUTH_SOCK").ok().filter(|s| s.starts_with(r"\\.\pipe\"))
-        });
+        let configured = params.agent_pipe.clone().or_else(|| std::env::var("SSH_AUTH_SOCK").ok().filter(|s| s.starts_with(r"\\.\pipe\")));
         let pipe = configured.clone().unwrap_or_else(|| OPENSSH_AGENT_PIPE.to_owned());
         match AgentClient::connect_named_pipe(&pipe).await {
             Ok(mut agent) => {
@@ -302,12 +287,7 @@ where
 // -------------------------------------------------------------------------------------------------
 // Passwords and keyboard-interactive
 
-async fn passwords(
-    session: &mut Session,
-    params: &ConnectParams,
-    sink: &EventSink,
-    mut methods: MethodSet,
-) -> anyhow::Result<()> {
+async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSink, mut methods: MethodSet) -> anyhow::Result<()> {
     let user = params.username.as_str();
     // Once a method was accepted but the server wants more (`partial success`), what follows
     // is a second factor such as a one-time code: the stored password must not be spent on it,
@@ -359,9 +339,7 @@ async fn passwords(
             let password = answers.into_iter().next().unwrap_or_default();
             match session.authenticate_password(user, password).await? {
                 AuthResult::Success => Outcome::Success,
-                AuthResult::Failure { remaining_methods, partial_success } => {
-                    Outcome::Failure(remaining_methods, partial_success)
-                }
+                AuthResult::Failure { remaining_methods, partial_success } => Outcome::Failure(remaining_methods, partial_success),
             }
         } else {
             let names: Vec<&str> = methods.iter().map(<&str>::from).collect();
@@ -431,10 +409,8 @@ async fn keyboard_interactive(
                     vec![password]
                 } else {
                     let title = if name.is_empty() { tr!("{target} 인증", "Authentication for {target}") } else { name };
-                    let fields: Vec<PromptField> = prompts
-                        .into_iter()
-                        .map(|p| PromptField { label: p.prompt.trim().to_owned(), echo: p.echo })
-                        .collect();
+                    let fields: Vec<PromptField> =
+                        prompts.into_iter().map(|p| PromptField { label: p.prompt.trim().to_owned(), echo: p.echo }).collect();
                     // A lone hidden question is the password, unless a factor was accepted.
                     let account_password = !second_factor && matches!(fields.as_slice(), [only] if !only.echo);
                     match sink.prompt(title, instructions, fields, Some(user), account_password).await {

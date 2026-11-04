@@ -20,17 +20,14 @@ pub mod zmodem;
 
 use std::io;
 
-pub use session::{
-    AuthPrompt, ConnectParams, MAX_PENDING_OUTPUT, X11Request, HostKeyCheck, PromptField, Protocol, SessionEvent, SessionHandle,
-    Waker,
-};
 pub use forward::{ForwardKind, ForwardRule};
 pub use keepalive::{KeepAlive, KeepAliveMode, decode_escapes};
 pub use rdp::{RdpFrame, RdpInput, RdpMouseButton, RdpSettings, scancode};
 pub use serial::{SerialFlow, SerialParity, SerialPortEntry, SerialSettings, list_ports};
-pub use sftp::{
-    RemoteEntry, SftpConnection, SftpEvent, TransferState, TransferUpdate, is_safe_local_name, remote_join, remote_parent,
+pub use session::{
+    AuthPrompt, ConnectParams, HostKeyCheck, MAX_PENDING_OUTPUT, PromptField, Protocol, SessionEvent, SessionHandle, Waker, X11Request,
 };
+pub use sftp::{RemoteEntry, SftpConnection, SftpEvent, TransferState, TransferUpdate, is_safe_local_name, remote_join, remote_parent};
 pub use telnet::TelnetCodec;
 
 pub struct NetRuntime {
@@ -39,11 +36,7 @@ pub struct NetRuntime {
 
 impl NetRuntime {
     pub fn new() -> io::Result<Self> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("playterm-net")
-            .enable_all()
-            .build()?;
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("playterm-net").enable_all().build()?;
         Ok(Self { rt })
     }
 

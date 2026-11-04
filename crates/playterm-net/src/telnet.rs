@@ -4,7 +4,6 @@
 //! Negotiation is passive: we never start negotiating, so connecting to a raw TCP service
 //! that does not speak Telnet does not inject IAC bytes into its stream.
 
-
 use anyhow::Context as _;
 use playterm_i18n::{t, tr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -13,7 +12,6 @@ use tokio::sync::mpsc;
 
 use crate::keepalive::{IdleTimer, sleep_until};
 use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
-
 
 const SE: u8 = 240;
 const NOP: u8 = 241;
@@ -253,9 +251,9 @@ pub(crate) async fn run(
 ) -> anyhow::Result<()> {
     let stream = sink
         .connecting(&params, async {
-            TcpStream::connect((params.host.as_str(), params.port)).await.with_context(|| {
-                tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port)
-            })
+            TcpStream::connect((params.host.as_str(), params.port))
+                .await
+                .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))
         })
         .await?;
     stream.set_nodelay(true)?;
@@ -352,10 +350,7 @@ mod tests {
         let r = c.receive(&[IAC, DO, OPT_NAWS]);
         assert_eq!(r.reply, vec![IAC, WILL, OPT_NAWS, IAC, SB, OPT_NAWS, 0, 100, 0, 30, IAC, SE]);
         // A dimension byte of 255 must be doubled.
-        assert_eq!(
-            c.resize(255, 24),
-            Some(vec![IAC, SB, OPT_NAWS, 0, IAC, IAC, 0, 24, IAC, SE])
-        );
+        assert_eq!(c.resize(255, 24), Some(vec![IAC, SB, OPT_NAWS, 0, IAC, IAC, 0, 24, IAC, SE]));
     }
 
     #[test]

@@ -30,10 +30,7 @@ pub fn log_dir(configured: &str) -> PathBuf {
 
 /// Characters Windows does not allow in file names become `_`.
 fn sanitize(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
-        .collect();
+    let cleaned: String = name.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
     let cleaned = cleaned.trim().trim_end_matches('.').to_owned();
     if cleaned.is_empty() { "session".to_owned() } else { cleaned }
 }

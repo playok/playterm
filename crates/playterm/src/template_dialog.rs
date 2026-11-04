@@ -4,8 +4,8 @@ use eframe::egui::{self, RichText};
 use playterm_config::{ProfileStore, SessionProfile, SiteTemplate, TemplateLayout};
 use playterm_i18n::{t, tr};
 
-use crate::sidebar;
 use crate::icon;
+use crate::sidebar;
 
 pub enum TemplateResult {
     Open,

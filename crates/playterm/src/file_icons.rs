@@ -49,16 +49,13 @@ pub fn kind(entry: &RemoteEntry) -> FileKind {
     };
     let by_ext = match ext {
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tif" | "tiff" | "heic" => FileKind::Image,
-        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" | "zst" | "lz4" | "deb" | "rpm" | "jar"
-        | "war" | "iso" | "img" => FileKind::Archive,
-        "rs" | "c" | "h" | "cc" | "cpp" | "hpp" | "py" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "kt"
-        | "rb" | "php" | "cs" | "swift" | "lua" | "pl" | "sql" | "html" | "htm" | "css" | "scss" | "vue" => {
-            FileKind::Code
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" | "zst" | "lz4" | "deb" | "rpm" | "jar" | "war" | "iso" | "img" => {
+            FileKind::Archive
         }
+        "rs" | "c" | "h" | "cc" | "cpp" | "hpp" | "py" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "kt" | "rb" | "php" | "cs"
+        | "swift" | "lua" | "pl" | "sql" | "html" | "htm" | "css" | "scss" | "vue" => FileKind::Code,
         "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" => FileKind::Script,
-        "conf" | "cfg" | "ini" | "yaml" | "yml" | "toml" | "json" | "xml" | "env" | "properties" | "service" => {
-            FileKind::Config
-        }
+        "conf" | "cfg" | "ini" | "yaml" | "yml" | "toml" | "json" | "xml" | "env" | "properties" | "service" => FileKind::Config,
         "txt" | "md" | "log" | "csv" | "rst" => FileKind::Text,
         "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "hwp" | "odt" => FileKind::Document,
         "mp3" | "wav" | "flac" | "ogg" | "m4a" | "mp4" | "mkv" | "avi" | "mov" | "webm" => FileKind::Media,
@@ -73,11 +70,7 @@ pub fn kind(entry: &RemoteEntry) -> FileKind {
         n if n.starts_with('.') && ext.is_empty() => return FileKind::Config,
         _ => {}
     }
-    if entry.permissions.is_some_and(|m| m & 0o111 != 0) {
-        FileKind::Executable
-    } else {
-        FileKind::Other
-    }
+    if entry.permissions.is_some_and(|m| m & 0o111 != 0) { FileKind::Executable } else { FileKind::Other }
 }
 
 /// Paints the icon for `kind` in a square as tall as a line of text.

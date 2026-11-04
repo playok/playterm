@@ -485,11 +485,7 @@ impl ProfileStore {
     }
 
     fn save(&self) -> io::Result<()> {
-        let file = ProfileFile {
-            folders: self.folders.clone(),
-            sessions: self.profiles.clone(),
-            templates: self.templates.clone(),
-        };
+        let file = ProfileFile { folders: self.folders.clone(), sessions: self.profiles.clone(), templates: self.templates.clone() };
         let text = toml::to_string_pretty(&file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         write_atomic(&self.path, text.as_bytes())
     }

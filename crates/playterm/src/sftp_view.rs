@@ -7,9 +7,7 @@ use eframe::egui::{self, RichText};
 
 use crate::{file_icons, icon};
 use playterm_i18n::{t, tr};
-use playterm_net::{
-    RemoteEntry, SftpConnection, SftpEvent, TransferState, is_safe_local_name, remote_join, remote_parent,
-};
+use playterm_net::{RemoteEntry, SftpConnection, SftpEvent, TransferState, is_safe_local_name, remote_join, remote_parent};
 
 struct Transfer {
     id: u64,
@@ -236,8 +234,7 @@ impl SftpBrowser {
             match rfd::FileDialog::new().set_title(t("다운로드할 폴더 선택", "Choose a folder to download to")).pick_folder() {
                 Some(dir) => {
                     // The server names these: one that could reach outside the folder is refused.
-                    let (safe, unsafe_names): (Vec<_>, Vec<_>) =
-                        items.into_iter().partition(|e| is_safe_local_name(&e.name));
+                    let (safe, unsafe_names): (Vec<_>, Vec<_>) = items.into_iter().partition(|e| is_safe_local_name(&e.name));
                     if !unsafe_names.is_empty() {
                         let names: Vec<String> = unsafe_names.iter().map(|e| format!("{:?}", e.name)).collect();
                         let text = tr!(
@@ -247,7 +244,12 @@ impl SftpBrowser {
                         );
                         self.status = Some((text, true));
                     }
-                    safe.into_iter().map(|e| { let p = dir.join(&e.name); (e, p) }).collect()
+                    safe.into_iter()
+                        .map(|e| {
+                            let p = dir.join(&e.name);
+                            (e, p)
+                        })
+                        .collect()
                 }
                 None => return,
             }
@@ -369,20 +371,17 @@ impl SftpBrowser {
     fn listing(&mut self, ui: &mut egui::Ui) {
         let transfers_height = if self.transfers.is_empty() { 0.0 } else { 120.0 };
         let list_height = (ui.available_height() - transfers_height - 30.0).max(80.0);
-        let list = egui::ScrollArea::vertical().id_salt("sftp-list").max_height(list_height).auto_shrink([false, false]).show(
-            ui,
-            |ui| {
-                if self.loading && self.entries.is_empty() {
-                    ui.spinner();
-                } else if self.cwd.is_empty() {
-                    ui.weak(t("원격 폴더를 열 수 없습니다 (아래 오류).", "The remote folder could not be opened (error below)."));
-                    if ui.add(icon::button(icon::RETRY, t("다시 시도", "Try again"))).clicked() {
-                        self.retry_start();
-                    }
+        let list = egui::ScrollArea::vertical().id_salt("sftp-list").max_height(list_height).auto_shrink([false, false]).show(ui, |ui| {
+            if self.loading && self.entries.is_empty() {
+                ui.spinner();
+            } else if self.cwd.is_empty() {
+                ui.weak(t("원격 폴더를 열 수 없습니다 (아래 오류).", "The remote folder could not be opened (error below)."));
+                if ui.add(icon::button(icon::RETRY, t("다시 시도", "Try again"))).clicked() {
+                    self.retry_start();
                 }
-                self.entry_grid(ui)
-            },
-        );
+            }
+            self.entry_grid(ui)
+        });
         // A click in the list gives it the keyboard (away from the terminal): Ctrl+A selects
         // all, Delete deletes the selection, Escape clears it.
         let focus = ui.interact(list.inner_rect, ui.scope_id().with("sftp-list-keys"), egui::Sense::focusable_noninteractive());
@@ -465,8 +464,11 @@ impl SftpBrowser {
                                 entry.mtime.map(format_time).unwrap_or_default(),
                                 entry.permissions.map(|m| mode_string(m, entry.is_dir)).unwrap_or_default()
                             );
-                            ui.add(egui::Button::selectable(selected, text).truncate())
-                                .on_hover_text(format!("{}\n{}", entry.name, details.trim()))
+                            ui.add(egui::Button::selectable(selected, text).truncate()).on_hover_text(format!(
+                                "{}\n{}",
+                                entry.name,
+                                details.trim()
+                            ))
                         })
                         .inner
                     })
@@ -487,8 +489,7 @@ impl SftpBrowser {
                     if many {
                         // The whole selection.
                         let n = self.selected.len();
-                        let chosen: Vec<RemoteEntry> =
-                            self.entries.iter().filter(|e| self.selected.contains(&e.name)).cloned().collect();
+                        let chosen: Vec<RemoteEntry> = self.entries.iter().filter(|e| self.selected.contains(&e.name)).cloned().collect();
                         if ui.button(tr!("선택한 {n}개 다운로드", "Download {n} selected")).clicked() {
                             download = Some(chosen.clone());
                             ui.close();

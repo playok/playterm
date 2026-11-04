@@ -132,17 +132,11 @@ fn licenses() {
     }
     let meta: Value = serde_json::from_slice(&output.stdout).expect("cargo metadata JSON");
 
-    let packages: HashMap<&str, &Value> =
-        meta["packages"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap(), p)).collect();
-    let workspace: BTreeSet<&str> =
-        meta["workspace_members"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let packages: HashMap<&str, &Value> = meta["packages"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap(), p)).collect();
+    let workspace: BTreeSet<&str> = meta["workspace_members"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     let nodes: HashMap<&str, &Value> =
         meta["resolve"]["nodes"].as_array().unwrap().iter().map(|n| (n["id"].as_str().unwrap(), n)).collect();
-    let root = workspace
-        .iter()
-        .copied()
-        .find(|id| packages[id]["name"] == env!("CARGO_PKG_NAME"))
-        .expect("this package in the workspace");
+    let root = workspace.iter().copied().find(|id| packages[id]["name"] == env!("CARGO_PKG_NAME")).expect("this package in the workspace");
 
     // Everything reachable through normal (not build or dev) dependencies, except procedural
     // macros and what only they use.
@@ -190,10 +184,8 @@ fn licenses() {
             .map(str::to_owned)
             .unwrap_or_else(|| format!("https://crates.io/crates/{name}"));
         if !files.iter().any(|(file, _)| !file.starts_with("fonts/")) {
-            let authors: Vec<String> = p["authors"]
-                .as_array()
-                .map(|a| a.iter().filter_map(Value::as_str).map(strip_email).collect())
-                .unwrap_or_default();
+            let authors: Vec<String> =
+                p["authors"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(strip_email).collect()).unwrap_or_default();
             missing.push((crates.len(), authors));
         }
         crates.push(Crate {
@@ -210,8 +202,7 @@ fn licenses() {
     for (i, authors) in missing {
         let license = &crates[i].license;
         let text = if license.contains("MIT") {
-            let holder =
-                if authors.is_empty() { format!("the {} developers", crates[i].name) } else { authors.join(", ") };
+            let holder = if authors.is_empty() { format!("the {} developers", crates[i].name) } else { authors.join(", ") };
             Some(format!("MIT License\n\nCopyright (c) {holder}\n\n{MIT_BODY}"))
         } else if license.contains("Apache-2.0") {
             apache.clone()
@@ -291,9 +282,9 @@ fn licenses() {
 
 /// Whether a package is a procedural macro: it runs in the compiler and is not part of the program.
 fn is_proc_macro(package: &Value) -> bool {
-    package["targets"].as_array().is_some_and(|targets| {
-        targets.iter().any(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "proc-macro")))
-    })
+    package["targets"]
+        .as_array()
+        .is_some_and(|targets| targets.iter().any(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "proc-macro"))))
 }
 
 /// Sort key of a version: "0.8.0-rc.4" → [0, 8, 0, 4] (numbers in order; enough to order the

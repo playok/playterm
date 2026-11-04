@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use playterm_net::{
-    AuthPrompt, ConnectParams, ForwardKind, ForwardRule, NetRuntime, Protocol, SessionEvent, SessionHandle,
-    SftpConnection, SftpEvent, TransferState,
+    AuthPrompt, ConnectParams, ForwardKind, ForwardRule, NetRuntime, Protocol, SessionEvent, SessionHandle, SftpConnection, SftpEvent,
+    TransferState,
 };
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::{Algorithm, PrivateKey, PublicKey, known_hosts};
@@ -58,12 +58,7 @@ impl server::Server for TestServer {
     fn new_client(&mut self, _: Option<SocketAddr>) -> Self {
         // Channel ids are per connection: each connection keeps its own channel sets (a
         // connection through a jump host would otherwise see the bastion's ids as its own).
-        Self {
-            channels: Arc::default(),
-            shells: Arc::default(),
-            scripts: Arc::default(),
-            ..self.clone()
-        }
+        Self { channels: Arc::default(), shells: Arc::default(), scripts: Arc::default(), ..self.clone() }
     }
 }
 
@@ -80,10 +75,9 @@ impl server::Handler for TestServer {
         Ok(match (user, password) {
             ("tester", "secret") => Auth::Accept,
             // Password, then a one-time code (keyboard-interactive).
-            ("otp", "secret") => Auth::Reject {
-                proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])),
-                partial_success: true,
-            },
+            ("otp", "secret") => {
+                Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])), partial_success: true }
+            }
             _ => reject(),
         })
     }
@@ -98,13 +92,13 @@ impl server::Handler for TestServer {
             return Ok(reject());
         }
         Ok(match response {
-            None => Auth::Partial {
-                name: "".into(),
-                instructions: "".into(),
-                prompts: vec![("Verification code: ".into(), false)].into(),
-            },
+            None => Auth::Partial { name: "".into(), instructions: "".into(), prompts: vec![("Verification code: ".into(), false)].into() },
             Some(mut answers) => {
-                if answers.next().as_deref() == Some(b"123456".as_slice()) { Auth::Accept } else { reject() }
+                if answers.next().as_deref() == Some(b"123456".as_slice()) {
+                    Auth::Accept
+                } else {
+                    reject()
+                }
             }
         })
     }
@@ -163,9 +157,7 @@ impl server::Handler for TestServer {
         let (handle, address, port) = (session.handle(), address.to_owned(), *port);
         tokio::spawn(async move {
             while let Ok((mut tcp, peer)) = listener.accept().await {
-                let channel = handle
-                    .channel_open_forwarded_tcpip(address.clone(), port, peer.ip().to_string(), peer.port().into())
-                    .await;
+                let channel = handle.channel_open_forwarded_tcpip(address.clone(), port, peer.ip().to_string(), peer.port().into()).await;
                 if let Ok(channel) = channel {
                     tokio::spawn(async move {
                         let _ = tokio::io::copy_bidirectional(&mut tcp, &mut channel.into_stream()).await;
@@ -317,8 +309,7 @@ impl Fixture {
     }
 
     fn trust_host(&self) {
-        known_hosts::learn_known_hosts_path("127.0.0.1", self.port, self.host_key.public_key(), &self.known_hosts)
-            .unwrap();
+        known_hosts::learn_known_hosts_path("127.0.0.1", self.port, self.host_key.public_key(), &self.known_hosts).unwrap();
     }
 
     fn params(&self) -> ConnectParams {
@@ -433,9 +424,7 @@ fn first_connect_asks_for_host_key_then_runs_shell() {
     assert!(matches!(skip_notices(&h), SessionEvent::Closed(None)));
 
     // The key was recorded; a second connection must not ask again.
-    assert!(
-        known_hosts::check_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), &fx.known_hosts).unwrap()
-    );
+    assert!(known_hosts::check_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), &fx.known_hosts).unwrap());
     let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
     expect_connected(&h);
 }
@@ -664,11 +653,8 @@ fn unknown_key_then_default_key_then_password() {
     // An explicit key the server rejects, a missing default, then the accepted default key.
     let rejected = fx.write_key("other", &random_key(Algorithm::Ed25519));
     let good = fx.write_key("id_ed25519", &accepted);
-    let params = ConnectParams {
-        identity_file: Some(rejected.clone()),
-        default_identity_files: vec![fx.dir.join("missing"), good],
-        ..fx.params()
-    };
+    let params =
+        ConnectParams { identity_file: Some(rejected.clone()), default_identity_files: vec![fx.dir.join("missing"), good], ..fx.params() };
     expect_connected(&fx.connect(params));
 
     // Nothing usable: falls through to the password prompt.
@@ -1040,7 +1026,8 @@ fn sftp_a_failed_replacement_never_loses_the_old_file() {
     assert_eq!(leftovers(&root, "replace-fault.sh"), [("old".to_owned(), b"old".to_vec()), ("part".to_owned(), b"new".to_vec())]);
     assert!(e.contains(".old") && e.contains(".part"), "{e}");
     for (kind, _) in leftovers(&root, "replace-fault.sh") {
-        let leftover = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).find(|p| p.extension().unwrap() == kind.as_str()).unwrap();
+        let leftover =
+            std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).find(|p| p.extension().unwrap() == kind.as_str()).unwrap();
         std::fs::remove_file(leftover).unwrap();
     }
 

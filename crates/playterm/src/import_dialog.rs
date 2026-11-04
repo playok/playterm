@@ -6,8 +6,8 @@ use eframe::egui::{self, RichText};
 use playterm_config::{ProfileStore, SessionProfile, normalize_folder};
 use playterm_i18n::{t, tr};
 
-use crate::{putty, sidebar, xshell};
 use crate::icon;
+use crate::{putty, sidebar, xshell};
 
 /// Where sessions are imported from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +42,11 @@ pub enum ImportResult {
     Open,
     Cancel,
     /// The sites to add, from `source`, under `folder` (the folder chosen in the dialog).
-    Import { source: ImportSource, folder: String, profiles: Vec<SessionProfile> },
+    Import {
+        source: ImportSource,
+        folder: String,
+        profiles: Vec<SessionProfile>,
+    },
 }
 
 struct Item {
@@ -83,14 +87,7 @@ impl ImportDialog {
             ImportSource::Putty => None,
             ImportSource::Xshell => xshell::default_dir(),
         };
-        let mut dialog = Self {
-            source,
-            dir,
-            items: Vec::new(),
-            folder: source.name().to_owned(),
-            truncated: false,
-            error: None,
-        };
+        let mut dialog = Self { source, dir, items: Vec::new(), folder: source.name().to_owned(), truncated: false, error: None };
         dialog.load(store);
         dialog
     }
@@ -108,8 +105,7 @@ impl ImportDialog {
         };
         self.error = error;
         self.truncated = truncated;
-        self.items =
-            sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false }).collect();
+        self.items = sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false }).collect();
         self.mark_duplicates(store, true);
     }
 
@@ -120,8 +116,7 @@ impl ImportDialog {
         for item in &mut self.items {
             let Ok(p) = &item.session.profile else { continue };
             let folder = target_folder(&self.folder, &item.session.folder);
-            let duplicate =
-                store.profiles().iter().any(|e| same_address(e, p) || (e.name == p.name && e.folder == folder));
+            let duplicate = store.profiles().iter().any(|e| same_address(e, p) || (e.name == p.name && e.folder == folder));
             if reset || duplicate != item.duplicate {
                 item.checked = !duplicate;
             }
@@ -279,13 +274,7 @@ mod tests {
     use super::*;
 
     fn site(name: &str, host: &str, folder: &str) -> SessionProfile {
-        SessionProfile {
-            name: name.into(),
-            host: host.into(),
-            username: "u".into(),
-            folder: folder.into(),
-            ..Default::default()
-        }
+        SessionProfile { name: name.into(), host: host.into(), username: "u".into(), folder: folder.into(), ..Default::default() }
     }
 
     fn dialog(sessions: Vec<ImportedSession>, folder: &str) -> ImportDialog {

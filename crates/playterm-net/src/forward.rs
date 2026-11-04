@@ -165,19 +165,12 @@ async fn accept_loop(listener: TcpListener, rule: ForwardRule, session: Session,
     }
 }
 
-async fn handle_local(
-    mut tcp: TcpStream,
-    peer: std::net::SocketAddr,
-    rule: &ForwardRule,
-    session: &Session,
-) -> anyhow::Result<()> {
+async fn handle_local(mut tcp: TcpStream, peer: std::net::SocketAddr, rule: &ForwardRule, session: &Session) -> anyhow::Result<()> {
     let (host, port) = match rule.kind {
         ForwardKind::Dynamic => socks5_accept(&mut tcp).await?,
         _ => (rule.dest_host.clone(), rule.dest_port),
     };
-    let opened = session
-        .channel_open_direct_tcpip(host.clone(), port.into(), peer.ip().to_string(), peer.port().into())
-        .await;
+    let opened = session.channel_open_direct_tcpip(host.clone(), port.into(), peer.ip().to_string(), peer.port().into()).await;
     if rule.kind == ForwardKind::Dynamic {
         socks5_reply(&mut tcp, opened.is_ok()).await?;
     }
@@ -191,9 +184,7 @@ async fn handle_local(
 pub(crate) async fn handle_remote(channel: russh::Channel<client::Msg>, rule: ForwardRule) -> anyhow::Result<()> {
     let mut tcp = TcpStream::connect((rule.dest_host.as_str(), rule.dest_port))
         .await
-        .with_context(|| {
-            tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", rule.dest_host, rule.dest_port)
-        })?;
+        .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", rule.dest_host, rule.dest_port))?;
     let mut stream = channel.into_stream();
     tokio::io::copy_bidirectional(&mut tcp, &mut stream).await?;
     Ok(())
@@ -237,10 +228,7 @@ async fn socks5_accept<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> anyhow::
     if command != 1 {
         // 7 = command not supported
         s.write_all(&[SOCKS_VERSION, 7, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
-        bail!(tr!(
-            "SOCKS5: CONNECT 외의 명령({command})은 지원하지 않습니다",
-            "SOCKS5: only CONNECT is supported (got command {command})"
-        ));
+        bail!(tr!("SOCKS5: CONNECT 외의 명령({command})은 지원하지 않습니다", "SOCKS5: only CONNECT is supported (got command {command})"));
     }
     Ok((host, port))
 }

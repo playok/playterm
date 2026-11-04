@@ -137,20 +137,14 @@ impl SearchBar {
                     self.focus_requested = true;
                 }
                 let mut changed = edit.changed();
-                changed |= ui
-                    .toggle_value(&mut self.options.case_sensitive, "Aa")
-                    .on_hover_text(t("대소문자 구분", "Match case"))
-                    .changed();
-                changed |= ui
-                    .toggle_value(&mut self.options.regex, ".*")
-                    .on_hover_text(t("정규식", "Regular expression"))
-                    .changed();
+                changed |=
+                    ui.toggle_value(&mut self.options.case_sensitive, "Aa").on_hover_text(t("대소문자 구분", "Match case")).changed();
+                changed |= ui.toggle_value(&mut self.options.regex, ".*").on_hover_text(t("정규식", "Regular expression")).changed();
                 if changed {
                     self.compile();
                     step = Some(SearchDirection::Older);
                 }
-                let (enter, shift, escape) =
-                    ui.input(|i| (i.key_pressed(Key::Enter), i.modifiers.shift, i.key_pressed(Key::Escape)));
+                let (enter, shift, escape) = ui.input(|i| (i.key_pressed(Key::Enter), i.modifiers.shift, i.key_pressed(Key::Escape)));
                 if edit.lost_focus() && enter {
                     step = Some(if shift { SearchDirection::Newer } else { SearchDirection::Older });
                     edit.request_focus();
@@ -162,7 +156,8 @@ impl SearchBar {
                 if ui.add(icon::icon_button(icon::UP).small()).on_hover_text(t("위로 (Enter)", "Up (Enter)")).clicked() {
                     step = Some(SearchDirection::Older);
                 }
-                if ui.add(icon::icon_button(icon::DOWN).small()).on_hover_text(t("아래로 (Shift+Enter)", "Down (Shift+Enter)")).clicked() {
+                if ui.add(icon::icon_button(icon::DOWN).small()).on_hover_text(t("아래로 (Shift+Enter)", "Down (Shift+Enter)")).clicked()
+                {
                     step = Some(SearchDirection::Newer);
                 }
                 if let Some(status) = self.status(ui) {

@@ -50,9 +50,15 @@ pub struct TransferUpdate {
 #[derive(Debug)]
 pub enum SftpEvent {
     /// Directory listing; `path` is the canonical absolute path.
-    Listing { path: String, result: Result<Vec<RemoteEntry>, String> },
+    Listing {
+        path: String,
+        result: Result<Vec<RemoteEntry>, String>,
+    },
     /// A mkdir/rename/remove finished.
-    OpDone { what: String, result: Result<(), String> },
+    OpDone {
+        what: String,
+        result: Result<(), String>,
+    },
     Transfer(TransferUpdate),
 }
 
@@ -142,9 +148,7 @@ impl SftpConnection {
 
     pub fn rename(&self, from: &str, to: &str) {
         let (from, to) = (from.to_owned(), to.to_owned());
-        self.op(tr!("이름 바꾸기 {from} → {to}", "Rename {from} → {to}"), move |sftp| async move {
-            Ok(sftp.rename(from, to).await?)
-        });
+        self.op(tr!("이름 바꾸기 {from} → {to}", "Rename {from} → {to}"), move |sftp| async move { Ok(sftp.rename(from, to).await?) });
     }
 
     /// Removes a file, or a directory with everything in it.
@@ -243,14 +247,7 @@ struct Progress {
 
 impl Progress {
     fn new(id: u64, inner: Arc<Inner>, cancelled: Arc<AtomicBool>) -> Self {
-        let p = Self {
-            id,
-            inner,
-            cancelled,
-            done: Arc::default(),
-            total: Arc::default(),
-            last_emit: Arc::new(Mutex::new(Instant::now())),
-        };
+        let p = Self { id, inner, cancelled, done: Arc::default(), total: Arc::default(), last_emit: Arc::new(Mutex::new(Instant::now())) };
         p.emit(TransferState::Running);
         p
     }
@@ -331,9 +328,7 @@ pub fn is_safe_local_name(name: &str) -> bool {
     }
     // The device names are reserved with any extension too (`nul.txt`).
     let stem = name.split('.').next().unwrap_or(name).trim_end().to_ascii_uppercase();
-    let numbered = (stem.starts_with("COM") || stem.starts_with("LPT"))
-        && stem.len() == 4
-        && stem.as_bytes()[3].is_ascii_digit();
+    let numbered = (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit();
     !RESERVED.contains(&stem.as_str()) && !numbered
 }
 
@@ -370,9 +365,7 @@ async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress:
         drop(dst);
         // Complete: now it replaces the destination (the user chose it, or it is in the folder
         // they chose).
-        tokio::fs::rename(&part, local)
-            .await
-            .with_context(|| tr!("{} 을(를) 만들 수 없습니다", "Cannot create {}", local.display()))?;
+        tokio::fs::rename(&part, local).await.with_context(|| tr!("{} 을(를) 만들 수 없습니다", "Cannot create {}", local.display()))?;
         anyhow::Ok(())
     }
     .await;
@@ -402,9 +395,7 @@ fn remote_temp_path(remote: &str, kind: &str) -> anyhow::Result<String> {
 /// already at `remote` as it was, and removes only the temporary one.
 async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: Progress) -> anyhow::Result<()> {
     // Before anything is created on the server.
-    let mut src = tokio::fs::File::open(local)
-        .await
-        .with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", local.display()))?;
+    let mut src = tokio::fs::File::open(local).await.with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", local.display()))?;
     let part = remote_temp_path(remote, "part")?;
     // A file being replaced keeps its permissions (an executable script, a private file): the
     // temporary file is created with them, so its data is never open to more than the old was.
@@ -498,11 +489,7 @@ async fn replace_remote(sftp: &SftpSession, part: &str, remote: &str) -> anyhow:
 /// Remote tree as (relative path, is_dir, size), parents before children. The walk stops when
 /// the tree is unreasonably large or deep. For a `download` every name is checked with
 /// [`is_safe_local_name`] before anything is written, and cancelling stops the walk.
-async fn walk_remote(
-    sftp: &SftpSession,
-    root: &str,
-    download: Option<&Progress>,
-) -> anyhow::Result<Vec<(String, bool, u64)>> {
+async fn walk_remote(sftp: &SftpSession, root: &str, download: Option<&Progress>) -> anyhow::Result<Vec<(String, bool, u64)>> {
     let mut out = Vec::new();
     let mut stack = vec![String::new()];
     while let Some(rel) = stack.pop() {
@@ -623,7 +610,9 @@ async fn upload_tree(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     for rel in dirs {
         let target = if rel.is_empty() { remote.to_owned() } else { remote_join(remote, &rel) };
         if !sftp.try_exists(target.clone()).await.unwrap_or(false) {
-            sftp.create_dir(target.clone()).await.with_context(|| tr!("{target} 폴더를 만들 수 없습니다", "Cannot create folder {target}"))?;
+            sftp.create_dir(target.clone())
+                .await
+                .with_context(|| tr!("{target} 폴더를 만들 수 없습니다", "Cannot create folder {target}"))?;
         }
     }
     for (path, rel) in files {
@@ -653,9 +642,33 @@ mod tests {
             assert!(is_safe_local_name(ok), "{ok:?} is a plain name");
         }
         for bad in [
-            "", ".", "..", r"..\..\Startup\x.bat", "../x", "a/b", r"a\b", r"C:\x", "C:", "x:stream",
-            r"\\server\share", "nul", "NUL.txt", "con", "Com1", "lpt9.log", "aux ", "CONOUT$", "name.", "name ",
-            "a\nb", "a\u{0}b", "what?", "*", "a<b", "a|b", "\"q\"",
+            "",
+            ".",
+            "..",
+            r"..\..\Startup\x.bat",
+            "../x",
+            "a/b",
+            r"a\b",
+            r"C:\x",
+            "C:",
+            "x:stream",
+            r"\\server\share",
+            "nul",
+            "NUL.txt",
+            "con",
+            "Com1",
+            "lpt9.log",
+            "aux ",
+            "CONOUT$",
+            "name.",
+            "name ",
+            "a\nb",
+            "a\u{0}b",
+            "what?",
+            "*",
+            "a<b",
+            "a|b",
+            "\"q\"",
         ] {
             assert!(!is_safe_local_name(bad), "{bad:?} must be refused");
         }

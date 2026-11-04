@@ -190,11 +190,61 @@ fn types_text(key: Key) -> bool {
     use Key::*;
     matches!(
         key,
-        A | B | C | D | E | F | G | H | I | J | K | L | M | N | O | P | Q | R | S | T | U | V | W | X | Y | Z
-            | Num0 | Num1 | Num2 | Num3 | Num4 | Num5 | Num6 | Num7 | Num8 | Num9
-            | Space | Minus | Equals | Plus | OpenBracket | CloseBracket | OpenCurlyBracket | CloseCurlyBracket
-            | Backslash | Pipe | Semicolon | Colon | Quote | Backtick | Comma | Period | Slash | Questionmark
-            | Exclamationmark | IntlBackslash
+        A | B
+            | C
+            | D
+            | E
+            | F
+            | G
+            | H
+            | I
+            | J
+            | K
+            | L
+            | M
+            | N
+            | O
+            | P
+            | Q
+            | R
+            | S
+            | T
+            | U
+            | V
+            | W
+            | X
+            | Y
+            | Z
+            | Num0
+            | Num1
+            | Num2
+            | Num3
+            | Num4
+            | Num5
+            | Num6
+            | Num7
+            | Num8
+            | Num9
+            | Space
+            | Minus
+            | Equals
+            | Plus
+            | OpenBracket
+            | CloseBracket
+            | OpenCurlyBracket
+            | CloseCurlyBracket
+            | Backslash
+            | Pipe
+            | Semicolon
+            | Colon
+            | Quote
+            | Backtick
+            | Comma
+            | Period
+            | Slash
+            | Questionmark
+            | Exclamationmark
+            | IntlBackslash
     )
 }
 
@@ -220,10 +270,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool) -> ViewOu
     if response.has_focus() {
         // Tab, arrows and Escape belong to the remote desktop.
         ui.memory_mut(|m| {
-            m.set_focus_lock_filter(
-                response.id,
-                EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true },
-            )
+            m.set_focus_lock_filter(response.id, EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
         });
     }
 

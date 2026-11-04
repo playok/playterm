@@ -124,11 +124,7 @@ impl SerialSettings {
             SerialFlow::Hardware => FlowControl::Hardware,
             SerialFlow::Software => FlowControl::Software,
         };
-        Ok(tokio_serial::new(&self.port, self.baud)
-            .data_bits(data_bits)
-            .stop_bits(stop_bits)
-            .parity(parity)
-            .flow_control(flow))
+        Ok(tokio_serial::new(&self.port, self.baud).data_bits(data_bits).stop_bits(stop_bits).parity(parity).flow_control(flow))
     }
 }
 
@@ -147,9 +143,7 @@ pub fn list_ports() -> Vec<SerialPortEntry> {
         .into_iter()
         .map(|p| {
             let description = match p.port_type {
-                tokio_serial::SerialPortType::UsbPort(usb) => {
-                    usb.product.or(usb.manufacturer).unwrap_or_else(|| "USB".into())
-                }
+                tokio_serial::SerialPortType::UsbPort(usb) => usb.product.or(usb.manufacturer).unwrap_or_else(|| "USB".into()),
                 tokio_serial::SerialPortType::BluetoothPort => "Bluetooth".into(),
                 tokio_serial::SerialPortType::PciPort => "PCI".into(),
                 tokio_serial::SerialPortType::Unknown => String::new(),
@@ -179,21 +173,14 @@ impl SendBreak for tokio_serial::SerialStream {
     }
 }
 
-pub(crate) async fn run(
-    params: ConnectParams,
-    commands: mpsc::UnboundedReceiver<SessionCommand>,
-    sink: EventSink,
-) -> anyhow::Result<()> {
+pub(crate) async fn run(params: ConnectParams, commands: mpsc::UnboundedReceiver<SessionCommand>, sink: EventSink) -> anyhow::Result<()> {
     let settings = &params.serial;
     if settings.port.is_empty() {
         anyhow::bail!(t("시리얼 포트를 지정하세요", "Choose a serial port"));
     }
     let stream = {
         use tokio_serial::SerialPortBuilderExt as _;
-        settings
-            .builder()?
-            .open_native_async()
-            .with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", settings.port))?
+        settings.builder()?.open_native_async().with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", settings.port))?
     };
     sink.send(SessionEvent::Connected);
     let idle = IdleTimer::new(&params.keepalive, false, &sink);
@@ -293,10 +280,7 @@ mod tests {
         fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
             std::pin::Pin::new(&mut self.io).poll_flush(cx)
         }
-        fn poll_shutdown(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::io::Result<()>> {
+        fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
             std::pin::Pin::new(&mut self.io).poll_shutdown(cx)
         }
     }

@@ -35,14 +35,7 @@ pub fn reporting(mode: TermMode) -> bool {
 
 /// Escape sequence for one mouse event at a 0-based viewport cell, or `None` when the current
 /// mode does not report it (or the position cannot be encoded).
-pub fn encode(
-    mode: TermMode,
-    button: MouseButton,
-    action: MouseAction,
-    col: usize,
-    row: usize,
-    mods: MouseMods,
-) -> Option<Vec<u8>> {
+pub fn encode(mode: TermMode, button: MouseButton, action: MouseAction, col: usize, row: usize, mods: MouseMods) -> Option<Vec<u8>> {
     if !reporting(mode) {
         return None;
     }
@@ -50,8 +43,7 @@ pub fn encode(
     match action {
         // 1003 reports every movement; 1002 only while a button is held.
         MouseAction::Motion => {
-            let allowed = mode.contains(TermMode::MOUSE_MOTION)
-                || (mode.contains(TermMode::MOUSE_DRAG) && button != MouseButton::None);
+            let allowed = mode.contains(TermMode::MOUSE_MOTION) || (mode.contains(TermMode::MOUSE_DRAG) && button != MouseButton::None);
             if !allowed || wheel {
                 return None;
             }

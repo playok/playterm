@@ -200,7 +200,10 @@ impl AuthPrompt {
 #[derive(Debug)]
 pub(crate) enum SessionCommand {
     Input(Vec<u8>),
-    Resize { cols: u16, rows: u16 },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
     OpenSftp,
     /// Find the remote shell's current directory (SSH).
     ShellDir,
@@ -249,13 +252,8 @@ impl SessionHandle {
         let (ev_tx, ev_rx) = std_mpsc::channel();
         let screen = Arc::new(Mutex::new(SharedScreen::default()));
         let backlog = Arc::new(Backlog::default());
-        let sink = EventSink {
-            tx: ev_tx,
-            waker: waker.clone(),
-            screen: screen.clone(),
-            deadline: Deadline::default(),
-            backlog: backlog.clone(),
-        };
+        let sink =
+            EventSink { tx: ev_tx, waker: waker.clone(), screen: screen.clone(), deadline: Deadline::default(), backlog: backlog.clone() };
         (Self { commands: cmd_tx, events: ev_rx, screen, backlog, waker }, cmd_rx, sink)
     }
 
@@ -385,13 +383,7 @@ impl EventSink {
     }
 
     /// Asks the user whether to trust an unknown host key. A closed UI counts as "no".
-    pub async fn confirm_host_key(
-        &self,
-        host: &str,
-        port: u16,
-        algorithm: String,
-        fingerprint: String,
-    ) -> bool {
+    pub async fn confirm_host_key(&self, host: &str, port: u16, algorithm: String, fingerprint: String) -> bool {
         let (reply, rx) = oneshot::channel();
         self.send(SessionEvent::HostKeyCheck(HostKeyCheck {
             host: host.to_owned(),
