@@ -5,6 +5,7 @@
 //!
 //! The sessions themselves stay in the app's list (its order is the tab order of shortcuts and
 //! menus); the tree only holds their ids and is brought in line with the list every frame.
+//! Every window has a dock of its own, holding the sessions that are in that window.
 
 use eframe::egui::{self, Color32, Id, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextStyle, Ui, WidgetText};
 use egui_tiles::{Behavior, Container, ContainerKind, SimplificationOptions, TabState, Tile, TileId, Tiles, UiResponse};
@@ -45,6 +46,8 @@ impl StateMark {
 /// The docking layout of the session tabs.
 pub struct Dock {
     tree: egui_tiles::Tree<u64>,
+    /// The window this dock is in.
+    window: u64,
     /// The active session as last shown in the tree (its tab group gets new tabs).
     shown_active: Option<u64>,
     /// The pane that had keyboard focus last frame.
@@ -66,23 +69,32 @@ pub struct DockOutput {
     pub shown: Vec<u64>,
     /// Size in pixels of the active session's pane.
     pub active_px: Option<(u16, u16)>,
+    /// The session whose tab is being dragged (perhaps out of the window).
+    pub dragging: Option<u64>,
 }
 
 impl Default for Dock {
     fn default() -> Self {
-        Self { tree: egui_tiles::Tree::empty(Id::unique("playterm-dock")), shown_active: None, focused: None, arrange: None }
+        Self::new(crate::app::MAIN_WINDOW)
     }
 }
 
 impl Dock {
-    /// Adds tabs for new sessions (to the group of the active one), drops those of closed ones and
-    /// brings the active session's tab to the front.
+    /// The dock of window `window`: it shows the sessions in that window.
+    pub fn new(window: u64) -> Self {
+        let tree = egui_tiles::Tree::empty(Id::unique(("playterm-dock", window)));
+        Self { tree, window, shown_active: None, focused: None, arrange: None }
+    }
+
+    /// Adds tabs for new sessions (to the group of the active one), drops those of closed ones
+    /// (and of those moved to another window) and brings the active session's tab to the front.
     fn sync(&mut self, sessions: &[Session], active: Option<u64>) {
         let tiles = &self.tree.tiles;
+        let window = self.window;
         let gone: Vec<TileId> = tiles
             .iter()
             .filter_map(|(&tile, t)| match t {
-                Tile::Pane(id) if !sessions.iter().any(|s| s.id == *id) => Some(tile),
+                Tile::Pane(id) if !sessions.iter().any(|s| s.id == *id && s.window == window) => Some(tile),
                 _ => None,
             })
             .collect();
@@ -91,7 +103,7 @@ impl Dock {
         }
 
         let group = self.group_of(self.shown_active).or_else(|| self.group_of(active)).or_else(|| self.any_group());
-        for s in sessions {
+        for s in sessions.iter().filter(|s| s.window == window) {
             if self.tree.tiles.find_pane(&s.id).is_some() {
                 continue;
             }
@@ -210,6 +222,7 @@ impl Dock {
         let dragged = self.tree.dragged_id(ui.ctx()).and_then(|t| self.tree.tiles.get_pane(&t).copied());
         let mut behavior = DockView {
             sessions,
+            detached: self.window != crate::app::MAIN_WINDOW,
             active: active_id,
             active_tile: active_id.and_then(|id| self.tree.tiles.find_pane(&id)),
             outline: self.is_split(),
@@ -222,6 +235,7 @@ impl Dock {
         };
         self.tree.ui(&mut behavior, ui);
         let mut out = behavior.out;
+        out.dragging = self.tree.dragged_id(ui.ctx()).and_then(|t| self.tree.tiles.get_pane(&t).copied());
         if behavior.dropped {
             // A tab dragged somewhere else is the one the user works with next.
             out.activate = out.activate.or(dragged);
@@ -238,6 +252,8 @@ impl Dock {
 /// Draws the tabs and panes for [`egui_tiles`].
 struct DockView<'a> {
     sessions: &'a mut [Session],
+    /// The dock of a window the tabs were moved out to (not the main window).
+    detached: bool,
     active: Option<u64>,
     active_tile: Option<TileId>,
     /// Outline the active pane (when more than one group is on screen).
@@ -381,13 +397,18 @@ impl Behavior<u64> for DockView<'_> {
             }
             menu::tab_color_menu(ui, command, i, s.tab_color);
             ui.separator();
-            let entries = [
+            let mut entries = vec![
                 (t("복제", "Duplicate"), Command::Duplicate(i)),
-                (t("새 창으로 열기", "Open in new window"), Command::OpenInNewWindow(i)),
+                (t("새 창으로 분리", "Move to new window"), Command::OpenInNewWindow(i)),
+            ];
+            if self.detached {
+                entries.push((t("메인 창으로 합치기", "Move to main window"), Command::MoveToMain(i)));
+            }
+            entries.extend([
                 (t("다시 연결", "Reconnect"), Command::Reconnect(i)),
                 (t("닫기", "Close"), Command::Close(i)),
                 (t("다른 탭 모두 닫기", "Close other tabs"), Command::CloseOthers(i)),
-            ];
+            ]);
             for (label, c) in entries {
                 if ui.button(label).clicked() {
                     *command = Some(c);
@@ -398,7 +419,14 @@ impl Behavior<u64> for DockView<'_> {
         response.on_hover_text(format!(
             "{}\n{}",
             mark.label,
-            t("끌어서 옆이나 위아래로 놓으면 화면을 나눠 봅니다", "Drag beside, above or below another tab to split the view")
+            if cfg!(windows) {
+                t(
+                    "끌어서 옆이나 위아래로 놓으면 화면을 나눠 봅니다. 창 밖에 놓으면 새 창으로, 다른 창에 놓으면 그 창으로 옮깁니다",
+                    "Drag beside, above or below another tab to split the view; drop outside the window for a new window, or on another window to move it there",
+                )
+            } else {
+                t("끌어서 옆이나 위아래로 놓으면 화면을 나눠 봅니다", "Drag beside, above or below another tab to split the view")
+            }
         ))
     }
 

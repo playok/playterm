@@ -41,10 +41,13 @@ mod settings;
 mod theme;
 mod ui;
 mod vault;
+mod windows;
 mod zmodem;
 
 use self::broadcast::broadcast_status;
 use self::theme::apply_ui;
+pub use self::windows::MAIN_WINDOW;
+use self::windows::Windows;
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
 /// Largest text a remote program may put on the clipboard (OSC 52).
@@ -158,21 +161,10 @@ enum Modal {
 /// Font size changes from zooming are saved once they have settled for this long.
 const SETTINGS_SAVE_DELAY: Duration = Duration::from_secs(1);
 
-/// Starts another playterm process (its own window). With a profile, the new window connects
-/// it: the profile goes through a temporary file that the new process reads and deletes. It
-/// holds no password; a saved site's comes from the vault there, others are asked again.
-fn open_new_window(profile: Option<&SessionProfile>) -> Result<(), String> {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static NEXT: AtomicU32 = AtomicU32::new(0);
+/// Starts another playterm process (its own window) with a local prompt.
+fn open_new_window() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut cmd = std::process::Command::new(exe);
-    if let Some(profile) = profile {
-        let name = format!("playterm-open-{}-{}.toml", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
-        let path = std::env::temp_dir().join(name);
-        std::fs::write(&path, profile.to_toml()?).map_err(|e| e.to_string())?;
-        cmd.arg("--open").arg(&path);
-    }
-    cmd.spawn().map(drop).map_err(|e| e.to_string())
+    std::process::Command::new(exe).spawn().map(drop).map_err(|e| e.to_string())
 }
 
 /// What a saved password of `p` is for. Stored with the password (encrypted), so a site that
@@ -270,8 +262,14 @@ pub struct PlaytermApp {
     compose: ComposeBar,
     /// Size of the active tab's area in pixels: the size an RDP desktop opened now would get.
     view_px: (u16, u16),
-    /// The tabs and how they are docked (split side by side or above each other).
+    /// The tabs and how they are docked (split side by side or above each other), in the window
+    /// being drawn.
     dock: Dock,
+    /// The window being drawn: [`MAIN_WINDOW`] or one tabs were moved out to. `active`, `dock`
+    /// and `window_title` are that window's.
+    current_window: u64,
+    /// The windows tabs were moved out to.
+    windows: Windows,
     /// New releases on GitHub.
     updater: Updater,
 }
@@ -341,6 +339,8 @@ impl PlaytermApp {
             compose: ComposeBar::default(),
             view_px: (1280, 800),
             dock: Dock::default(),
+            current_window: MAIN_WINDOW,
+            windows: Windows::new(),
             updater: Updater::default(),
         };
         // Development builds (cargo run) are not replaced by releases unless asked.
@@ -413,5 +413,11 @@ impl PlaytermApp {
     }
     pub(crate) fn test_broadcast(&self) -> bool {
         self.broadcast
+    }
+    pub(crate) fn test_window_count(&self) -> usize {
+        self.windows.count()
+    }
+    pub(crate) fn test_run(&mut self, ctx: &egui::Context, command: Command) {
+        self.run(ctx, command);
     }
 }

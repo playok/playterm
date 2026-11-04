@@ -54,9 +54,11 @@ pub enum Command {
     NextTab,
     PrevTab,
     Duplicate(usize),
-    /// Another playterm window (a new process) with tab `i`'s connection.
+    /// Moves tab `i`, connection and all, to a new window of its own.
     OpenInNewWindow(usize),
-    /// Another playterm window with a local prompt.
+    /// Moves tab `i` from the window it was moved out to back to the main window.
+    MoveToMain(usize),
+    /// Another playterm window (a new process) with a local prompt.
     NewWindow,
     Reconnect(usize),
     Close(usize),
@@ -277,7 +279,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("이전 탭", "Previous tab"), keys("Ctrl+Shift+Tab", "⇧⌘["), n > 1, Command::PrevTab);
             ui.separator();
             item(ui, out, t("탭 복제", "Duplicate tab"), "Ctrl+Shift+D", active.is_some(), Command::Duplicate(i));
-            item(ui, out, t("새 창으로 열기", "Open in new window"), "", active.is_some(), Command::OpenInNewWindow(i));
+            item(ui, out, t("새 창으로 분리", "Move to new window"), "", active.is_some(), Command::OpenInNewWindow(i));
             if let Some(s) = active {
                 tab_color_menu(ui, out, i, s.tab_color);
             }

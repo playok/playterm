@@ -19,7 +19,7 @@ impl PlaytermApp {
             Command::ImportXshell => {
                 self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::Xshell))));
             }
-            Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Command::Quit => ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
 
             Command::Copy => {
                 if let Some(s) = self.sessions.get_mut(self.active) {
@@ -119,18 +119,29 @@ impl PlaytermApp {
             Command::UnlockVault => self.unlock_vault(),
             Command::SetUpVault => self.set_up_vault(),
 
-            Command::Activate(i) if i < n => self.active = i,
-            Command::Activate(_) => {}
-            Command::NextTab if n > 0 => self.active = (self.active + 1) % n,
-            Command::PrevTab if n > 0 => self.active = (self.active + n - 1) % n,
-            Command::NextTab | Command::PrevTab => {}
-            Command::OpenInNewWindow(i) => {
-                let profile = self.sessions.get(i).and_then(Session::profile).cloned();
-                let r = open_new_window(profile.as_ref());
-                self.report(t("새 창을 열 수 없습니다", "Cannot open a new window"), r);
+            Command::Activate(i) if i < n => {
+                // A tab in another window (from the Tab menu): that window comes to the front.
+                let window = self.sessions[i].window;
+                if window == self.current_window {
+                    self.active = i;
+                } else {
+                    self.show_tab_in(ctx, i);
+                }
             }
+            Command::Activate(_) => {}
+            Command::NextTab | Command::PrevTab => {
+                // The tabs of this window, in order.
+                let tabs = self.window_tabs();
+                if let Some(k) = tabs.iter().position(|&i| i == self.active) {
+                    let m = tabs.len();
+                    let next = if matches!(command, Command::NextTab) { k + 1 } else { k + m - 1 };
+                    self.active = tabs[next % m];
+                }
+            }
+            Command::OpenInNewWindow(i) => self.detach_tab(ctx, i, None),
+            Command::MoveToMain(i) => self.move_tab(ctx, i, MAIN_WINDOW),
             Command::NewWindow => {
-                let r = open_new_window(None);
+                let r = open_new_window();
                 self.report(t("새 창을 열 수 없습니다", "Cannot open a new window"), r);
             }
             Command::Duplicate(i) => match self.sessions.get(i).map(Session::spec) {
@@ -146,12 +157,10 @@ impl PlaytermApp {
             Command::Close(i) if i < n => self.close_session(i),
             Command::Reconnect(_) | Command::Close(_) => {}
             Command::CloseOthers(i) if i < n => {
-                let keep = self.sessions.remove(i);
-                for mut s in self.sessions.drain(..) {
-                    s.close();
-                }
-                self.sessions.push(keep);
-                self.active = 0;
+                // The other tabs of this window; those of other windows stay.
+                let (keep, window) = (self.sessions[i].id, self.sessions[i].window);
+                self.close_where(|s| s.window == window && s.id != keep);
+                self.active = self.index_of(keep).unwrap_or(0);
             }
             Command::CloseOthers(_) => {}
             Command::ToggleBroadcast => {
@@ -172,10 +181,11 @@ impl PlaytermApp {
                 }
             }
             Command::CloseAll => {
-                for mut s in self.sessions.drain(..) {
-                    s.close();
-                }
+                let window = self.current_window;
+                self.close_where(|s| s.window == window);
                 self.active = 0;
+                self.fix_active();
+                self.ensure_main_tab();
             }
 
             Command::TogglePreventScreensaver => {
@@ -217,6 +227,17 @@ impl PlaytermApp {
             Command::Licenses => self.modal = Some(Modal::Licenses(Box::default())),
             Command::CheckUpdates => self.updater.check(ctx, true),
             Command::ShowUpdate => self.updater.reopen(),
+        }
+    }
+}
+
+impl PlaytermApp {
+    /// Closes the tabs matching `which`.
+    fn close_where(&mut self, which: impl Fn(&Session) -> bool) {
+        let (closing, keep): (Vec<Session>, Vec<Session>) = std::mem::take(&mut self.sessions).into_iter().partition(|s| which(s));
+        self.sessions = keep;
+        for mut s in closing {
+            s.close();
         }
     }
 }

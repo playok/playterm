@@ -50,9 +50,7 @@ impl eframe::App for PlaytermApp {
         }
         self.console_requests();
         // A window without tabs still has a prompt to type at.
-        if self.sessions.is_empty() {
-            self.open_local();
-        }
+        self.ensure_main_tab();
         self.dropped_files(&ctx);
         let connected = self.sessions.iter().any(|s| s.state == SessionState::Connected);
         self.sleep_guard.set(if connected { self.settings.prevent_sleep } else { PreventSleep::Off });
@@ -146,8 +144,27 @@ impl eframe::App for PlaytermApp {
         if let Some(px) = output.active_px {
             self.view_px = px;
         }
+        self.dock_output(&ctx, output);
+        self.show_windows(&ctx);
+        if let Some(changed) = self.settings_unsaved {
+            if changed.elapsed() >= SETTINGS_SAVE_DELAY {
+                self.save_settings();
+            } else {
+                ctx.request_repaint_after(SETTINGS_SAVE_DELAY);
+            }
+        }
+
+        crate::toast::show(&ctx);
+        self.update_window_title(&ctx);
+    }
+}
+
+impl PlaytermApp {
+    /// What the tabs and panes of the window being drawn did this frame.
+    pub(super) fn dock_output(&mut self, ctx: &egui::Context, output: crate::dock::DockOutput) {
         // RDP tabs not on screen (another tab, a shortcut switched away) hold no keys or buttons.
-        for s in &mut self.sessions {
+        let window = self.current_window;
+        for s in self.sessions.iter_mut().filter(|s| s.window == window) {
             if s.is_rdp() && (!output.shown.contains(&s.id) || !s.shows_rdp()) {
                 s.release_rdp_input();
             }
@@ -159,18 +176,9 @@ impl eframe::App for PlaytermApp {
             self.zoom(output.view.zoom_steps);
         }
         self.broadcast_input(&output.view.inputs);
+        self.track_tab_drag(output.dragging);
         if let Some(command) = output.command {
-            self.run(&ctx, command);
+            self.run(ctx, command);
         }
-        if let Some(changed) = self.settings_unsaved {
-            if changed.elapsed() >= SETTINGS_SAVE_DELAY {
-                self.save_settings();
-            } else {
-                ctx.request_repaint_after(SETTINGS_SAVE_DELAY);
-            }
-        }
-
-        crate::toast::show(&ctx);
-        self.update_window_title(&ctx);
     }
 }

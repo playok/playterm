@@ -19,7 +19,9 @@ impl PlaytermApp {
     pub(super) fn open_local(&mut self) {
         let (cols, rows) = self.tab_size();
         let setup = self.term_setup();
-        self.sessions.push(Session::local(self.next_id, cols, rows, &setup));
+        let mut session = Session::local(self.next_id, cols, rows, &setup);
+        session.window = self.current_window;
+        self.sessions.push(session);
         self.next_id += 1;
         self.active = self.sessions.len() - 1;
     }
@@ -31,7 +33,9 @@ impl PlaytermApp {
             self.connect_target.take().or_else(|| self.sessions.get(self.active).filter(|s| s.state == SessionState::Local).map(|s| s.id));
         if let Some(i) = target.and_then(|id| self.index_of(id)).filter(|&i| self.sessions[i].in_console()) {
             self.sessions[i].start(spec, &self.net, self.waker.clone());
-            self.active = i;
+            if self.sessions[i].window == self.current_window {
+                self.active = i;
+            }
             return;
         }
         self.connect_in_new_tab(spec);
@@ -40,7 +44,8 @@ impl PlaytermApp {
     pub(super) fn connect_in_new_tab(&mut self, mut spec: SessionSpec) {
         (spec.params.cols, spec.params.rows) = self.tab_size();
         let setup = self.term_setup();
-        let session = Session::connect(self.next_id, spec, &self.net, self.waker.clone(), &setup);
+        let mut session = Session::connect(self.next_id, spec, &self.net, self.waker.clone(), &setup);
+        session.window = self.current_window;
         self.next_id += 1;
         self.sessions.push(session);
         self.active = self.sessions.len() - 1;
@@ -323,5 +328,7 @@ impl PlaytermApp {
         if self.active > index || self.active >= self.sessions.len() {
             self.active = self.active.saturating_sub(1);
         }
+        self.fix_active();
+        self.ensure_main_tab();
     }
 }
