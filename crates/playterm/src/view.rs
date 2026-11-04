@@ -694,7 +694,6 @@ fn cell_text(cell: &Cell) -> String {
 /// What a fresh local tab shows over its terminal: recent sites and ways to connect, and how
 /// to use the prompt instead. Gone as soon as something is typed.
 fn start_screen(ui: &mut egui::Ui, rect: Rect, style: &ViewStyle) -> Option<crate::menu::Command> {
-    use crate::menu::Command;
     // Inside the pane, whatever its size (#145): too small for the card, the prompt's own
     // hint says what to type.
     if rect.width() < 240.0 || rect.height() < 200.0 {
@@ -707,51 +706,21 @@ fn start_screen(ui: &mut egui::Ui, rect: Rect, style: &ViewStyle) -> Option<crat
     let top = (rect.center().y - rect.height() * 0.1 - height / 2.0)
         .clamp(rect.top() + 12.0, (rect.bottom() - height - 12.0).max(rect.top() + 12.0));
     let card = Rect::from_min_max(egui::pos2(rect.center().x - width / 2.0, top), egui::pos2(rect.center().x + width / 2.0, rect.bottom()));
+    // A low pane: the card ends above the pane's bottom and its content scrolls, instead of
+    // its lower part (the import buttons, the hint) being cut off.
+    let frame = egui::Frame::popup(ui.style()).inner_margin(CARD_MARGIN);
+    let max_content = rect.bottom() - 12.0 - top - frame.total_margin().sum().y;
     let mut command = None;
     let shown = ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
         ui.set_clip_rect(rect.intersect(ui.clip_rect()));
-        egui::Frame::popup(ui.style())
-            .inner_margin(16.0)
+        frame
             .show(ui, |ui| {
-                ui.set_width(width - 32.0);
-                ui.heading("playterm");
-                ui.weak(t("연결할 곳을 고르세요.", "Choose where to connect."));
-                ui.add_space(8.0);
-                if !style.recent.is_empty() {
-                    ui.strong(t("최근 연결", "Recent"));
-                    for site in &style.recent {
-                        ui.horizontal(|ui| {
-                            // A long name ends in "…" inside the card instead of pushing its
-                            // right edge out of the pane; the tooltip has all of it.
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                            crate::site_tree::badge(ui, site.protocol);
-                            let tip = format!("{} — {}", site.name, t("연결", "Connect"));
-                            if ui.link(&site.name).on_hover_text(tip).clicked() {
-                                command = Some(Command::ConnectSite(site.id.clone()));
-                            }
-                        });
-                    }
-                    ui.add_space(8.0);
-                }
-                ui.horizontal_wrapped(|ui| {
-                    if ui.add(crate::icon::primary(ui, crate::icon::QUICK_CONNECT, t("빠른 연결", "Quick Connect"))).clicked() {
-                        command = Some(Command::QuickConnect);
-                    }
-                    if ui.add(crate::icon::button(crate::icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
-                        command = Some(Command::NewSite);
-                    }
-                    if ui.add(crate::icon::button(crate::icon::IMPORT, t("PuTTY 가져오기", "Import PuTTY"))).clicked() {
-                        command = Some(Command::ImportPutty);
-                    }
-                    if ui.add(crate::icon::button(crate::icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
-                        command = Some(Command::ImportXshell);
-                    }
-                });
-                ui.add_space(8.0);
-                ui.weak(t(
-                    "명령으로 쓰려면 아무 키나 누르세요 — ssh, telnet, open, sites, ls, help …",
-                    "To use commands, just type — ssh, telnet, open, sites, ls, help …",
-                ));
+                ui.set_width(width - 2.0 * CARD_MARGIN);
+                egui::ScrollArea::vertical()
+                    .id_salt("start-card")
+                    .max_height(max_content)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| start_card(ui, style, &mut command));
             })
             .response
             .rect
@@ -759,6 +728,52 @@ fn start_screen(ui: &mut egui::Ui, rect: Rect, style: &ViewStyle) -> Option<crat
     });
     ui.data_mut(|d| d.insert_temp(height_id, shown.inner));
     command
+}
+
+/// Room between the start card's edge and its content.
+const CARD_MARGIN: f32 = 16.0;
+
+/// What the start card holds; `command` is set by what is clicked.
+fn start_card(ui: &mut egui::Ui, style: &ViewStyle, command: &mut Option<crate::menu::Command>) {
+    use crate::menu::Command;
+    ui.heading("playterm");
+    ui.weak(t("연결할 곳을 고르세요.", "Choose where to connect."));
+    ui.add_space(8.0);
+    if !style.recent.is_empty() {
+        ui.strong(t("최근 연결", "Recent"));
+        for site in &style.recent {
+            ui.horizontal(|ui| {
+                // A long name ends in "…" inside the card instead of pushing its
+                // right edge out of the pane; the tooltip has all of it.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                crate::site_tree::badge(ui, site.protocol);
+                let tip = format!("{} — {}", site.name, t("연결", "Connect"));
+                if ui.link(&site.name).on_hover_text(tip).clicked() {
+                    *command = Some(Command::ConnectSite(site.id.clone()));
+                }
+            });
+        }
+        ui.add_space(8.0);
+    }
+    ui.horizontal_wrapped(|ui| {
+        if ui.add(crate::icon::primary(ui, crate::icon::QUICK_CONNECT, t("빠른 연결", "Quick Connect"))).clicked() {
+            *command = Some(Command::QuickConnect);
+        }
+        if ui.add(crate::icon::button(crate::icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
+            *command = Some(Command::NewSite);
+        }
+        if ui.add(crate::icon::button(crate::icon::IMPORT, t("PuTTY 가져오기", "Import PuTTY"))).clicked() {
+            *command = Some(Command::ImportPutty);
+        }
+        if ui.add(crate::icon::button(crate::icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
+            *command = Some(Command::ImportXshell);
+        }
+    });
+    ui.add_space(8.0);
+    ui.weak(t(
+        "명령으로 쓰려면 아무 키나 누르세요 — ssh, telnet, open, sites, ls, help …",
+        "To use commands, just type — ssh, telnet, open, sites, ls, help …",
+    ));
 }
 
 /// Height of the connection line above a remote terminal.
@@ -1025,5 +1040,25 @@ mod start_screen_tests {
         let (_, elided, rect) = texts.iter().find(|(t, ..)| t == long).expect("the site is listed");
         assert!(*elided, "the name is shortened");
         assert!(pane.contains_rect(*rect), "{rect:?} outside {pane:?}");
+    }
+
+    /// A low pane: the card ends inside it, its content scrolling, so nothing is cut off at
+    /// the bottom.
+    #[test]
+    fn a_low_pane_keeps_the_whole_card() {
+        let ctx = egui::Context::default();
+        let recent =
+            (0..4).map(|k| RecentSite { id: k.to_string(), name: format!("site-{k}"), protocol: playterm_net::Protocol::Ssh }).collect();
+        let style =
+            ViewStyle { font_size: 14.0, selection: Color32::BLUE, clipboard: ClipboardKeys::default(), recent, alt_is_meta: false };
+        let pane = Rect::from_min_size(Pos2::new(100.0, 50.0), Vec2::new(300.0, 220.0));
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                start_screen(ui, pane, &style);
+            });
+            out.textures_delta.clear();
+        }
+        let height: f32 = ctx.data(|d| d.get_temp(egui::Id::unique("start-card-height"))).expect("the card is shown");
+        assert!(height <= pane.height() - 24.0 + 0.5, "card {height} in a pane {}", pane.height());
     }
 }
