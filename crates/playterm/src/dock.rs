@@ -140,7 +140,8 @@ impl Dock {
     }
 
     /// Gives each pane of `ids` a group of its own, arranged in the place of the group they were
-    /// in; that group stays beside them if it has other tabs.
+    /// in, which they share evenly: the other tabs of that group go behind the first one (#142)
+    /// instead of keeping half the room beside them.
     fn apply_arrange(&mut self, ids: &[u64], layout: TemplateLayout) {
         let kind = match layout {
             TemplateLayout::Tabs => return,
@@ -162,21 +163,33 @@ impl Dock {
                 container.remove_child(pane);
             }
         }
-        let groups: Vec<TileId> = panes.iter().map(|&pane| tiles.insert_tab_tile(vec![pane])).collect();
+        // The tabs left in the group join the first new one, behind its session.
+        let rest: Vec<TileId> = match tiles.get(home) {
+            Some(Tile::Container(c)) => c.children().copied().collect(),
+            _ => Vec::new(),
+        };
+        if let Some(Tile::Container(c)) = tiles.get_mut(home) {
+            for &child in &rest {
+                c.remove_child(child);
+            }
+        }
+        let mut first = vec![panes[0]];
+        first.extend(rest);
+        let mut groups = vec![tiles.insert_tab_tile(first)];
+        groups.extend(panes[1..].iter().map(|&pane| tiles.insert_tab_tile(vec![pane])));
+        if let Some(Tile::Container(Container::Tabs(tabs))) = tiles.get_mut(groups[0]) {
+            tabs.set_active(panes[0]);
+        }
         let arranged = tiles.insert_container(Container::new(kind, groups));
-        let home_empty = matches!(tiles.get(home), Some(Tile::Container(c)) if c.is_empty());
-        let replacement = if home_empty { arranged } else { tiles.insert_horizontal_tile(vec![home, arranged]) };
         match home_parent {
             Some(parent) => {
                 if let Some(Tile::Container(container)) = tiles.get_mut(parent) {
-                    let _ = container.replace_child(home, replacement);
+                    let _ = container.replace_child(home, arranged);
                 }
             }
-            None => self.tree.root = Some(replacement),
+            None => self.tree.root = Some(arranged),
         }
-        if home_empty {
-            tiles.remove(home);
-        }
+        tiles.remove(home);
     }
 
     /// The tab group holding the session `id`.
@@ -291,12 +304,22 @@ impl Behavior<u64> for DockView<'_> {
             self.focused = Some(id);
         }
         // What is typed goes to every pane in an orange frame: hard to miss while it is on.
+        // Only panes that take the input get the full frame; one included but not connected
+        // gets a faint one, as its title stays plain (#164).
         if self.broadcast && session.in_broadcast {
-            ui.painter().rect_stroke(pane_rect, 0.0, Stroke::new(BROADCAST_FRAME, BROADCAST_COLOR), StrokeKind::Inside);
+            let stroke = if session.state == SessionState::Connected {
+                Stroke::new(BROADCAST_FRAME, BROADCAST_COLOR)
+            } else {
+                Stroke::new(1.0, BROADCAST_COLOR.gamma_multiply(0.35))
+            };
+            ui.painter().rect_stroke(pane_rect, 0.0, stroke, StrokeKind::Inside);
         }
         self.out.view.zoom_steps += output.zoom_steps;
         if output.command.is_some() {
             self.out.command = output.command;
+        }
+        if output.reconnect {
+            self.out.command = Some(Command::Reconnect(i));
         }
         self.out.view.inputs.extend(output.inputs);
         self.out.shown.push(id);
@@ -526,10 +549,11 @@ mod tests {
         let mut dock = dock_with(&[&[1, 2, 3]]);
         dock.apply_arrange(&[1, 2, 3], TemplateLayout::Grid);
         assert_eq!(shape(&dock), "Grid(Tabs(1) Tabs(2) Tabs(3))");
-        // Other tabs in the group stay, beside the arrangement.
+        // Other tabs in the group go behind the first new session: the new ones share the
+        // room evenly (#142).
         let mut dock = dock_with(&[&[9, 1, 2]]);
         dock.apply_arrange(&[1, 2], TemplateLayout::Rows);
-        assert_eq!(shape(&dock), "Horizontal(Tabs(9) Vertical(Tabs(1) Tabs(2)))");
+        assert_eq!(shape(&dock), "Vertical(Tabs(1 9) Tabs(2))");
         // In a split view, only that group's place is used.
         let mut dock = dock_with(&[&[7], &[1, 2]]);
         dock.apply_arrange(&[1, 2], TemplateLayout::Columns);

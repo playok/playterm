@@ -61,6 +61,17 @@ fn swatch(ui: &mut egui::Ui, theme: &Theme) {
 
 /// Height of a settings section (the tallest: the display section with its preview).
 const SECTION_HEIGHT: f32 = 330.0;
+/// Width of a settings section.
+const SECTION_WIDTH: f32 = 520.0;
+
+/// A hint after a setting, dim. Kept short to fit the section (wrapped text would change the
+/// layout from frame to frame).
+fn hint(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.weak(text)
+}
+
+/// Width of the list of sections at the left.
+const SECTION_LIST_WIDTH: f32 = 130.0;
 
 /// The settings, by subject.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -134,43 +145,34 @@ impl SettingsDialog {
     pub fn show(&mut self, ctx: &egui::Context) -> SettingsResult {
         let mut result = None;
         let modal = egui::Modal::new(egui::Id::unique("settings")).show(ctx, |ui| {
-            ui.set_width(460.0);
+            ui.set_width(SECTION_LIST_WIDTH + SECTION_WIDTH + 16.0);
             ui.heading(t("설정", "Settings"));
             ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                for section in Section::ALL {
-                    ui.selectable_value(&mut self.section, section, section.name());
-                }
-            });
-            ui.separator();
-            ui.add_space(4.0);
-            // The same height for every section, so the dialog does not jump when switching.
-            ui.allocate_ui(egui::vec2(ui.available_width(), SECTION_HEIGHT), |ui| {
-                ui.set_min_height(SECTION_HEIGHT);
-                egui::Grid::new(("settings-grid", self.section)).num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| match self.section {
-                    Section::Display => {
-                        self.ui_rows(ui);
-                        self.font_row(ui);
-                        self.size_row(ui);
-                        self.theme_row(ui);
-                    }
-                    Section::Terminal => self.scrollback_row(ui),
-                    Section::Clipboard => self.clipboard_rows(ui),
-                    Section::Connection => {
-                        self.timeout_row(ui);
-                        if crate::power::SUPPORTED {
-                            self.sleep_row(ui);
+            ui.horizontal_top(|ui| {
+                // The sections down the left (#140); the dialog keeps one size whichever is on
+                // show, so nothing moves under the pointer (#143).
+                ui.vertical(|ui| {
+                    ui.set_width(SECTION_LIST_WIDTH);
+                    for section in Section::ALL {
+                        let button =
+                            egui::Button::selectable(self.section == section, section.name()).min_size(egui::vec2(SECTION_LIST_WIDTH, 0.0));
+                        if ui.add(button).clicked() {
+                            self.section = section;
                         }
                     }
-                    Section::Transfers => self.zmodem_row(ui),
-                    Section::Updates => self.update_row(ui),
                 });
-                if self.section == Section::Display {
-                    ui.add_space(8.0);
-                    self.preview(ui);
-                }
+                // A line as tall as the section (a separator would take the whole height).
+                let (line, _) = ui.allocate_exact_size(egui::vec2(9.0, SECTION_HEIGHT), Sense::hover());
+                ui.painter().vline(line.center().x, line.y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
+                let size = egui::vec2(SECTION_WIDTH, SECTION_HEIGHT);
+                let rect = egui::Rect::from_min_size(ui.cursor().min, size);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+                    ui.set_min_size(size);
+                    ui.set_max_size(size);
+                    self.section_ui(ui);
+                });
             });
-            ui.add_space(10.0);
+            ui.separator();
             ui.horizontal(|ui| {
                 if ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked() {
                     result = Some(SettingsResult::Save(self.draft.clone()));
@@ -203,6 +205,37 @@ impl SettingsDialog {
         SettingsResult::Open
     }
 
+    /// The settings of the section on show.
+    fn section_ui(&mut self, ui: &mut egui::Ui) {
+        egui::Grid::new(("settings-grid", self.section))
+            .num_columns(2)
+            .spacing([12.0, 10.0])
+            // A bounded column: wrapping hints keep one layout from frame to frame.
+            .max_col_width(SECTION_WIDTH - 140.0)
+            .show(ui, |ui| match self.section {
+                Section::Display => {
+                    self.ui_rows(ui);
+                    self.font_row(ui);
+                    self.size_row(ui);
+                    self.theme_row(ui);
+                }
+                Section::Terminal => self.scrollback_row(ui),
+                Section::Clipboard => self.clipboard_rows(ui),
+                Section::Connection => {
+                    self.timeout_row(ui);
+                    if crate::power::SUPPORTED {
+                        self.sleep_row(ui);
+                    }
+                }
+                Section::Transfers => self.zmodem_row(ui),
+                Section::Updates => self.update_row(ui),
+            });
+        if self.section == Section::Display {
+            ui.add_space(8.0);
+            self.preview(ui);
+        }
+    }
+
     fn scrollback_row(&mut self, ui: &mut egui::Ui) {
         ui.label(t("스크롤백", "Scrollback"));
         ui.horizontal(|ui| {
@@ -212,7 +245,7 @@ impl SettingsDialog {
                     .speed(100)
                     .suffix(t(" 줄", " lines")),
             );
-            ui.weak(t("탭마다 보관하는 지난 출력", "Past output kept for each tab"));
+            hint(ui, t("탭마다 보관하는 지난 출력", "Past output kept for each tab"));
         });
         ui.end_row();
     }
@@ -263,7 +296,8 @@ impl SettingsDialog {
                     ui.selectable_value(&mut self.draft.ui_theme, t, name(t));
                 }
             });
-            ui.weak(t("메뉴·창의 밝기 (터미널 색은 아래 색 테마)", "Brightness of menus and windows (terminal colors: color theme below)"));
+            hint(ui, t("메뉴·창의 밝기", "Menus and windows"))
+                .on_hover_text(t("터미널 색은 아래 색 테마에서 고릅니다", "The terminal colors are the color theme below"));
         });
         ui.end_row();
     }
@@ -403,7 +437,7 @@ impl SettingsDialog {
                 "SSH · Telnet · RDP 서버가 이 시간 동안 응답하지 않으면 연결을 포기합니다 (TCP 연결부터 로그인까지).\n호스트 키 확인이나 비밀번호 입력을 기다리는 시간은 세지 않습니다. 새 연결부터 적용됩니다.",
                 "Gives up when an SSH, Telnet or RDP server does not answer for this long (from the TCP connect to the login).\nTime spent confirming a host key or typing a password does not count. Applies to new connections.",
             ));
-            ui.weak(tr!(
+            hint(ui, &tr!(
                 "응답 없는 서버를 기다리는 최대 시간 ({}~{}초)",
                 "Longest wait for a server that does not answer ({}–{} s)",
                 AppSettings::MIN_CONNECT_TIMEOUT,
@@ -472,7 +506,7 @@ Help → Check for updates checks at any time.",
                     .fixed_decimals(1)
                     .suffix(" pt"),
             );
-            ui.weak(t("Ctrl+휠 · Ctrl+= / Ctrl+- / Ctrl+0", "Ctrl+wheel · Ctrl+= / Ctrl+- / Ctrl+0"));
+            hint(ui, t("Ctrl+휠 · Ctrl+= / Ctrl+- / Ctrl+0", "Ctrl+wheel · Ctrl+= / Ctrl+- / Ctrl+0"));
         });
         ui.end_row();
     }
@@ -528,11 +562,11 @@ mod section_tests {
     use super::*;
 
     /// The text the dialog draws with `section` on show, and the dialog's height.
-    fn render(section: Section) -> (String, f32) {
+    fn render(section: Section) -> (String, f32, f32) {
         let ctx = egui::Context::default();
         let mut dialog = SettingsDialog::new(&AppSettings::default());
         dialog.section = section;
-        let (mut text, mut height) = (String::new(), 0.0);
+        let (mut text, mut height, mut left) = (String::new(), 0.0, 0.0);
         for _ in 0..3 {
             // A modal is laid out on a later pass.
             let mut out = ctx.run_ui(Default::default(), |ui| {
@@ -547,12 +581,15 @@ mod section_tests {
                     texts.push(t.galley.text().to_owned());
                     top = top.min(t.pos.y);
                     bottom = bottom.max(t.pos.y + t.galley.size().y);
+                    if t.galley.text() == "설정" {
+                        left = t.pos.x;
+                    }
                 }
             }
             text = texts.join("\n");
             height = bottom - top;
         }
-        (text, height)
+        (text, height, left)
     }
 
     #[test]
@@ -567,8 +604,10 @@ mod section_tests {
             (Section::Updates, "업데이트"),
         ];
         let mut heights = Vec::new();
+        let mut lefts = Vec::new();
         for (section, label) in expect {
-            let (text, height) = render(section);
+            let (text, height, left) = render(section);
+            lefts.push(left);
             assert!(text.contains(label), "{section:?}: {label} missing in\n{text}");
             heights.push(height);
         }
@@ -577,6 +616,8 @@ mod section_tests {
         // The dialog keeps its height (the OK row stays put) from section to section.
         let (min, max) = heights.iter().fold((f32::MAX, 0.0f32), |(a, b), &h| (a.min(h), b.max(h)));
         assert!(max - min < 2.0, "heights {heights:?}");
+        // And its width: it stays where it is (#143).
+        assert!(lefts.iter().all(|&x| (x - lefts[0]).abs() < 0.5), "left edges {lefts:?}");
     }
 
     /// "Reset to defaults" (#121) resets the section on show and nothing else: macros, recent

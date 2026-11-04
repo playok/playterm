@@ -76,8 +76,11 @@ impl ComposeBar {
                     "보낼 명령 입력 — Enter 보내기 · Shift+Enter 줄바꿈 · ↑↓ 이전 입력",
                     "Command to send — Enter sends · Shift+Enter new line · ↑↓ earlier input",
                 )
-            } else {
+            } else if width >= 220.0 {
                 t("보낼 명령 (Enter 보내기)", "Command (Enter sends)")
+            } else {
+                // Narrower still: a word that fits on one line (#165).
+                t("보낼 명령", "Command")
             };
             let edit = ui.add(
                 egui::TextEdit::multiline(&mut self.text)

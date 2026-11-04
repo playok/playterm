@@ -24,6 +24,10 @@ pub enum SidebarAction {
     Manage(Option<String>),
     /// Open the site manager on a new site.
     New,
+    ImportPutty,
+    ImportXshell,
+    /// Hide the list.
+    Hide,
     Duplicate(String),
     Delete(String),
     LockVault,
@@ -215,30 +219,48 @@ impl Sidebar {
 
     pub fn show(&mut self, ui: &mut egui::Ui, store: &ProfileStore, vault: VaultState) -> Option<SidebarAction> {
         let mut action = None;
+        // Long names end in "…" instead of widening the list (#141); the full name is in the
+        // row's tooltip.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 
         ui.horizontal(|ui| {
             ui.strong(t("사이트", "Sites"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(icon::button(icon::MANAGE, t("관리", "Manage")))
-                    .on_hover_text(t("사이트 관리 (Ctrl+Shift+S)", "Site Manager (Ctrl+Shift+S)"))
+                // Hides the list from the list itself, with or without the toolbar (#120).
+                // Icons only, so the line fits a narrow list.
+                if icon::named_icon_button(
+                    ui,
+                    icon::SIDEBAR_HIDE,
+                    t("사이트 목록 숨기기 (Ctrl+Shift+B)", "Hide the site list (Ctrl+Shift+B)"),
+                    true,
+                )
+                .clicked()
+                {
+                    action = Some(SidebarAction::Hide);
+                }
+                if icon::named_icon_button(ui, icon::SITE_MANAGER, t("사이트 관리 (Ctrl+Shift+S)", "Site Manager (Ctrl+Shift+S)"), true)
                     .clicked()
                 {
                     action = Some(SidebarAction::Manage(self.selected.clone()));
                 }
-                if ui.add(icon::icon_button(icon::NEW_SITE)).on_hover_text(t("새 사이트", "New site")).clicked() {
+                if icon::named_icon_button(ui, icon::NEW_SITE, t("새 사이트", "New site"), true).clicked() {
                     action = Some(SidebarAction::New);
                 }
             });
         });
         ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t("검색", "Search")).desired_width(f32::INFINITY));
 
+        // The button first (from the right), so a narrow list shortens the text, not the button.
         ui.horizontal(|ui| {
-            let line = VaultLine::of(vault);
-            ui.small(line.text).on_hover_text(VaultLine::explain());
-            if ui.add(icon::button(line.icon, line.button).small()).on_hover_text(VaultLine::explain()).clicked() {
-                action = Some(line.action);
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let line = VaultLine::of(vault);
+                if ui.add(icon::button(line.icon, line.button).small()).on_hover_text(VaultLine::explain()).clicked() {
+                    action = Some(line.action);
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(line.text).small()).truncate()).on_hover_text(VaultLine::explain());
+                });
+            });
         });
         // Sites deleted elsewhere are no longer selected.
         self.chosen.retain(|id| store.get(id).is_some());
@@ -276,7 +298,18 @@ impl Sidebar {
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             if store.profiles().is_empty() {
-                ui.weak(t("저장된 사이트가 없습니다.\n[+] 로 추가하세요.", "No saved sites.\nAdd one with [+]."));
+                ui.add(egui::Label::new(RichText::new(t("저장된 사이트가 없습니다.", "No saved sites.")).weak()).wrap());
+                ui.add_space(4.0);
+                // The ways to get sites, as on the start screen (#138).
+                if ui.add(icon::button(icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
+                    action = Some(SidebarAction::New);
+                }
+                if ui.add(icon::button(icon::IMPORT, t("PuTTY 가져오기", "Import PuTTY"))).clicked() {
+                    action = Some(SidebarAction::ImportPutty);
+                }
+                if ui.add(icon::button(icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
+                    action = Some(SidebarAction::ImportXshell);
+                }
                 return;
             }
             let templates: Vec<&SiteTemplate> = store.templates().iter().filter(|tpl| template_matches(tpl, &self.filter)).collect();
@@ -294,13 +327,11 @@ impl Sidebar {
             let tree = site_tree::build(store, &self.filter);
             self.folder_items(ui, &tree, &mut action);
             ui.add_space(6.0);
-            ui.weak(
-                RichText::new(t(
-                    "Ctrl·Shift+클릭으로 여러 개를 골라 한 번에 연결하거나 템플릿으로 저장합니다.",
-                    "Ctrl/Shift+click to pick several sites, then connect them at once or save a template.",
-                ))
-                .small(),
+            let hint = t(
+                "Ctrl·Shift+클릭으로 여러 개를 골라 한 번에 연결하거나 템플릿으로 저장합니다.",
+                "Ctrl/Shift+click to pick several sites, then connect them at once or save a template.",
             );
+            ui.add(egui::Label::new(RichText::new(hint).small().weak()).wrap());
         });
         action
     }
@@ -359,7 +390,7 @@ impl Sidebar {
                     .inner
                 })
                 .inner
-                .on_hover_text(tr!("{}  (더블클릭: 연결)", "{}  (double-click: connect)", summary(p)));
+                .on_hover_text(tr!("{}\n{}  (더블클릭: 연결)", "{}\n{}  (double-click: connect)", p.display_name(), summary(p)));
             if response.clicked() {
                 let modifiers = ui.input(|i| i.modifiers);
                 self.click(&p.id, modifiers);

@@ -144,6 +144,15 @@ pub fn icon_button<'a>(icon: MaterialIcon) -> Button<'a> {
     Button::new(icon.rich_text()).min_size(eframe::egui::vec2(MIN_ICON_BUTTON, MIN_ICON_BUTTON))
 }
 
+/// An icon-only button named `name`: in its tooltip (also while disabled) and for screen
+/// readers, which would otherwise read the icon's private-use character.
+pub fn named_icon_button(ui: &mut eframe::egui::Ui, icon: MaterialIcon, name: &str, enabled: bool) -> eframe::egui::Response {
+    use eframe::egui::{Role, WidgetInfo};
+    let response = ui.add_enabled(enabled, icon_button(icon));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, name));
+    response.on_hover_text(name).on_disabled_hover_text(name)
+}
+
 /// Adds the icon font to `defs` (which [`crate::fonts::install`] then installs), as the only
 /// font of the family [`MaterialIcon::rich_text`] draws with.
 pub fn add_font(defs: &mut FontDefinitions) {

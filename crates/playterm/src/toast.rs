@@ -25,6 +25,8 @@ struct Toast {
     /// The snippet is copied text (shown in quotes) rather than an explanation.
     quoted: bool,
     since: f64,
+    /// How long it stays, in seconds.
+    secs: f64,
 }
 
 fn id() -> egui::Id {
@@ -61,7 +63,15 @@ pub fn remote_copied(ctx: &egui::Context, tab: &str, text: &str) {
 
 /// A short notice: `what`, with `detail` under it.
 pub fn message(ctx: &egui::Context, what: &str, detail: &str) {
-    let toast = Toast { what: what.to_owned(), snippet: detail.to_owned(), quoted: false, since: ctx.input(|i| i.time) };
+    let toast = Toast { what: what.to_owned(), snippet: detail.to_owned(), quoted: false, since: ctx.input(|i| i.time), secs: SHOW_SECS };
+    ctx.data_mut(|d| d.insert_temp(id(), toast));
+    ctx.request_repaint();
+}
+
+/// A message from the app (something saved, imported): stays long enough to be read.
+pub fn info(ctx: &egui::Context, text: &str) {
+    let secs = (2.5 + text.chars().count() as f64 / 20.0).min(8.0);
+    let toast = Toast { what: text.to_owned(), snippet: String::new(), quoted: false, since: ctx.input(|i| i.time), secs };
     ctx.data_mut(|d| d.insert_temp(id(), toast));
     ctx.request_repaint();
 }
@@ -75,18 +85,18 @@ fn notify(ctx: &egui::Context, what: &str, text: &str) {
     } else {
         tr!("{what} · {}자", "{what} · {} chars", chars)
     };
-    let toast = Toast { what, snippet: snippet(text), quoted: true, since: ctx.input(|i| i.time) };
+    let toast = Toast { what, snippet: snippet(text), quoted: true, since: ctx.input(|i| i.time), secs: SHOW_SECS };
     ctx.data_mut(|d| d.insert_temp(id(), toast));
     ctx.request_repaint();
 }
 
 /// Where a notice of age `age` seconds is: (points below its resting place, opacity).
-fn placement(age: f64) -> (f32, f32) {
+fn placement(age: f64, secs: f64) -> (f32, f32) {
     let slide = (age / SLIDE_SECS).clamp(0.0, 1.0) as f32;
     // Ease out: fast at first, settling at the top.
     let rise = 1.0 - (1.0 - slide).powi(3);
     let fade_in = slide;
-    let fade_out = ((SHOW_SECS - age) / FADE_SECS).clamp(0.0, 1.0) as f32;
+    let fade_out = ((secs - age) / FADE_SECS).clamp(0.0, 1.0) as f32;
     (RISE * (1.0 - rise), fade_in.min(fade_out))
 }
 
@@ -94,11 +104,11 @@ fn placement(age: f64) -> (f32, f32) {
 pub fn show(ctx: &egui::Context) {
     let Some(toast) = ctx.data(|d| d.get_temp::<Toast>(id())) else { return };
     let age = ctx.input(|i| i.time) - toast.since;
-    if !(0.0..SHOW_SECS).contains(&age) {
+    if !(0.0..toast.secs).contains(&age) {
         ctx.data_mut(|d| d.remove::<Toast>(id()));
         return;
     }
-    let (below, opacity) = placement(age);
+    let (below, opacity) = placement(age, toast.secs);
     egui::Area::new(id().with("area"))
         .anchor(Align2::CENTER_BOTTOM, [0.0, -BOTTOM + below])
         .order(egui::Order::Tooltip)
@@ -117,7 +127,9 @@ pub fn show(ctx: &egui::Context) {
                 } else {
                     line.append(&toast.snippet, 12.0, format(ui.visuals().text_color()));
                 }
-                ui.add(egui::Label::new(line).wrap_mode(egui::TextWrapMode::Extend));
+                // Long messages wrap instead of running off the window.
+                ui.set_max_width(560.0);
+                ui.add(egui::Label::new(line).wrap_mode(egui::TextWrapMode::Wrap));
             });
         });
     ctx.request_repaint();
@@ -139,12 +151,12 @@ mod tests {
 
     #[test]
     fn slides_up_then_fades() {
-        let (below, opacity) = placement(0.0);
+        let (below, opacity) = placement(0.0, SHOW_SECS);
         assert_eq!((below, opacity), (RISE, 0.0), "starts below, invisible");
-        let (below, opacity) = placement(SLIDE_SECS);
+        let (below, opacity) = placement(SLIDE_SECS, SHOW_SECS);
         assert_eq!((below, opacity), (0.0, 1.0), "then rests, fully visible");
-        let (_, opacity) = placement(SHOW_SECS - FADE_SECS / 2.0);
+        let (_, opacity) = placement(SHOW_SECS - FADE_SECS / 2.0, SHOW_SECS);
         assert!(opacity > 0.4 && opacity < 0.6, "fading: {opacity}");
-        assert_eq!(placement(SHOW_SECS).1, 0.0);
+        assert_eq!(placement(SHOW_SECS, SHOW_SECS).1, 0.0);
     }
 }

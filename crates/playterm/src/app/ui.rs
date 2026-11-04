@@ -292,55 +292,75 @@ impl PlaytermApp {
         }
     }
 
-    /// The toolbar, and what the app has to say (simultaneous input, the last error or message).
+    /// The toolbar: one line, whatever the window's width (#144).
     pub(super) fn tab_bar(&mut self, ui: &mut egui::Ui) {
-        let mut action = None;
-        ui.horizontal_wrapped(|ui| {
-            if self.settings.toolbar {
-                let state = crate::toolbar::ToolbarState {
-                    active: self.sessions.get(self.active),
-                    i: self.active,
-                    sidebar: self.show_sidebar,
-                    sftp_panel: self.sftp_panel,
-                    compose_bar: self.settings.compose_bar,
-                    broadcast: self.broadcast,
-                    copy_hint: clip_keys::copy_hint(&self.settings.clipboard),
-                    paste_hint: clip_keys::paste_hint(&self.settings.clipboard),
-                };
-                action = crate::toolbar::show(ui, &state);
-            }
-            if self.broadcast {
-                ui.separator();
-                let others = self.broadcast_targets().len();
-                let (text, tip) = broadcast_status(others);
-                ui.label(RichText::new(text).strong().color(BROADCAST_COLOR)).on_hover_text(tip);
-                if ui.add(icon::button(icon::TURN_OFF, t("끄기", "Turn off"))).on_hover_text("Ctrl+Shift+I").clicked() {
-                    action = Some(Command::ToggleBroadcast);
-                }
-            }
-            if let Some(status) = &self.status {
-                ui.separator();
-                let label = ui
-                    .add(egui::Label::new(RichText::new(status).color(ui.visuals().error_fg_color)).sense(egui::Sense::click()))
-                    .on_hover_text(t("클릭해서 닫기", "Click to dismiss"));
-                if label.clicked() {
-                    self.status = None;
-                }
-            }
-            if let Some(info) = &self.info {
-                ui.separator();
-                let label = ui
-                    .add(egui::Label::new(RichText::new(info).weak()).sense(egui::Sense::click()))
-                    .on_hover_text(t("클릭해서 닫기", "Click to dismiss"));
-                if label.clicked() {
-                    self.info = None;
-                }
-            }
-        });
-
+        let state = crate::toolbar::ToolbarState {
+            active: self.sessions.get(self.active),
+            i: self.active,
+            sidebar: self.show_sidebar,
+            sftp_panel: self.sftp_panel,
+            compose_bar: self.settings.compose_bar,
+            broadcast: self.broadcast,
+            copy_hint: clip_keys::copy_hint(&self.settings.clipboard),
+            paste_hint: clip_keys::paste_hint(&self.settings.clipboard),
+        };
+        let action = ui.horizontal(|ui| crate::toolbar::show(ui, &state)).inner;
         if let Some(command) = action {
             let ctx = ui.ctx().clone();
             self.run(&ctx, command);
+        }
+    }
+
+    /// What the app has to say, over the top right of the terminal area `area`: simultaneous
+    /// input while it is on, and the last error until dismissed. Drawn over the terminal so it
+    /// keeps its size when they come and go (#118, #132).
+    pub(super) fn notices(&mut self, ctx: &egui::Context, area: egui::Rect) {
+        // Below the tab bar and the connection line.
+        let mut top = area.top() + 64.0;
+        let right = area.right() - 12.0;
+        let mut action = None;
+        if self.broadcast {
+            let others = self.broadcast_targets().len();
+            let (text, tip) = broadcast_status(others);
+            let shown = egui::Area::new(egui::Id::unique("notice-broadcast"))
+                .order(egui::Order::Foreground)
+                .pivot(egui::Align2::RIGHT_TOP)
+                .fixed_pos(egui::pos2(right, top))
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.5, BROADCAST_COLOR)).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(text).strong().color(BROADCAST_COLOR)).on_hover_text(tip);
+                            if ui.add(icon::button(icon::TURN_OFF, t("끄기", "Turn off")).small()).on_hover_text("Ctrl+Shift+I").clicked()
+                            {
+                                action = Some(Command::ToggleBroadcast);
+                            }
+                        });
+                    });
+                });
+            top = shown.response.rect.bottom() + 6.0;
+        }
+        if let Some(status) = self.status.clone() {
+            let mut dismiss = false;
+            egui::Area::new(egui::Id::unique("notice-error"))
+                .order(egui::Order::Foreground)
+                .pivot(egui::Align2::RIGHT_TOP)
+                .fixed_pos(egui::pos2(right, top))
+                .show(ctx, |ui| {
+                    let error = ui.visuals().error_fg_color;
+                    egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.5, error)).show(ui, |ui| {
+                        ui.set_max_width((area.width() - 48.0).clamp(200.0, 520.0));
+                        ui.horizontal_top(|ui| {
+                            ui.add(egui::Label::new(RichText::new(&status).color(error)).wrap());
+                            dismiss = ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("닫기", "Dismiss")).clicked();
+                        });
+                    });
+                });
+            if dismiss {
+                self.status = None;
+            }
+        }
+        if let Some(command) = action {
+            self.run(ctx, command);
         }
     }
 
