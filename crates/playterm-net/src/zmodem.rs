@@ -1820,7 +1820,9 @@ mod tests {
         assert_eq!(data, all_bytes(10_000)[6000..]);
     }
 
-    /// `rz` / `sz` of lrzsz, when installed.
+    /// `rz` / `sz` of lrzsz, when installed. With `PLAYTERM_REQUIRE_LRZSZ` set (as in CI),
+    /// a missing one fails the test instead of skipping it, so a green run means these tests
+    /// really ran against lrzsz.
     fn lrzsz(program: &str, args: &[&str], dir: &Path) -> Option<std::process::Child> {
         use std::process::{Command, Stdio};
         let child = Command::new(program)
@@ -1832,6 +1834,9 @@ mod tests {
             .spawn();
         match child {
             Ok(child) => Some(child),
+            Err(e) if std::env::var_os("PLAYTERM_REQUIRE_LRZSZ").is_some() => {
+                panic!("{program} (lrzsz) is required (PLAYTERM_REQUIRE_LRZSZ) but cannot run: {e}")
+            }
             Err(_) => {
                 eprintln!("{program} is not installed: skipped");
                 None
