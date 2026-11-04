@@ -7,6 +7,8 @@
 playterm is a native Windows terminal written in Rust (egui + alacritty_terminal + russh + IronRDP).
 It ships as a single portable `.exe` for x64 and ARM64, with no installer and no runtime to install.
 
+![playterm connected over SSH (dark theme)](docs/screenshots/main-dark.png)
+
 ## Highlights
 
 - **SSH, Telnet, serial and RDP** side by side in one window
@@ -18,6 +20,14 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads and uploads (`sz`/`rz`)
 - **Site manager**: folders, per-site tab colors, PuTTY and Xshell session import, and a `playterm>` command prompt in unconnected tabs
 - Korean / English UI, dark / light themes
+
+## Screenshots
+
+The screenshots show the Korean UI; English is one setting away.
+
+| Two servers side by side from a template | The start screen of an unconnected tab |
+| --- | --- |
+| ![Two SSH sessions opened side by side from a template (light theme)](docs/screenshots/split-light.png) | ![The start screen with recent sites and Quick Connect (light theme)](docs/screenshots/start-light.png) |
 
 ## Layout
 
