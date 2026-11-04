@@ -83,11 +83,25 @@ pub struct RdpSettings {
     pub drive_read_only: bool,
     /// Print from the remote desktop on this PC's default printer.
     pub printer: bool,
+    /// RD Gateway to connect through, `host[:port]` (443 when left out); empty connects directly.
+    pub gateway: String,
+    /// User for the gateway; empty logs on to it with the site's user and password.
+    pub gateway_user: String,
 }
 
 impl Default for RdpSettings {
     fn default() -> Self {
-        Self { width: 0, height: 0, clipboard: true, sound: true, drive_folder: String::new(), drive_read_only: false, printer: false }
+        Self {
+            width: 0,
+            height: 0,
+            clipboard: true,
+            sound: true,
+            drive_folder: String::new(),
+            drive_read_only: false,
+            printer: false,
+            gateway: String::new(),
+            gateway_user: String::new(),
+        }
     }
 }
 
@@ -102,6 +116,16 @@ impl RdpSettings {
     /// The folder to share, if any.
     pub fn shared_folder(&self) -> Option<&str> {
         Some(self.drive_folder.trim()).filter(|f| !f.is_empty())
+    }
+
+    /// The gateway to connect through, if any.
+    pub fn gateway(&self) -> Option<&str> {
+        Some(self.gateway.trim()).filter(|g| !g.is_empty())
+    }
+
+    /// The gateway's own user, when it does not take the site's user and password.
+    pub fn gateway_user(&self) -> Option<&str> {
+        self.gateway().and(Some(self.gateway_user.trim()).filter(|u| !u.is_empty()))
     }
 
     /// The shared folder, when it is not a folder on this PC (sharing is Windows-only).
@@ -468,6 +492,8 @@ impl Drop for ClipboardThread {
 enum Outcome {
     Ended,
     BadPassword,
+    /// The gateway refused its own user (see [`RdpSettings::gateway_user`]).
+    BadGatewayPassword,
 }
 
 /// Starts the session on its own thread; ends with [`SessionEvent::Closed`].
@@ -515,7 +541,25 @@ async fn run(params: ConnectParams, mut commands: mpsc::UnboundedReceiver<Sessio
     let has_clipboard = factory.is_some();
 
     let mut password = params.password.clone().map(Zeroizing::new);
+    // Asked when the gateway has a user of its own, and again after the gateway refuses it.
+    let mut gateway_password: Option<Zeroizing<String>> = None;
     for _ in 0..MAX_PASSWORD_TRIES {
+        if let Some(user) = params.rdp.gateway_user()
+            && gateway_password.is_none()
+        {
+            let gateway = params.rdp.gateway().unwrap_or_default();
+            let answers = sink
+                .prompt(
+                    tr!("RD 게이트웨이 {user}@{gateway} 비밀번호", "Password for RD Gateway {user}@{gateway}"),
+                    String::new(),
+                    vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
+                    Some(user),
+                    false,
+                )
+                .await
+                .ok_or_else(|| anyhow!(t("인증이 취소되었습니다", "Authentication cancelled")))?;
+            gateway_password = Some(Zeroizing::new(answers.into_iter().next().unwrap_or_default()));
+        }
         let current = match password.take() {
             Some(p) => p,
             None => {
@@ -534,9 +578,16 @@ async fn run(params: ConnectParams, mut commands: mpsc::UnboundedReceiver<Sessio
             }
         };
         let clip = if has_clipboard { Some(&mut clip_rx) } else { None };
-        match session(&params, &current, factory, &mut commands, clip, &sink).await? {
+        let logins = Logins { password: &current, gateway_password: gateway_password.as_deref().map(String::as_str) };
+        match session(&params, logins, factory, &mut commands, clip, &sink).await? {
             Outcome::Ended => return Ok(()),
             Outcome::BadPassword => sink.notice(t("인증 실패, 다시 시도하세요.", "Authentication failed, try again.")),
+            Outcome::BadGatewayPassword => {
+                sink.notice(t("RD 게이트웨이 인증 실패, 다시 시도하세요.", "RD Gateway authentication failed, try again."));
+                gateway_password = None;
+                // The site's password was not the problem.
+                password = Some(current);
+            }
         }
     }
     bail!(t("인증 실패: 시도 횟수를 초과했습니다", "Authentication failed: too many attempts"))
@@ -730,35 +781,139 @@ fn drive_name(folder: &Path) -> String {
     }
 }
 
-/// TCP, TLS (with the certificate check) and the connection sequence up to the active session.
+/// The passwords for one connection attempt.
+#[derive(Clone, Copy)]
+struct Logins<'a> {
+    /// The site's (remote desktop's) password.
+    password: &'a str,
+    /// The gateway's own password, when it has a user of its own.
+    gateway_password: Option<&'a str>,
+}
+
+/// The gateway refused the user name or password (HTTP 401).
+#[derive(Debug)]
+struct GatewayAuthFailed;
+
+impl std::fmt::Display for GatewayAuthFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(t("RD 게이트웨이 인증 실패", "RD Gateway authentication failed"))
+    }
+}
+
+impl std::error::Error for GatewayAuthFailed {}
+
+/// The byte stream to the remote desktop: TCP, or a tunnel through the RD Gateway.
+type Transport = Box<dyn AsyncReadWrite + Unpin + Send + Sync>;
+
+/// Redirections an RD Gateway's policy turns off (MS-TSGU HTTP_TUNNEL_REDIR_* flags).
+const GATEWAY_REDIR_ENABLE_ALL: u32 = 0x8000_0000;
+const GATEWAY_REDIR_DISABLE_ALL: u32 = 0x4000_0000;
+const GATEWAY_REDIR_DISABLE_DRIVE: u32 = 0x01;
+const GATEWAY_REDIR_DISABLE_PRINTER: u32 = 0x02;
+const GATEWAY_REDIR_DISABLE_CLIPBOARD: u32 = 0x08;
+
+/// Turns off in `rdp` what the gateway's redirection flags forbid, as mstsc does, and names what
+/// was turned off.
+fn apply_gateway_policy(rdp: &mut RdpSettings, flags: Option<u32>) -> Vec<&'static str> {
+    let Some(flags) = flags.filter(|f| f & GATEWAY_REDIR_ENABLE_ALL == 0) else { return Vec::new() };
+    let all = flags & GATEWAY_REDIR_DISABLE_ALL != 0;
+    let mut off = Vec::new();
+    if (all || flags & GATEWAY_REDIR_DISABLE_CLIPBOARD != 0) && rdp.clipboard {
+        rdp.clipboard = false;
+        off.push(t("클립보드", "clipboard"));
+    }
+    if (all || flags & GATEWAY_REDIR_DISABLE_DRIVE != 0) && rdp.shared_folder().is_some() {
+        rdp.drive_folder.clear();
+        off.push(t("공유 폴더", "shared folder"));
+    }
+    if (all || flags & GATEWAY_REDIR_DISABLE_PRINTER != 0) && rdp.printer {
+        rdp.printer = false;
+        off.push(t("프린터", "printer"));
+    }
+    off
+}
+
+/// A tunnel to `params.host` through the gateway, with the gateway's policy applied to `rdp`.
+///
+/// The gateway's certificate must be one Windows trusts (as mstsc requires); the remote
+/// desktop's own certificate is still pinned in `known_rdp_hosts` after the tunnel is up.
+async fn open_gateway(
+    params: &ConnectParams,
+    gateway: &str,
+    logins: Logins<'_>,
+    rdp: &mut RdpSettings,
+    sink: &EventSink,
+) -> anyhow::Result<(Transport, std::net::SocketAddr)> {
+    let (user, password) = match (params.rdp.gateway_user(), logins.gateway_password) {
+        (Some(user), Some(password)) => (user, password),
+        _ => (params.username.as_str(), logins.password),
+    };
+    let target = ironrdp_mstsgu::GwConnectTarget {
+        gw_endpoint: gateway.to_owned(),
+        gw_user: user.to_owned(),
+        gw_pass: password.to_owned(),
+        smart_card: None,
+        server: params.host.clone(),
+    };
+    // The crate's default accepts any certificate, and its consent-message variant has no other
+    // choice, so a gateway's consent message (a notice to agree to) is accepted without being shown.
+    let result = ironrdp_mstsgu::GwClient::connect_with_port_and_certificate_validation(
+        &target,
+        &client_name(),
+        params.port,
+        ironrdp_tls::CertificateValidation::Strict,
+        None,
+    )
+    .await;
+    let (client, addr) = match result {
+        Ok(connected) => connected,
+        Err(e) if matches!(e.kind(), ironrdp_mstsgu::GwErrorKind::HttpStatus(401)) => return Err(GatewayAuthFailed.into()),
+        Err(e) => {
+            return Err(anyhow!(e.to_string())
+                .context(tr!("RD 게이트웨이 {gateway} 를 거쳐 연결할 수 없습니다", "Cannot connect through RD Gateway {gateway}")));
+        }
+    };
+    let off = apply_gateway_policy(rdp, client.tunnel_policy().redirection_flags);
+    if !off.is_empty() {
+        sink.notice(tr!("RD 게이트웨이 정책으로 꺼짐: {}", "Turned off by the RD Gateway's policy: {}", off.join(", ")));
+    }
+    Ok((Box::new(client), addr))
+}
+
+/// TCP (or the RD Gateway tunnel), TLS (with the certificate check) and the connection sequence
+/// up to the active session.
 async fn connect(
     params: &ConnectParams,
-    password: &str,
+    logins: Logins<'_>,
     clipboard: Option<&(dyn CliprdrBackendFactory + Send)>,
     sink: &EventSink,
 ) -> anyhow::Result<Result<(ironrdp_connector::ConnectionResult, Upgraded), ConnectorError>> {
-    let stream = TcpStream::connect((params.host.as_str(), params.port))
-        .await
-        .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
-    stream.set_nodelay(true)?;
-    let client_addr = stream.local_addr()?;
+    let mut rdp = params.rdp.clone();
+    let (stream, client_addr): (Transport, _) = match params.rdp.gateway() {
+        Some(gateway) => open_gateway(params, gateway, logins, &mut rdp, sink).await?,
+        None => {
+            let stream = TcpStream::connect((params.host.as_str(), params.port))
+                .await
+                .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
+            stream.set_nodelay(true)?;
+            let client_addr = stream.local_addr()?;
+            (Box::new(stream), client_addr)
+        }
+    };
+    let clipboard = clipboard.filter(|_| rdp.clipboard);
     let mut framed = TokioFramed::new(stream);
 
     // A shared folder that is gone (a removed USB drive, say) is left out rather than shown as a
     // broken drive, and does not keep the desktop from connecting.
-    let without_folder;
-    let params = match params.rdp.missing_folder() {
-        Some(folder) => {
-            sink.notice(tr!(
-                "공유 폴더가 없어 공유하지 않고 연결합니다: {folder}",
-                "The shared folder does not exist; connecting without it: {folder}"
-            ));
-            without_folder = ConnectParams { rdp: RdpSettings { drive_folder: String::new(), ..params.rdp.clone() }, ..params.clone() };
-            &without_folder
-        }
-        None => params,
-    };
-    let mut connector = client_connector(params, password, clipboard, client_addr)?;
+    if let Some(folder) = rdp.missing_folder() {
+        sink.notice(tr!(
+            "공유 폴더가 없어 공유하지 않고 연결합니다: {folder}",
+            "The shared folder does not exist; connecting without it: {folder}"
+        ));
+        rdp.drive_folder.clear();
+    }
+    let params = &ConnectParams { rdp, ..params.clone() };
+    let mut connector = client_connector(params, logins.password, clipboard, client_addr)?;
 
     let should_upgrade = match ironrdp_tokio::connect_begin(&mut framed, &mut connector).await {
         Ok(s) => s,
@@ -776,7 +931,7 @@ async fn connect(
     check_certificate(params, &cert, sink).await?;
 
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
-    let erased: Box<dyn AsyncReadWrite + Unpin + Send + Sync> = Box::new(tls);
+    let erased: Transport = Box::new(tls);
     let mut framed = TokioFramed::new_with_leftover(erased, leftover);
     let server_public_key =
         ironrdp_tls::extract_tls_server_public_key(&cert).ok_or_else(|| anyhow!("unable to extract the TLS server public key"))?.to_owned();
@@ -825,14 +980,20 @@ async fn check_certificate(params: &ConnectParams, cert: &x509_cert::Certificate
 
 async fn session(
     params: &ConnectParams,
-    password: &str,
+    logins: Logins<'_>,
     clipboard: Option<&(dyn CliprdrBackendFactory + Send)>,
     commands: &mut mpsc::UnboundedReceiver<SessionCommand>,
     mut clip_rx: Option<&mut mpsc::UnboundedReceiver<ClipboardMessage>>,
     sink: &EventSink,
 ) -> anyhow::Result<Outcome> {
     // Within the connect time limit; confirming a new certificate pauses it.
-    let (result, framed) = match sink.connecting(params, connect(params, password, clipboard, sink)).await? {
+    let connected = match sink.connecting(params, connect(params, logins, clipboard, sink)).await {
+        Err(e) if e.is::<GatewayAuthFailed>() => {
+            return Ok(if params.rdp.gateway_user().is_some() { Outcome::BadGatewayPassword } else { Outcome::BadPassword });
+        }
+        connected => connected?,
+    };
+    let (result, framed) = match connected {
         Ok(connected) => connected,
         Err(e) => match classify(&e) {
             Failure::BadPassword => return Ok(Outcome::BadPassword),
@@ -1160,6 +1321,83 @@ mod tests {
             let Err(err) = client_connector(&params, "pw", None, test_addr()) else { panic!("{folder} was accepted") };
             assert!(err.to_string().contains(folder), "{err}");
         }
+    }
+
+    #[test]
+    fn the_gateway_user_needs_a_gateway() {
+        let mut rdp = RdpSettings { gateway_user: "gw".into(), ..Default::default() };
+        assert_eq!(rdp.gateway(), None, "direct by default");
+        assert_eq!(rdp.gateway_user(), None, "no gateway, no gateway login");
+        rdp.gateway = " gw.example.com:8443 ".into();
+        assert_eq!(rdp.gateway(), Some("gw.example.com:8443"));
+        assert_eq!(rdp.gateway_user(), Some("gw"));
+        rdp.gateway_user = " ".into();
+        assert_eq!(rdp.gateway_user(), None, "blank takes the site's login");
+    }
+
+    #[test]
+    fn the_gateway_policy_turns_off_redirections() {
+        let shared = || RdpSettings { drive_folder: r"C:\work".into(), printer: true, ..Default::default() };
+
+        let mut rdp = shared();
+        assert!(apply_gateway_policy(&mut rdp, None).is_empty(), "no policy");
+        assert!(apply_gateway_policy(&mut rdp, Some(GATEWAY_REDIR_ENABLE_ALL | GATEWAY_REDIR_DISABLE_ALL)).is_empty());
+        assert_eq!(rdp, shared());
+
+        let mut rdp = shared();
+        assert_eq!(apply_gateway_policy(&mut rdp, Some(GATEWAY_REDIR_DISABLE_DRIVE)).len(), 1);
+        assert_eq!(rdp.shared_folder(), None);
+        assert!(rdp.clipboard && rdp.printer);
+
+        let mut rdp = shared();
+        assert_eq!(apply_gateway_policy(&mut rdp, Some(GATEWAY_REDIR_DISABLE_CLIPBOARD | GATEWAY_REDIR_DISABLE_PRINTER)).len(), 2);
+        assert!(!rdp.clipboard && !rdp.printer);
+        assert!(rdp.shared_folder().is_some());
+
+        let mut rdp = shared();
+        assert_eq!(apply_gateway_policy(&mut rdp, Some(GATEWAY_REDIR_DISABLE_ALL)).len(), 3);
+        assert!(!rdp.clipboard && !rdp.printer && rdp.shared_folder().is_none());
+        assert!(rdp.sound, "sound is not a device redirection");
+    }
+
+    /// A gateway whose certificate Windows does not trust is refused before anything is sent,
+    /// even the user name and password.
+    #[tokio::test]
+    async fn an_untrusted_gateway_certificate_is_refused() {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        use tokio_rustls::rustls;
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.signing_key.serialize_der().into());
+        let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert.cert.der().clone()], key)
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // What the client sent after the handshake (the HTTP request, with the login).
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let Ok(mut tls) = acceptor.accept(tcp).await else { return Vec::new() };
+            // The first bytes are enough; hanging up then also ends a client that sent a request.
+            let mut received = vec![0; 4096];
+            let read = tokio::time::timeout(Duration::from_secs(10), tokio::io::AsyncReadExt::read(&mut tls, &mut received)).await;
+            received.truncate(read.ok().and_then(Result::ok).unwrap_or(0));
+            received
+        });
+
+        let mut params = test_params();
+        params.rdp.gateway = format!("localhost:{port}");
+        let (_handle, _commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+        let logins = Logins { password: "pw", gateway_password: None };
+        let mut rdp = params.rdp.clone();
+        let gateway = params.rdp.gateway().unwrap().to_owned();
+        let Err(err) = open_gateway(&params, &gateway, logins, &mut rdp, &sink).await else { panic!("the gateway was trusted") };
+        assert!(!err.is::<GatewayAuthFailed>(), "{err:#}");
+        assert!(format!("{err:#}").contains(&gateway), "{err:#}");
+        let received = server.await.unwrap();
+        assert!(received.is_empty(), "sent to an untrusted gateway: {}", String::from_utf8_lossy(&received));
     }
 
     /// Plays a second of silence through this PC's default output, as the server's sound

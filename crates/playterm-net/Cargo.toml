@@ -39,6 +39,7 @@ zeroize = "1.9.1"
 ironrdp-rdpdr = "0.9"
 ironrdp-rdpdr-native = "0.9"
 ironrdp-svc = "0.10"
+ironrdp-mstsgu = { version = "0.1", features = ["native-tls"] }
 
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_IO", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
@@ -52,3 +53,5 @@ futures = "0.3.34"
 tempfile = "3"
 rand = { version = "0.10", features = ["thread_rng"] }
 tokio = { version = "1.54.1", features = ["test-util", "process"] }
+rcgen = "0.14"
+tokio-rustls = "0.26"

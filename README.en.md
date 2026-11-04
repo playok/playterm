@@ -375,7 +375,8 @@ Choose protocol **RDP** in the Site Manager, type `rdp [user@]host[:port]` at th
 - **Sound** (site setting, on by default): the remote computer's sound plays on this PC's default output (mstsc's "Play on this computer"). Off, the server is told not to send it.
 - **Shared folder** (site setting): the chosen folder shows up as a drive in "This PC" of the remote desktop (mstsc's "Local Resources → Drives"). With **Read-only** on, the remote side cannot change or delete files. Only the folder itself is reachable: `..`, device paths, and links or junctions pointing outside it are never opened. A folder that is missing (an unplugged USB drive, say) is left out and the desktop connects without it.
 - **Printer** (site setting, off by default): print from the remote desktop on this PC's default printer. The printer appears only if the remote computer has a driver of the same name (no Easy Print yet).
-- Not supported yet: microphone input, drive and printer redirection, RD Gateway, Kerberos (domain accounts authenticate with NTLM).
+- **RD Gateway** (site setting): connect through a company RD Gateway (HTTPS, 443 by default), given as `gateway.example.com` or `gateway.example.com:8443`. With the gateway user left blank it logs on with the site's user and password; with one filled in, that account's password is asked when connecting. The gateway's certificate must be one Windows trusts (as with mstsc; self-signed ones are refused). The remote desktop's own certificate is still pinned in `known_rdp_hosts`. When the gateway's policy forbids clipboard, folder or printer sharing, those are turned off with a notice. A gateway consent message is accepted without being shown.
+- Not supported yet: microphone input, Kerberos (domain accounts authenticate with NTLM).
 
 Test RDP server: `tools\dev-rdpd` (`cargo run --release` → 127.0.0.1:3389, tester / secret). It draws crosshairs that follow the mouse and prints the keyboard and mouse input it receives.
 

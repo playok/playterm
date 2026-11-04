@@ -234,6 +234,34 @@ fn rdp_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
     if cfg!(windows) {
         rdp_device_rows(ui, rdp);
     }
+
+    rdp_gateway_rows(ui, rdp);
+}
+
+/// The RD Gateway to connect through, and its own user when it does not take the site's.
+fn rdp_gateway_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
+    ui.label(t("RD 게이트웨이", "RD Gateway"));
+    ui.add(
+        egui::TextEdit::singleline(&mut rdp.gateway).hint_text(t("사용 안 함 (직접 연결)", "None (connect directly)")).desired_width(220.0),
+    )
+    .on_hover_text(t(
+        "gateway.example.com 또는 gateway.example.com:8443 (HTTPS, 기본 443)",
+        "gateway.example.com or gateway.example.com:8443 (HTTPS, 443 by default)",
+    ));
+    ui.end_row();
+
+    ui.label(t("게이트웨이 사용자", "Gateway user"));
+    ui.add_enabled(
+        rdp.gateway().is_some(),
+        egui::TextEdit::singleline(&mut rdp.gateway_user)
+            .hint_text(t("사이트와 같은 사용자·비밀번호", "Same user and password as the site"))
+            .desired_width(220.0),
+    )
+    .on_hover_text(t(
+        "다른 계정으로 게이트웨이에 로그인할 때만 적습니다. 비밀번호는 연결할 때 묻습니다",
+        "Only for logging on to the gateway with another account; its password is asked when connecting",
+    ));
+    ui.end_row();
 }
 
 /// The folder shown as a drive in the remote desktop, and the printer.
