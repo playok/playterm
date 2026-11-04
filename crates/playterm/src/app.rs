@@ -264,11 +264,15 @@ pub struct PlaytermApp {
 
 impl PlaytermApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Vec<SessionProfile>) -> anyhow::Result<Self> {
+        let config_dir = config_dir().context(t("사용자 설정 폴더를 찾을 수 없습니다", "Cannot find the user settings folder"))?;
+        Self::new_in(cc, initial, &config_dir)
+    }
+
+    /// The app with its settings, sites and vault in `config_dir` (tests give each their own).
+    pub fn new_in(cc: &eframe::CreationContext<'_>, initial: Vec<SessionProfile>, config_dir: &Path) -> anyhow::Result<Self> {
         // Ctrl+= / Ctrl+- / Ctrl+0 size the terminal font instead of the whole window.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
 
-        let config_dir = config_dir().context(t("사용자 설정 폴더를 찾을 수 없습니다", "Cannot find the user settings folder"))?;
-        let config_dir = config_dir.as_path();
         // Settings first: they choose the language of the messages below.
         let settings_path = config_dir.join("settings.toml");
         let mut settings_error = None;
@@ -2268,6 +2272,29 @@ impl eframe::App for PlaytermApp {
 
         crate::toast::show(&ctx);
         self.update_window_title(&ctx);
+    }
+}
+
+/// What the screen-flow tests (`ui_tests`) look at.
+#[cfg(test)]
+impl PlaytermApp {
+    pub(crate) fn test_sessions(&mut self) -> &mut [Session] {
+        &mut self.sessions
+    }
+    pub(crate) fn test_site_manager_open(&self) -> bool {
+        self.site_manager.is_some()
+    }
+    pub(crate) fn test_modal_open(&self) -> bool {
+        self.modal.is_some()
+    }
+    pub(crate) fn test_settings(&self) -> &AppSettings {
+        &self.settings
+    }
+    pub(crate) fn test_store(&self) -> &ProfileStore {
+        &self.store
+    }
+    pub(crate) fn test_broadcast(&self) -> bool {
+        self.broadcast
     }
 }
 

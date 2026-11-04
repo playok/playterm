@@ -1271,6 +1271,13 @@ impl Session {
         changed
     }
 
+    /// Whether `text` is on the screen or in the scrollback (tests).
+    #[cfg(test)]
+    pub fn screen_contains(&mut self, text: &str) -> bool {
+        let mut search = playterm_term::TextSearch::new(text).expect("search text");
+        !self.terminal.all_matches(&mut search, 1).is_empty()
+    }
+
     /// Protocol bytes (not typed input) for the remote side.
     fn send_raw(&mut self, bytes: Vec<u8>) {
         if bytes.is_empty() {
