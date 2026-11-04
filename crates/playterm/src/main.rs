@@ -38,6 +38,7 @@ mod status_bar;
 mod template_dialog;
 mod toast;
 mod toolbar;
+mod tooltips;
 #[cfg(test)]
 mod ui_tests;
 mod update;

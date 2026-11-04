@@ -208,6 +208,8 @@ pub struct PlaytermApp {
     dark: bool,
     /// A modal dialog was open last frame (see `ui`).
     modal_was_open: bool,
+    /// Closes a tooltip a dialog opened over (see `tooltips`).
+    tooltip_reset: crate::tooltips::TooltipReset,
     /// The terminal scheme the open tabs were last given.
     palette_theme: &'static str,
 }
@@ -284,6 +286,7 @@ impl PlaytermApp {
             quit_confirmed: false,
             dark: true,
             modal_was_open: false,
+            tooltip_reset: Default::default(),
             palette_theme: "",
         };
         // Development builds (cargo run) are not replaced by releases unless asked.

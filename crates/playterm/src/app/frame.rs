@@ -3,7 +3,8 @@
 use super::*;
 
 impl eframe::App for PlaytermApp {
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.tooltip_reset.apply(ctx, &mut raw_input.events);
         // Text fields get the usual clipboard keys; a terminal or remote desktop with the
         // keyboard reads them itself (see `clip_keys`).
         if !self.dock.has_focus() {
@@ -75,8 +76,11 @@ impl eframe::App for PlaytermApp {
         let modal_open = prompt_open || self.modal.is_some() || self.updater.is_open();
         if modal_open != self.modal_was_open {
             self.modal_was_open = modal_open;
-            // One more frame: a tooltip drawn under the pointer before the dialog opened would
-            // otherwise stay on top of it until the pointer moves (#153).
+            // A tooltip drawn under the pointer before the dialog opened would otherwise stay on
+            // top of it while the pointer stays on its widget (#153).
+            if modal_open {
+                self.tooltip_reset.start(&ctx);
+            }
             ctx.request_repaint();
             // Closed: the keyboard goes back to the terminal, not to whatever text field egui
             // moves the focus to (#155).
