@@ -147,9 +147,8 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
     let mut target = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let mut value = |what: &str| {
-            it.next().cloned().ok_or_else(|| tr!("{arg} 다음에 {what}이(가) 필요합니다", "Missing {what} after {arg}"))
-        };
+        let mut value =
+            |what: &str| it.next().cloned().ok_or_else(|| tr!("{arg} 다음에 {what}이(가) 필요합니다", "Missing {what} after {arg}"));
         match arg.as_str() {
             "-p" => port = Some(parse_port(&value(t("포트", "port"))?)?),
             "-l" => user = Some(value(t("사용자 이름", "user name"))?),
@@ -255,10 +254,7 @@ pub fn parse(line: &str) -> Parsed {
         "r" | "reconnect" => Parsed::Request(Request::Reconnect),
         "ping" => parse_ping(rest),
         "exit" | "quit" | "close" => Parsed::Request(Request::Exit),
-        other => Parsed::Error(tr!(
-            "알 수 없는 명령: {other}  (help 로 목록 보기)",
-            "Unknown command: {other}  (type help for a list)"
-        )),
+        other => Parsed::Error(tr!("알 수 없는 명령: {other}  (help 로 목록 보기)", "Unknown command: {other}  (type help for a list)")),
     }
 }
 
@@ -280,9 +276,10 @@ fn parse_ping(args: &[String]) -> Parsed {
     while let Some(arg) = it.next() {
         let flag = arg.to_ascii_lowercase().replacen('/', "-", 1);
         let mut number = |max: u32, what: &str| {
-            it.next().and_then(|v| v.parse::<u32>().ok()).filter(|n| (1..=max).contains(n)).ok_or_else(|| {
-                Parsed::Error(tr!("{flag} 다음에는 1~{max} 의 {what}", "{flag} needs {what} from 1 to {max}"))
-            })
+            it.next()
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|n| (1..=max).contains(n))
+                .ok_or_else(|| Parsed::Error(tr!("{flag} 다음에는 1~{max} 의 {what}", "{flag} needs {what} from 1 to {max}")))
         };
         match flag.as_str() {
             "-t" => options.count = None,
@@ -573,7 +570,6 @@ impl LineEditor {
         }
         KeyResult::None
     }
-
 }
 
 /// `s` without its escape sequences (the part that takes up cells).
@@ -701,10 +697,7 @@ mod tests {
         assert_eq!(request("open 웹 서버"), Request::OpenSite("웹 서버".into()));
         assert_eq!(request("sites 운영"), Request::Sites("운영".into()));
         assert_eq!(parse("ls"), Parsed::Ls(ListOptions::default()));
-        assert_eq!(
-            parse(r"ls -la C:\Windows"),
-            Parsed::Ls(ListOptions { long: true, all: true, path: Some(r"C:\Windows".into()) })
-        );
+        assert_eq!(parse(r"ls -la C:\Windows"), Parsed::Ls(ListOptions { long: true, all: true, path: Some(r"C:\Windows".into()) }));
         assert_eq!(parse("dir /a *.log"), Parsed::Ls(ListOptions { long: true, all: true, path: Some("*.log".into()) }));
         assert_eq!(parse("dir /Windows"), Parsed::Ls(ListOptions { long: true, all: false, path: Some("/Windows".into()) }));
         assert!(matches!(parse("ls -z"), Parsed::Error(_)));

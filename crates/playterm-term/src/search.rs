@@ -207,5 +207,4 @@ mod tests {
         assert_eq!(all.iter().map(|m| m.start().line.0).collect::<Vec<_>>(), [-2, 0, 2]);
         assert_eq!(t.all_matches(&mut s, 2).len(), 2, "limited");
     }
-
 }

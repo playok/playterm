@@ -33,11 +33,7 @@ impl Deadline {
 
     /// Runs `connecting`, failing with "connection timed out" if it takes longer than `limit`
     /// (not counting pauses).
-    pub(crate) async fn limit<T>(
-        &self,
-        limit: Duration,
-        connecting: impl Future<Output = anyhow::Result<T>>,
-    ) -> anyhow::Result<T> {
+    pub(crate) async fn limit<T>(&self, limit: Duration, connecting: impl Future<Output = anyhow::Result<T>>) -> anyhow::Result<T> {
         {
             let mut state = self.state();
             state.until = Some(Instant::now() + limit);

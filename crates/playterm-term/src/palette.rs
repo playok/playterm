@@ -205,9 +205,7 @@ impl Palette {
         let flags = cell.flags;
         let fg_color = match cell.fg {
             Color::Named(n) if flags.contains(Flags::DIM) => Color::Named(n.to_dim()),
-            Color::Named(n) if flags.contains(Flags::BOLD) && (n as usize) < 8 => {
-                Color::Named(n.to_bright())
-            }
+            Color::Named(n) if flags.contains(Flags::BOLD) && (n as usize) < 8 => Color::Named(n.to_bright()),
             Color::Indexed(i) if flags.contains(Flags::BOLD) && i < 8 => Color::Indexed(i + 8),
             c => c,
         };

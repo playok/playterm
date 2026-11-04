@@ -117,13 +117,8 @@ fn hangul_fallback(files: &[(String, PathBuf)]) -> (Option<Face>, Option<Face>) 
 /// The regular and bold faces of the font behind the terminal font for Hangul.
 #[cfg(not(windows))]
 fn hangul_fallback(files: &[(String, PathBuf)]) -> (Option<Face>, Option<Face>) {
-    const CANDIDATES: [&str; 5] = [
-        "applesdgothicneo.ttc",
-        "nanumgothiccoding.ttf",
-        "nanumgothic.ttf",
-        "notosanscjk-regular.ttc",
-        "notosanscjkkr-regular.otf",
-    ];
+    const CANDIDATES: [&str; 5] =
+        ["applesdgothicneo.ttc", "nanumgothiccoding.ttf", "nanumgothic.ttf", "notosanscjk-regular.ttc", "notosanscjkkr-regular.otf"];
     for name in CANDIDATES {
         let found: Vec<(String, PathBuf)> = files.iter().filter(|(n, _)| n == name).cloned().collect();
         if let Some(family) = families_from(read_files(&found)).into_iter().next() {
@@ -236,10 +231,8 @@ fn families_from(faces: Vec<FaceInfo>) -> Vec<FontChoice> {
         .into_values()
         .filter_map(|faces| {
             let regular = faces.iter().min_by_key(|f| (f.italic, f.weight.abs_diff(400)))?;
-            let bold = faces
-                .iter()
-                .filter(|f| !f.italic && f.weight >= 600 && f.weight > regular.weight)
-                .min_by_key(|f| f.weight.abs_diff(700));
+            let bold =
+                faces.iter().filter(|f| !f.italic && f.weight >= 600 && f.weight > regular.weight).min_by_key(|f| f.weight.abs_diff(700));
             let all = faces.iter().flat_map(|f| f.families.iter());
             let key = all.clone().find(|(lang, _)| *lang == LANG_ENGLISH_US).unwrap_or(&regular.families[0]).1.clone();
             let name = all
@@ -346,11 +339,7 @@ fn read_u32(data: &[u8], at: usize) -> Option<usize> {
 
 /// Where face `index`'s table directory starts (collections list one per face).
 fn face_offset(data: &[u8], index: u32) -> Option<usize> {
-    if data.starts_with(b"ttcf") {
-        read_u32(data, 12 + 4 * index as usize)
-    } else {
-        (index == 0).then_some(0)
-    }
+    if data.starts_with(b"ttcf") { read_u32(data, 12 + 4 * index as usize) } else { (index == 0).then_some(0) }
 }
 
 /// egui draws glyphs from embedded bitmap tables like color emoji, in their own color, so
@@ -398,14 +387,10 @@ pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
     let choice = find(font).or_else(|| {
         let found = if font.trim().eq_ignore_ascii_case(fallback) { None } else { find(fallback) };
         error = Some(match &found {
-            Some(_) => playterm_i18n::tr!(
-                "'{font}' 글꼴을 찾을 수 없어 {fallback} 를 씁니다",
-                "Font '{font}' not found, using {fallback}"
-            ),
-            None => playterm_i18n::tr!(
-                "'{font}' 글꼴을 찾을 수 없어 내장 글꼴을 씁니다",
-                "Font '{font}' not found, using the built-in font"
-            ),
+            Some(_) => playterm_i18n::tr!("'{font}' 글꼴을 찾을 수 없어 {fallback} 를 씁니다", "Font '{font}' not found, using {fallback}"),
+            None => {
+                playterm_i18n::tr!("'{font}' 글꼴을 찾을 수 없어 내장 글꼴을 씁니다", "Font '{font}' not found, using the built-in font")
+            }
         });
         found
     });

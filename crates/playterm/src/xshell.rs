@@ -68,12 +68,8 @@ pub fn default_dir() -> Option<PathBuf> {
 /// UTF-8, or the Korean code page of older versions.
 pub fn decode(bytes: &[u8]) -> String {
     let utf16 = |bytes: &[u8], le: bool| {
-        let units: Vec<u16> = bytes
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) })
-            .collect();
+        let units: Vec<u16> =
+            bytes.as_chunks::<2>().0.iter().map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) }).collect();
         String::from_utf16_lossy(&units)
     };
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
@@ -153,11 +149,7 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
     }
     if !get("connection:authentication", "password").is_empty() {
         notes.push(
-            t(
-                "Xshell 이 암호화해 저장한 비밀번호는 가져오지 않습니다",
-                "The password Xshell saved (encrypted) is not imported",
-            )
-            .into(),
+            t("Xshell 이 암호화해 저장한 비밀번호는 가져오지 않습니다", "The password Xshell saved (encrypted) is not imported").into(),
         );
     }
 
@@ -198,9 +190,7 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
         s.flow = match get("connection:serial", "flowctrl") {
             "" | "0" => SerialFlow::None,
             _ => {
-                notes.push(
-                    t("흐름 제어를 None 으로 두었습니다. 확인하세요", "Flow control left at None. Please check it").into(),
-                );
+                notes.push(t("흐름 제어를 None 으로 두었습니다. 확인하세요", "Flow control left at None. Please check it").into());
                 SerialFlow::None
             }
         };
@@ -407,12 +397,7 @@ mod tests {
         assert_eq!((files.len(), truncated), (16, false));
 
         // Folders without any session files count too: a big tree stops early.
-        for limits in [
-            Limits { dirs: 2, ..all },
-            Limits { entries: 6, ..all },
-            Limits { files: 3, ..all },
-            Limits { depth: 0, ..all },
-        ] {
+        for limits in [Limits { dirs: 2, ..all }, Limits { entries: 6, ..all }, Limits { files: 3, ..all }, Limits { depth: 0, ..all }] {
             let (files, truncated) = session_files(dir.path(), limits);
             assert!(truncated, "{limits:?}");
             assert!(files.len() < 16, "{limits:?}");

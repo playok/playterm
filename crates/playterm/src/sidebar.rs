@@ -8,8 +8,8 @@ use eframe::egui::{self, RichText};
 use playterm_config::{ProfileStore, SessionProfile, SiteTemplate, TemplateLayout};
 use playterm_i18n::{t, tr};
 
-use crate::site_tree;
 use crate::icon;
+use crate::site_tree;
 
 pub enum SidebarAction {
     Connect(String),
@@ -64,18 +64,12 @@ impl VaultLine {
                 t("설정", "Set up"),
                 SidebarAction::SetUpVault,
             ),
-            VaultState::Locked => (
-                t("저장된 비밀번호: 잠김", "Saved passwords: locked"),
-                icon::UNLOCK,
-                t("잠금 해제", "Unlock"),
-                SidebarAction::UnlockVault,
-            ),
-            VaultState::Unlocked => (
-                t("저장된 비밀번호: 열림", "Saved passwords: unlocked"),
-                icon::LOCK,
-                t("잠그기", "Lock"),
-                SidebarAction::LockVault,
-            ),
+            VaultState::Locked => {
+                (t("저장된 비밀번호: 잠김", "Saved passwords: locked"), icon::UNLOCK, t("잠금 해제", "Unlock"), SidebarAction::UnlockVault)
+            }
+            VaultState::Unlocked => {
+                (t("저장된 비밀번호: 열림", "Saved passwords: unlocked"), icon::LOCK, t("잠그기", "Lock"), SidebarAction::LockVault)
+            }
         };
         Self { text, icon, button, action }
     }
@@ -84,8 +78,7 @@ impl VaultLine {
 /// Whether a site's name, host, user or folder contains `filter` (ignoring case).
 pub fn matches(p: &SessionProfile, filter: &str) -> bool {
     let filter = filter.trim().to_lowercase();
-    filter.is_empty()
-        || [&p.display_name(), &p.host, &p.username, &p.folder].iter().any(|s| s.to_lowercase().contains(&filter))
+    filter.is_empty() || [&p.display_name(), &p.host, &p.username, &p.folder].iter().any(|s| s.to_lowercase().contains(&filter))
 }
 
 /// Sites matching `filter` (see [`matches`]), grouped by folder (top level first) and sorted
@@ -127,22 +120,15 @@ pub fn find(sites: &[&SessionProfile], query: &str) -> Result<String, String> {
         return Ok(p.id.clone());
     }
     // Not a valid number: it may still be part of a name or an address (`open 192`).
-    let hits: Vec<&&SessionProfile> = sites
-        .iter()
-        .filter(|p| p.display_name().to_lowercase().contains(&q) || p.host.to_lowercase().contains(&q))
-        .collect();
+    let hits: Vec<&&SessionProfile> =
+        sites.iter().filter(|p| p.display_name().to_lowercase().contains(&q) || p.host.to_lowercase().contains(&q)).collect();
     match hits.as_slice() {
         [p] => Ok(p.id.clone()),
-        [] if number.is_some() => {
-            Err(tr!(
-                "{query}번 사이트가 없고, '{query}' 와 일치하는 사이트도 없습니다 (sites 로 확인)",
-                "There is no site number {query} and no site matches '{query}' (check with sites)"
-            ))
-        }
-        [] => Err(tr!(
-            "'{query}' 사이트를 찾을 수 없습니다 (sites 로 목록 보기)",
-            "Site '{query}' not found (type sites for a list)"
+        [] if number.is_some() => Err(tr!(
+            "{query}번 사이트가 없고, '{query}' 와 일치하는 사이트도 없습니다 (sites 로 확인)",
+            "There is no site number {query} and no site matches '{query}' (check with sites)"
         )),
+        [] => Err(tr!("'{query}' 사이트를 찾을 수 없습니다 (sites 로 목록 보기)", "Site '{query}' not found (type sites for a list)")),
         many => {
             let names: Vec<String> = many.iter().map(|p| p.display_name()).collect();
             Err(tr!("여러 사이트가 일치합니다: {}", "Several sites match: {}", names.join(", ")))
@@ -259,26 +245,32 @@ impl Sidebar {
         // Under the list, so the list does not move while sites are being picked.
         if self.chosen.len() > 1 {
             let ids = self.chosen_in_order();
-            egui::Panel::bottom("sidebar-selection").show(ui, |ui| ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(tr!("{}개 선택", "{} selected", ids.len())).strong());
-                if ui.add(icon::button(icon::CONNECT, t("연결", "Connect")).small()).on_hover_text(t("탭으로 모두 연결", "Connect all as tabs")).clicked() {
-                    action = Some(SidebarAction::ConnectMany(ids.clone(), TemplateLayout::Tabs));
-                }
-                ui.menu_button(RichText::new(t("나란히 ▾", "Side by side ▾")).small(), |ui| {
-                    for layout in [TemplateLayout::Columns, TemplateLayout::Rows, TemplateLayout::Grid] {
-                        if ui.button(layout.label()).clicked() {
-                            action = Some(SidebarAction::ConnectMany(ids.clone(), layout));
-                            ui.close();
-                        }
+            egui::Panel::bottom("sidebar-selection").show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(tr!("{}개 선택", "{} selected", ids.len())).strong());
+                    if ui
+                        .add(icon::button(icon::CONNECT, t("연결", "Connect")).small())
+                        .on_hover_text(t("탭으로 모두 연결", "Connect all as tabs"))
+                        .clicked()
+                    {
+                        action = Some(SidebarAction::ConnectMany(ids.clone(), TemplateLayout::Tabs));
                     }
-                });
-                if ui.add(icon::button(icon::TEMPLATE, t("템플릿 저장", "Save template")).small()).clicked() {
-                    action = Some(SidebarAction::NewTemplate(ids.clone()));
-                }
-                if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("선택 해제", "Clear the selection")).clicked() {
-                    self.chosen.clear();
-                }
-            }));
+                    ui.menu_button(RichText::new(t("나란히 ▾", "Side by side ▾")).small(), |ui| {
+                        for layout in [TemplateLayout::Columns, TemplateLayout::Rows, TemplateLayout::Grid] {
+                            if ui.button(layout.label()).clicked() {
+                                action = Some(SidebarAction::ConnectMany(ids.clone(), layout));
+                                ui.close();
+                            }
+                        }
+                    });
+                    if ui.add(icon::button(icon::TEMPLATE, t("템플릿 저장", "Save template")).small()).clicked() {
+                        action = Some(SidebarAction::NewTemplate(ids.clone()));
+                    }
+                    if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("선택 해제", "Clear the selection")).clicked() {
+                        self.chosen.clear();
+                    }
+                })
+            });
         }
         ui.separator();
 
@@ -287,38 +279,36 @@ impl Sidebar {
                 ui.weak(t("저장된 사이트가 없습니다.\n[+] 로 추가하세요.", "No saved sites.\nAdd one with [+]."));
                 return;
             }
-            let templates: Vec<&SiteTemplate> =
-                store.templates().iter().filter(|tpl| template_matches(tpl, &self.filter)).collect();
+            let templates: Vec<&SiteTemplate> = store.templates().iter().filter(|tpl| template_matches(tpl, &self.filter)).collect();
             if !templates.is_empty() {
-                egui::CollapsingHeader::new(RichText::new(t("템플릿", "Templates")).strong())
-                    .id_salt("templates")
-                    .default_open(true)
-                    .show(ui, |ui| {
+                egui::CollapsingHeader::new(RichText::new(t("템플릿", "Templates")).strong()).id_salt("templates").default_open(true).show(
+                    ui,
+                    |ui| {
                         for template in templates {
                             Self::template_item(ui, store, template, &mut action);
                         }
-                    });
+                    },
+                );
             }
             self.order.clear();
             let tree = site_tree::build(store, &self.filter);
             self.folder_items(ui, &tree, &mut action);
             ui.add_space(6.0);
-            ui.weak(RichText::new(t(
-                "Ctrl·Shift+클릭으로 여러 개를 골라 한 번에 연결하거나 템플릿으로 저장합니다.",
-                "Ctrl/Shift+click to pick several sites, then connect them at once or save a template.",
-            ))
-            .small());
+            ui.weak(
+                RichText::new(t(
+                    "Ctrl·Shift+클릭으로 여러 개를 골라 한 번에 연결하거나 템플릿으로 저장합니다.",
+                    "Ctrl/Shift+click to pick several sites, then connect them at once or save a template.",
+                ))
+                .small(),
+            );
         });
         action
     }
 
     fn template_item(ui: &mut egui::Ui, store: &ProfileStore, template: &SiteTemplate, action: &mut Option<SidebarAction>) {
-        let names: Vec<String> =
-            template.sites.iter().filter_map(|id| store.get(id)).map(SessionProfile::display_name).collect();
+        let names: Vec<String> = template.sites.iter().filter_map(|id| store.get(id)).map(SessionProfile::display_name).collect();
         let response = ui
-            .push_id(("template", &template.id), |ui| {
-                ui.selectable_label(false, format!("▦ {}  ({})", template.name, names.len()))
-            })
+            .push_id(("template", &template.id), |ui| ui.selectable_label(false, format!("▦ {}  ({})", template.name, names.len())))
             .inner
             .on_hover_text(tr!(
                 "{}\n배치: {}  (더블클릭: 모두 연결)",

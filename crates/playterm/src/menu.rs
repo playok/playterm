@@ -180,8 +180,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
     let n = st.sessions.len();
     let active = st.sessions.get(st.active);
     let i = st.active;
-    let (maximized, fullscreen) =
-        ui.input(|inp| (inp.viewport().maximized.unwrap_or(false), inp.viewport().fullscreen.unwrap_or(false)));
+    let (maximized, fullscreen) = ui.input(|inp| (inp.viewport().maximized.unwrap_or(false), inp.viewport().fullscreen.unwrap_or(false)));
 
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button(t("파일", "File"), |ui| {
@@ -211,14 +210,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
         ui.menu_button(t("보기", "View"), |ui| {
             check(ui, out, t("사이트 목록", "Site list"), "Ctrl+Shift+B", st.show_sidebar, Command::ToggleSidebar);
             check(ui, out, t("상태 표시줄", "Status bar"), "", st.show_status_bar, Command::ToggleStatusBar);
-            check(
-                ui,
-                out,
-                t("명령 입력창", "Command input bar"),
-                "Ctrl+Shift+M",
-                st.show_compose_bar,
-                Command::ToggleComposeBar,
-            );
+            check(ui, out, t("명령 입력창", "Command input bar"), "Ctrl+Shift+M", st.show_compose_bar, Command::ToggleComposeBar);
             check(ui, out, t("전체 화면", "Full screen"), "F11", fullscreen, Command::ToggleFullscreen);
             ui.separator();
             item(ui, out, t("글꼴 크게", "Larger font"), keys("Ctrl+=", "⌘="), true, Command::ZoomIn);
@@ -257,15 +249,11 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             });
             ui.separator();
             match st.vault {
-                VaultState::Missing => {
-                    item(ui, out, t("저장된 비밀번호 설정…", "Set up saved passwords…"), "", true, Command::SetUpVault)
-                }
+                VaultState::Missing => item(ui, out, t("저장된 비밀번호 설정…", "Set up saved passwords…"), "", true, Command::SetUpVault),
                 VaultState::Locked => {
                     item(ui, out, t("저장된 비밀번호 잠금 해제…", "Unlock saved passwords…"), "", true, Command::UnlockVault)
                 }
-                VaultState::Unlocked => {
-                    item(ui, out, t("저장된 비밀번호 잠그기", "Lock saved passwords"), "", true, Command::LockVault)
-                }
+                VaultState::Unlocked => item(ui, out, t("저장된 비밀번호 잠그기", "Lock saved passwords"), "", true, Command::LockVault),
             }
             if crate::power::SUPPORTED {
                 ui.separator();
@@ -300,14 +288,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("다른 탭 모두 닫기", "Close other tabs"), "", n > 1, Command::CloseOthers(i));
             item(ui, out, t("모든 탭 닫기", "Close all tabs"), "", n > 0, Command::CloseAll);
             ui.separator();
-            check(
-                ui,
-                out,
-                t("모든 탭에 동시 입력", "Type into all tabs"),
-                "Ctrl+Shift+I",
-                st.broadcast,
-                Command::ToggleBroadcast,
-            );
+            check(ui, out, t("모든 탭에 동시 입력", "Type into all tabs"), "Ctrl+Shift+I", st.broadcast, Command::ToggleBroadcast);
             if n > 0 {
                 ui.separator();
                 for (k, s) in st.sessions.iter().enumerate() {
@@ -338,8 +319,8 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
         });
 
         if let Some(version) = &st.update {
-            let text = egui::RichText::new(tr!("⬆ 새 버전 {version}", "⬆ New version {version}"))
-                .color(ui.visuals().selection.stroke.color);
+            let text =
+                egui::RichText::new(tr!("⬆ 새 버전 {version}", "⬆ New version {version}")).color(ui.visuals().selection.stroke.color);
             if ui.button(text).on_hover_text(t("업데이트 설치…", "Install the update…")).clicked() {
                 *out = Some(Command::ShowUpdate);
             }

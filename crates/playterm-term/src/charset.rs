@@ -46,10 +46,7 @@ pub struct OutputDecoder {
 
 impl OutputDecoder {
     pub fn new(charset: Charset) -> Self {
-        Self {
-            decoder: charset.encoding().map(|e| e.new_decoder_without_bom_handling()),
-            buf: String::new(),
-        }
+        Self { decoder: charset.encoding().map(|e| e.new_decoder_without_bom_handling()), buf: String::new() }
     }
 
     /// Converts `input` into UTF-8. For UTF-8 sessions the input is returned unchanged,
@@ -59,9 +56,7 @@ impl OutputDecoder {
             return input;
         };
         self.buf.clear();
-        let needed = decoder
-            .max_utf8_buffer_length(input.len())
-            .unwrap_or(input.len() * 3 + 16);
+        let needed = decoder.max_utf8_buffer_length(input.len()).unwrap_or(input.len() * 3 + 16);
         self.buf.reserve(needed);
         let (_, _, _) = decoder.decode_to_string(input, &mut self.buf, false);
         self.buf.as_bytes()

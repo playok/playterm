@@ -8,9 +8,9 @@ use playterm_config::{ProfileStore, SessionProfile, SiteView, folder_name, norma
 use playterm_i18n::{t, tr};
 use zeroize::Zeroizing;
 
+use crate::icon;
 use crate::profile_form::{FormOptions, ProfileForm};
 use crate::{sidebar, site_tree};
-use crate::icon;
 
 const LIST_WIDTH: f32 = 290.0;
 const FORM_WIDTH: f32 = 540.0;
@@ -24,7 +24,12 @@ pub enum SiteManagerResult {
     Close,
     /// Save a site. With `connect` the site is also connected; with `connect` or `close`
     /// the manager closes.
-    Save { profile: Box<SessionProfile>, password: Option<Zeroizing<String>>, connect: bool, close: bool },
+    Save {
+        profile: Box<SessionProfile>,
+        password: Option<Zeroizing<String>>,
+        connect: bool,
+        close: bool,
+    },
     /// Connect a saved, unchanged site and close the manager.
     Connect(String),
     /// Duplicate a saved site; the app selects the copy with [`SiteManager::select`].
@@ -33,10 +38,16 @@ pub enum SiteManagerResult {
     Delete(String),
     CreateFolder(String),
     /// Rename (or move) a folder with everything in it.
-    RenameFolder { from: String, to: String },
+    RenameFolder {
+        from: String,
+        to: String,
+    },
     /// Remove a folder; what is in it moves up a level.
     DeleteFolder(String),
-    MoveSite { id: String, folder: String },
+    MoveSite {
+        id: String,
+        folder: String,
+    },
 }
 
 /// The folder dialogs.
@@ -76,7 +87,11 @@ impl FolderPrompt {
                     return Err(t("폴더 이름을 입력하세요", "Enter a folder name").into());
                 }
                 if name.contains('/') {
-                    return Err(t("폴더 이름에 / 는 쓸 수 없습니다 (폴더 단계 구분 기호)", "A folder name cannot contain / (it separates levels)").into());
+                    return Err(t(
+                        "폴더 이름에 / 는 쓸 수 없습니다 (폴더 단계 구분 기호)",
+                        "A folder name cannot contain / (it separates levels)",
+                    )
+                    .into());
                 }
                 let path = normalize_folder(&format!("{parent}/{name}"));
                 if let FolderPrompt::Rename { path: from, .. } = self
@@ -181,12 +196,8 @@ impl SiteManager {
     fn set_selection(&mut self, selection: Option<Selection>, store: Option<&ProfileStore>, has_secret: SecretCheck<'_>) {
         self.form = match &selection {
             None => None,
-            Some(Selection::New(folder)) => {
-                Some(ProfileForm::new(SessionProfile { folder: folder.clone(), ..Default::default() }, false))
-            }
-            Some(Selection::Site(id)) => {
-                store.and_then(|s| s.get(id)).map(|p| ProfileForm::new(p.clone(), has_secret(p)))
-            }
+            Some(Selection::New(folder)) => Some(ProfileForm::new(SessionProfile { folder: folder.clone(), ..Default::default() }, false)),
+            Some(Selection::Site(id)) => store.and_then(|s| s.get(id)).map(|p| ProfileForm::new(p.clone(), has_secret(p))),
         };
         self.selected = if self.form.is_some() { selection } else { None };
     }
@@ -257,35 +268,35 @@ impl SiteManager {
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
-            // Give the body a fixed size, or the vertical separator and scroll areas would
-            // stretch to the whole screen.
-            let (list_width, form_width) = match self.view {
-                SiteView::Tree => (LIST_WIDTH, FORM_WIDTH),
-                SiteView::Grid => (GRID_LIST_WIDTH, GRID_FORM_WIDTH),
-            };
-            let body = egui::vec2(list_width + form_width + 2.0 * ui.spacing().item_spacing.x + 6.0, BODY_HEIGHT);
-            ui.allocate_ui_with_layout(body, egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                ui.set_min_size(body);
-                ui.vertical(|ui| {
-                    ui.set_width(list_width);
-                    self.tree(ui, store, &mut next, &mut result);
+                // Give the body a fixed size, or the vertical separator and scroll areas would
+                // stretch to the whole screen.
+                let (list_width, form_width) = match self.view {
+                    SiteView::Tree => (LIST_WIDTH, FORM_WIDTH),
+                    SiteView::Grid => (GRID_LIST_WIDTH, GRID_FORM_WIDTH),
+                };
+                let body = egui::vec2(list_width + form_width + 2.0 * ui.spacing().item_spacing.x + 6.0, BODY_HEIGHT);
+                ui.allocate_ui_with_layout(body, egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                    ui.set_min_size(body);
+                    ui.vertical(|ui| {
+                        ui.set_width(list_width);
+                        self.tree(ui, store, &mut next, &mut result);
+                    });
+                    ui.separator();
+                    ui.vertical(|ui| {
+                        ui.set_width(form_width);
+                        self.details(ui, &folders, &mut result, has_secret);
+                    });
                 });
                 ui.separator();
-                ui.vertical(|ui| {
-                    ui.set_width(form_width);
-                    self.details(ui, &folders, &mut result, has_secret);
+                ui.horizontal(|ui| {
+                    ui.weak(tr!("사이트 {}개", "{} sites", store.profiles().len()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked() {
+                            next = Some(Next::Close);
+                        }
+                    });
                 });
             });
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.weak(tr!("사이트 {}개", "{} sites", store.profiles().len()));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked() {
-                        next = Some(Next::Close);
-                    }
-                });
-            });
-        });
         if !open {
             next = Some(Next::Close);
         }
@@ -312,13 +323,7 @@ impl SiteManager {
         result
     }
 
-    fn tree(
-        &mut self,
-        ui: &mut egui::Ui,
-        store: &ProfileStore,
-        next: &mut Option<Next>,
-        result: &mut SiteManagerResult,
-    ) {
+    fn tree(&mut self, ui: &mut egui::Ui, store: &ProfileStore, next: &mut Option<Next>, result: &mut SiteManagerResult) {
         let site = self.selected_site().map(str::to_owned);
         let dirty = self.is_dirty();
         ui.horizontal_wrapped(|ui| {
@@ -393,8 +398,7 @@ impl SiteManager {
         result: &mut SiteManagerResult,
     ) {
         for sub in &folder.folders {
-            let response =
-                site_tree::folder(ui, sub, "site-manager-folder", |ui| self.folder_items(ui, sub, folders, next, result));
+            let response = site_tree::folder(ui, sub, "site-manager-folder", |ui| self.folder_items(ui, sub, folders, next, result));
             if response.clicked() {
                 self.focus_folder = Some(sub.path.clone());
             }
@@ -611,22 +615,13 @@ impl SiteManager {
         }
     }
 
-    fn details(
-        &mut self,
-        ui: &mut egui::Ui,
-        folders: &[String],
-        result: &mut SiteManagerResult,
-        has_secret: SecretCheck<'_>,
-    ) {
+    fn details(&mut self, ui: &mut egui::Ui, folders: &[String], result: &mut SiteManagerResult, has_secret: SecretCheck<'_>) {
         let is_new = matches!(self.selected, Some(Selection::New(_)));
         let site = self.selected_site().map(str::to_owned);
         let Some(form) = &mut self.form else {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.weak(t(
-                    "왼쪽에서 사이트를 선택하거나 [새 사이트] 를 누르세요.",
-                    "Select a site on the left or click [New site].",
-                ))
+                ui.weak(t("왼쪽에서 사이트를 선택하거나 [새 사이트] 를 누르세요.", "Select a site on the left or click [New site]."))
             });
             return;
         };
@@ -648,13 +643,9 @@ impl SiteManager {
         ui.separator();
 
         let mut submit = false;
-        egui::ScrollArea::vertical()
-            .id_salt("site-form")
-            .max_height(BODY_HEIGHT - 70.0)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                submit = form.ui(ui, &FormOptions { meta: true, save_password: true, folders, macros: &self.macros });
-            });
+        egui::ScrollArea::vertical().id_salt("site-form").max_height(BODY_HEIGHT - 70.0).auto_shrink([false, false]).show(ui, |ui| {
+            submit = form.ui(ui, &FormOptions { meta: true, save_password: true, folders, macros: &self.macros });
+        });
         ui.separator();
 
         let mut connect = false;
@@ -686,12 +677,7 @@ impl SiteManager {
     }
 
     /// "Save changes?" asked before leaving an edited site. Returns a result once answered.
-    fn unsaved_prompt(
-        &mut self,
-        ctx: &egui::Context,
-        store: &ProfileStore,
-        has_secret: SecretCheck<'_>,
-    ) -> Option<SiteManagerResult> {
+    fn unsaved_prompt(&mut self, ctx: &egui::Context, store: &ProfileStore, has_secret: SecretCheck<'_>) -> Option<SiteManagerResult> {
         let next = self.unsaved.clone()?;
         let name = match (&self.selected, &self.form) {
             (Some(Selection::New(_)), Some(f)) if f.profile.name.trim().is_empty() => t("새 사이트", "New site").to_owned(),

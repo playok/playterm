@@ -64,9 +64,7 @@ impl PendingAuth {
     /// A login prompt asking for exactly the account password (not a passphrase, not a
     /// one-time code after the password).
     pub fn is_password(&self) -> bool {
-        self.prompt.account_password
-            && self.prompt.user.is_some()
-            && matches!(self.prompt.fields.as_slice(), [only] if !only.echo)
+        self.prompt.account_password && self.prompt.user.is_some() && matches!(self.prompt.fields.as_slice(), [only] if !only.echo)
     }
 }
 
@@ -86,10 +84,7 @@ pub fn elapsed(d: Duration) -> String {
 }
 
 pub fn printable(text: &str) -> String {
-    text.replace("\r\n", "\n")
-        .chars()
-        .map(|c| if c.is_control() && c != '\n' && c != '\t' { '?' } else { c })
-        .collect()
+    text.replace("\r\n", "\n").chars().map(|c| if c.is_control() && c != '\n' && c != '\t' { '?' } else { c }).collect()
 }
 
 /// What a tab was opened with; enough to duplicate it.
@@ -471,10 +466,9 @@ impl Session {
         let title = self.tab_title();
         match self.terminal.start_log(path, mode, &title) {
             Ok(()) => self.notice(&tr!("로그 기록 시작: {}", "Logging started: {}", path.display()), "90"),
-            Err(e) => self.notice(
-                &tr!("로그 파일을 만들 수 없습니다 ({}): {e}", "Cannot create the log file ({}): {e}", path.display()),
-                "31",
-            ),
+            Err(e) => {
+                self.notice(&tr!("로그 파일을 만들 수 없습니다 ({}): {e}", "Cannot create the log file ({}): {e}", path.display()), "31")
+            }
         }
     }
 
@@ -559,10 +553,7 @@ impl Session {
         self.leave_prompt();
         self.end_zmodem();
         let target = self.target();
-        self.terminal.feed_local(&tr!(
-            "\x1b[90m{target} 에 다시 연결 중...\x1b[0m\r\n",
-            "\x1b[90mReconnecting to {target}...\x1b[0m\r\n"
-        ));
+        self.terminal.feed_local(&tr!("\x1b[90m{target} 에 다시 연결 중...\x1b[0m\r\n", "\x1b[90mReconnecting to {target}...\x1b[0m\r\n"));
         self.state = SessionState::Connecting;
         self.host_key = None;
         self.auth = None;
@@ -592,8 +583,7 @@ impl Session {
 
     /// Whether this tab's site saves its password but the tab has none (the vault was locked).
     pub fn lacks_saved_password(&self) -> bool {
-        self.profile.as_ref().is_some_and(|p| p.save_password)
-            && self.remote.as_ref().is_some_and(|r| r.params.password.is_none())
+        self.profile.as_ref().is_some_and(|p| p.save_password) && self.remote.as_ref().is_some_and(|r| r.params.password.is_none())
     }
 
     /// Gives the tab its saved password again (the vault was unlocked to reconnect).
@@ -744,10 +734,8 @@ impl Session {
                     let user = prompt.user.clone().unwrap_or_default();
                     // Ticked already when it was ticked at the last (wrong) try, or when the site
                     // saves its password (then the saved one was wrong).
-                    let save_password =
-                        self.save_on_login.is_some() || self.profile.as_ref().is_some_and(|p| p.save_password);
-                    self.auth =
-                        Some(PendingAuth { prompt, answers, focus_requested: false, user, save_user: false, save_password });
+                    let save_password = self.save_on_login.is_some() || self.profile.as_ref().is_some_and(|p| p.save_password);
+                    self.auth = Some(PendingAuth { prompt, answers, focus_requested: false, user, save_user: false, save_password });
                 }
                 SessionEvent::ShellDir(dir) => {
                     let asked = self.shell_dir_request.take().unwrap_or(false);
@@ -778,7 +766,10 @@ impl Session {
                 }
                 SessionEvent::Closed(reason) => {
                     if self.end_zmodem() {
-                        self.notice(t("연결이 끊겨 ZMODEM 전송을 중단했습니다", "The connection closed; the ZMODEM transfer stopped"), "31");
+                        self.notice(
+                            t("연결이 끊겨 ZMODEM 전송을 중단했습니다", "The connection closed; the ZMODEM transfer stopped"),
+                            "31",
+                        );
                     }
                     self.state = SessionState::Closed;
                     self.connected_since = None;
@@ -876,7 +867,8 @@ impl Session {
                 // couple of minutes).
                 self.terminal.feed(&bytes[..at]);
                 self.login = None;
-                let line = t("ZMODEM 보내기: 보낼 파일을 고르세요 · Ctrl+C 로 취소", "ZMODEM upload: choose the files to send · Ctrl+C cancels");
+                let line =
+                    t("ZMODEM 보내기: 보낼 파일을 고르세요 · Ctrl+C 로 취소", "ZMODEM upload: choose the files to send · Ctrl+C cancels");
                 self.terminal.feed_local(&format!("\r\n\x1b[36m[{}]\x1b[0m\r\n", printable(line)));
                 let (upload, reply) = zmodem::Upload::begin(&bytes[rest..], Instant::now());
                 self.zmodem_up = Some(UploadRun { upload, listed: 0, drawn: None });
@@ -951,7 +943,10 @@ impl Session {
             match outcome {
                 Outcome::Finished => self.notice(&tr!("ZMODEM 보내기 완료: 파일 {done}개", "ZMODEM upload done: {done} file(s)"), "32"),
                 Outcome::Cancelled => self.notice(
-                    &tr!("ZMODEM 보내기를 취소했습니다 (끝까지 보낸 파일 {done}개)", "ZMODEM upload cancelled ({done} file(s) sent completely)"),
+                    &tr!(
+                        "ZMODEM 보내기를 취소했습니다 (끝까지 보낸 파일 {done}개)",
+                        "ZMODEM upload cancelled ({done} file(s) sent completely)"
+                    ),
                     "33",
                 ),
                 Outcome::Failed(e) => self.notice(&tr!("ZMODEM 보내기 실패: {e}", "ZMODEM upload failed: {e}"), "31"),
@@ -992,7 +987,8 @@ impl Session {
         let running = pick.ended.is_none();
         match dir {
             Some(dir) if running => {
-                let line = tr!("ZMODEM: 받기가 끝나면 {} 에 저장합니다", "ZMODEM: the files go to {} when the download is done", dir.display());
+                let line =
+                    tr!("ZMODEM: 받기가 끝나면 {} 에 저장합니다", "ZMODEM: the files go to {} when the download is done", dir.display());
                 pick.chosen = Some(dir);
                 // Below the progress line, which goes on.
                 self.terminal.feed_local(&format!("\r\x1b[K\x1b[36m[{}]\x1b[0m\r\n", printable(&line)));
@@ -1019,7 +1015,10 @@ impl Session {
                             "No folder was chosen: the ZMODEM download was cancelled and what it received deleted",
                         )
                     } else {
-                        t("저장할 폴더를 고르지 않아 ZMODEM 으로 받은 파일을 지웠습니다", "No folder was chosen: the files received with ZMODEM were deleted")
+                        t(
+                            "저장할 폴더를 고르지 않아 ZMODEM 으로 받은 파일을 지웠습니다",
+                            "No folder was chosen: the files received with ZMODEM were deleted",
+                        )
                     },
                     "33",
                 );
@@ -1036,7 +1035,9 @@ impl Session {
         if count == 0 {
             self.zmodem_pick = None;
             match outcome {
-                Outcome::Finished => self.notice(t("ZMODEM 받기 완료: 받은 파일이 없습니다", "ZMODEM download done: no files were received"), "32"),
+                Outcome::Finished => {
+                    self.notice(t("ZMODEM 받기 완료: 받은 파일이 없습니다", "ZMODEM download done: no files were received"), "32")
+                }
                 outcome => self.zmodem_notice(&outcome, 0, Path::new("")),
             }
             return;
@@ -1048,14 +1049,23 @@ impl Session {
         }
         let wait = t("저장할 폴더를 고르면 그곳으로 옮깁니다", "they move to the folder you choose");
         match outcome {
-            Outcome::Finished => self.notice(&tr!("ZMODEM 받기 완료: 파일 {count}개 · {wait}", "ZMODEM download done: {count} file(s), {wait}"), "36"),
+            Outcome::Finished => {
+                self.notice(&tr!("ZMODEM 받기 완료: 파일 {count}개 · {wait}", "ZMODEM download done: {count} file(s), {wait}"), "36")
+            }
             Outcome::Cancelled => self.notice(
-                &tr!("ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {count}개) · {wait}", "ZMODEM download cancelled ({count} file(s) received completely), {wait}"),
+                &tr!(
+                    "ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {count}개) · {wait}",
+                    "ZMODEM download cancelled ({count} file(s) received completely), {wait}"
+                ),
                 "33",
             ),
-            Outcome::Failed(e) => {
-                self.notice(&tr!("ZMODEM 받기 실패: {e} (끝까지 받은 파일 {count}개) · {wait}", "ZMODEM download failed: {e} ({count} file(s) received completely), {wait}"), "31")
-            }
+            Outcome::Failed(e) => self.notice(
+                &tr!(
+                    "ZMODEM 받기 실패: {e} (끝까지 받은 파일 {count}개) · {wait}",
+                    "ZMODEM download failed: {e} ({count} file(s) received completely), {wait}"
+                ),
+                "31",
+            ),
         }
     }
 
@@ -1075,7 +1085,10 @@ impl Session {
             pick.keep = true;
             let (staging, failed) = (pick.staging.display(), failed.join(", "));
             self.notice(
-                &tr!("옮기지 못한 파일은 {staging} 에 남겨 두었습니다: {failed}", "Files that could not be moved are left in {staging}: {failed}"),
+                &tr!(
+                    "옮기지 못한 파일은 {staging} 에 남겨 두었습니다: {failed}",
+                    "Files that could not be moved are left in {staging}: {failed}"
+                ),
                 "31",
             );
         }
@@ -1085,11 +1098,15 @@ impl Session {
     fn zmodem_notice(&mut self, outcome: &Outcome, saved: usize, dir: &Path) {
         let dir = dir.display();
         match outcome {
-            Outcome::Finished => {
-                self.notice(&tr!("ZMODEM 받기 완료: 파일 {saved}개를 {dir} 에 저장했습니다", "ZMODEM download done: {saved} file(s) saved in {dir}"), "32")
-            }
+            Outcome::Finished => self.notice(
+                &tr!("ZMODEM 받기 완료: 파일 {saved}개를 {dir} 에 저장했습니다", "ZMODEM download done: {saved} file(s) saved in {dir}"),
+                "32",
+            ),
             Outcome::Cancelled => self.notice(
-                &tr!("ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {saved}개)", "ZMODEM download cancelled ({saved} file(s) received completely)"),
+                &tr!(
+                    "ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {saved}개)",
+                    "ZMODEM download cancelled ({saved} file(s) received completely)"
+                ),
                 "33",
             ),
             Outcome::Failed(e) => self.notice(&tr!("ZMODEM 받기 실패: {e}", "ZMODEM download failed: {e}"), "31"),
@@ -1138,12 +1155,9 @@ impl Session {
         {
             run.drawn = Some(now);
             let amount = match p.size {
-                Some(size) if size > 0 => format!(
-                    "{} / {} ({}%)",
-                    human_size(p.received),
-                    human_size(size),
-                    (p.received.min(size) * 100) / size
-                ),
+                Some(size) if size > 0 => {
+                    format!("{} / {} ({}%)", human_size(p.received), human_size(size), (p.received.min(size) * 100) / size)
+                }
                 _ => human_size(p.received),
             };
             text += &format!("\r\x1b[K  {}  {amount}", printable(p.name));
@@ -1221,9 +1235,12 @@ impl Session {
                     // the one typed at the prompt). Never shown, never in the macro's file.
                     let mut text = Zeroizing::new(text.replace("{user}", &remote.params.username));
                     if text.contains("{password}") {
-                        let Some(password) = remote.params.password.clone().or_else(|| {
-                            self.login_script.as_ref().and_then(|l| l.password.as_ref().map(|p| p.to_string()))
-                        }) else {
+                        let Some(password) = remote
+                            .params
+                            .password
+                            .clone()
+                            .or_else(|| self.login_script.as_ref().and_then(|l| l.password.as_ref().map(|p| p.to_string())))
+                        else {
                             self.macro_run = None;
                             self.notice(
                                 &tr!(

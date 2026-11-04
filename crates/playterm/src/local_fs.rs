@@ -167,11 +167,7 @@ pub fn list(cwd: &Path, opts: &ListOptions, cols: usize) -> Result<String, Strin
     // Folders first, then by name.
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
 
-    if opts.long {
-        Ok(long_listing(&target, &entries))
-    } else {
-        Ok(short_listing(&entries, cols))
-    }
+    if opts.long { Ok(long_listing(&target, &entries)) } else { Ok(short_listing(&entries, cols)) }
 }
 
 fn thousands(n: u64) -> String {

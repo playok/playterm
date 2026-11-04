@@ -5,9 +5,9 @@ use playterm_config::{ClipboardKeys, SessionProfile};
 use playterm_i18n::{t, tr};
 use zeroize::Zeroizing;
 
+use crate::icon;
 use crate::profile_form::{FormOptions, ProfileForm};
 use crate::session::Session;
-use crate::icon;
 
 fn modal(id: impl std::hash::Hash + std::fmt::Debug, ctx: &egui::Context, add: impl FnOnce(&mut egui::Ui)) -> bool {
     egui::Modal::new(egui::Id::unique(id)).show(ctx, add).should_close()
@@ -38,8 +38,7 @@ impl QuickConnect {
             ui.set_width(380.0);
             ui.heading(t("빠른 연결", "Quick Connect"));
             ui.add_space(8.0);
-            let mut submit =
-                self.form.ui(ui, &FormOptions { meta: false, save_password: false, folders: &[], macros: &[] });
+            let mut submit = self.form.ui(ui, &FormOptions { meta: false, save_password: false, folders: &[], macros: &[] });
             ui.add_space(8.0);
             let (main, cancel) = ui
                 .horizontal(|ui| {
@@ -273,10 +272,7 @@ pub fn confirm_paste(ctx: &egui::Context, text: &str) -> Option<bool> {
         if cancel.clicked() {
             answer = Some(false);
         }
-        ui.weak(t(
-            "도구 → 설정의 '붙여넣기 확인' 에서 끌 수 있습니다.",
-            "Can be turned off with 'Confirm paste' in Tools → Settings.",
-        ));
+        ui.weak(t("도구 → 설정의 '붙여넣기 확인' 에서 끌 수 있습니다.", "Can be turned off with 'Confirm paste' in Tools → Settings."));
     });
     if close && answer.is_none() {
         answer = Some(false);
@@ -293,10 +289,7 @@ fn shortcut_list(keys: &ClipboardKeys) -> Vec<(String, &'static str)> {
         ("Ctrl+Shift+B", t("사이트 목록 표시/숨김", "Show/hide the site list")),
         (
             "Ctrl+Shift+F",
-            t(
-                "찾기 (스크롤백 포함, Enter: 위로 · Shift+Enter: 아래로)",
-                "Find (including scrollback, Enter: up · Shift+Enter: down)",
-            ),
+            t("찾기 (스크롤백 포함, Enter: 위로 · Shift+Enter: 아래로)", "Find (including scrollback, Enter: up · Shift+Enter: down)"),
         ),
         ("Ctrl+Shift+X / Ctrl+Shift+E", t("SFTP 탐색기 (옆 패널) 열기/닫기", "SFTP explorer (side panel) on/off")),
         ("Ctrl+Shift+M", t("명령 입력창 (하단) 열기/닫기", "Command input bar on/off")),
@@ -385,18 +378,11 @@ pub fn about(ctx: &egui::Context) -> bool {
             ui.heading("playterm");
             ui.label(tr!("버전 {}", "Version {}", env!("CARGO_PKG_VERSION")));
             ui.add_space(6.0);
-            ui.label(t(
-                "SSH · Telnet · 시리얼 · 원격 데스크톱 터미널",
-                "SSH · Telnet · serial · Remote Desktop terminal",
-            ));
-            ui.weak(t(
-                "SFTP, 포트 포워딩, 세션 로그, 한글(CP949) 지원",
-                "SFTP, port forwarding, session logs, Korean (CP949) support",
-            ));
+            ui.label(t("SSH · Telnet · 시리얼 · 원격 데스크톱 터미널", "SSH · Telnet · serial · Remote Desktop terminal"));
+            ui.weak(t("SFTP, 포트 포워딩, 세션 로그, 한글(CP949) 지원", "SFTP, port forwarding, session logs, Korean (CP949) support"));
             ui.add_space(6.0);
             ui.label(tr!("제작: {}", "Made by {}", AUTHOR));
-            ui.hyperlink_to(t("문의·버그 신고 (GitHub)", "Questions and bug reports (GitHub)"), PROJECT_PAGE)
-                .on_hover_text(PROJECT_PAGE);
+            ui.hyperlink_to(t("문의·버그 신고 (GitHub)", "Questions and bug reports (GitHub)"), PROJECT_PAGE).on_hover_text(PROJECT_PAGE);
             ui.weak(PROJECT_PAGE);
             ui.add_space(4.0);
             ui.weak(t(
@@ -540,7 +526,10 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
         .flatten();
     session.save_password_on_login(save);
     let user = pending.user.trim().to_owned();
-    if ok && let Some(original) = &pending.prompt.user && &user != original {
+    if ok
+        && let Some(original) = &pending.prompt.user
+        && &user != original
+    {
         // A password prompt's answer is that user's password; other questions start over.
         let password = match pending.prompt.fields.as_slice() {
             [only] if !only.echo => pending.answers.first().map(|p| p.to_string()).filter(|p| !p.is_empty()),

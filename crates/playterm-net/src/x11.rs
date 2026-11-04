@@ -147,9 +147,7 @@ impl X11Forward {
         match &self.target {
             DisplayTarget::Tcp { host, display } => {
                 let port = X_TCP_PORT + display;
-                let mut local = tokio::net::TcpStream::connect((host.as_str(), port))
-                    .await
-                    .with_context(|| no_server(&self.display))?;
+                let mut local = tokio::net::TcpStream::connect((host.as_str(), port)).await.with_context(|| no_server(&self.display))?;
                 local.set_nodelay(true)?;
                 local.write_all(&first).await?;
                 tokio::io::copy_bidirectional(&mut remote, &mut local).await?;
@@ -259,7 +257,8 @@ async fn untrusted_cookie(display: &str) -> Result<Vec<u8>, String> {
             return Err(tr!("xauth generate 실패: {err}", "xauth generate failed: {err}"));
         }
         let listed = listed.map_err(|e| e.to_string())?;
-        cookie_from_xauth(&String::from_utf8_lossy(&listed.stdout)).ok_or_else(|| t("xauth 가 쿠키를 만들지 않았습니다", "xauth made no cookie").into())
+        cookie_from_xauth(&String::from_utf8_lossy(&listed.stdout))
+            .ok_or_else(|| t("xauth 가 쿠키를 만들지 않았습니다", "xauth made no cookie").into())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -268,10 +267,8 @@ async fn untrusted_cookie(display: &str) -> Result<Vec<u8>, String> {
 /// The display's MIT-MAGIC-COOKIE-1 from `xauth list`, if `xauth` is there and knows it.
 async fn real_cookie(display: &str) -> Option<Vec<u8>> {
     let display = display.to_owned();
-    let output = tokio::task::spawn_blocking(move || std::process::Command::new("xauth").arg("list").arg(&display).output())
-        .await
-        .ok()?
-        .ok()?;
+    let output =
+        tokio::task::spawn_blocking(move || std::process::Command::new("xauth").arg("list").arg(&display).output()).await.ok()?.ok()?;
     if !output.status.success() {
         return None;
     }
@@ -343,8 +340,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         // A display number whose port is this listener's (port - 6000 must fit).
         let Some(display) = port.checked_sub(X_TCP_PORT) else { return };
-        let forward =
-            X11Forward::with_auth(&format!("127.0.0.1:{display}.0"), vec![7; 16], DisplayAuth::Cookie(vec![9; 16])).unwrap();
+        let forward = X11Forward::with_auth(&format!("127.0.0.1:{display}.0"), vec![7; 16], DisplayAuth::Cookie(vec![9; 16])).unwrap();
         for big in [false, true] {
             let (mut remote, theirs) = tokio::io::duplex(4096);
             let f = forward.clone();

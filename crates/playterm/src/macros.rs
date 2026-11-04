@@ -42,9 +42,15 @@ pub enum Step {
     Timeout(Duration),
     /// Go on if `text` came (or with `negate`, did not come) in the output since the last line
     /// typed; else go to step `skip_to` (after the matching @else or @end).
-    If { text: String, negate: bool, skip_to: usize },
+    If {
+        text: String,
+        negate: bool,
+        skip_to: usize,
+    },
     /// The end of an @if's first part: go to step `skip_to` (after the @end).
-    Else { skip_to: usize },
+    Else {
+        skip_to: usize,
+    },
     End,
     /// End the macro here: done, or with `Some(message)` failed.
     Stop(Option<String>),
@@ -164,16 +170,7 @@ pub struct MacroRun {
 
 impl MacroRun {
     pub fn new(name: String, steps: Vec<Step>) -> Self {
-        Self {
-            name,
-            steps,
-            next: 0,
-            seen: String::new(),
-            wait_from: 0,
-            timeout: DEFAULT_TIMEOUT,
-            waiting_since: None,
-            sleep_until: None,
-        }
+        Self { name, steps, next: 0, seen: String::new(), wait_from: 0, timeout: DEFAULT_TIMEOUT, waiting_since: None, sleep_until: None }
     }
 
     /// Output of the remote side (as text).
@@ -247,7 +244,6 @@ impl MacroRun {
         actions.push(Action::Done);
         actions
     }
-
 
     /// When it next has something to do by itself (a pause or a time limit ending).
     pub fn wake_at(&self) -> Option<Instant> {
@@ -378,7 +374,9 @@ impl MacroDialog {
             let (save, cancel) =
                 icon::ok_cancel_row(ui, icon::primary(ui, icon::SAVE, t("저장", "Save")), problem.is_none(), icon::cancel());
             if save.clicked() {
-                result = MacroDialogResult::Save(self.macros.iter().map(|m| Macro { name: m.name.trim().to_owned(), script: m.script.clone() }).collect());
+                result = MacroDialogResult::Save(
+                    self.macros.iter().map(|m| Macro { name: m.name.trim().to_owned(), script: m.script.clone() }).collect(),
+                );
             }
             if cancel.clicked() {
                 result = MacroDialogResult::Cancel;
@@ -448,10 +446,8 @@ mod tests {
 
     #[test]
     fn the_editor_checks_before_saving() {
-        let mut dialog = MacroDialog::new(&[
-            Macro { name: "a".into(), script: "ls".into() },
-            Macro { name: " a ".into(), script: "pwd".into() },
-        ]);
+        let mut dialog =
+            MacroDialog::new(&[Macro { name: "a".into(), script: "ls".into() }, Macro { name: " a ".into(), script: "pwd".into() }]);
         assert!(dialog.problem().is_some(), "two macros of one name");
         dialog.macros[1].name = "b".into();
         assert!(dialog.problem().is_none());
@@ -491,7 +487,10 @@ mod tests {
         assert!(parse("a\n@if x\nb").is_err(), "no @end");
         assert!(parse("a\n@end").is_err());
         assert!(parse("a\n@if x\n@else\n@else\n@end").is_err());
-        assert!(matches!(MacroRun::new("m".into(), parse("a\n@stop\nb").unwrap()).step(Instant::now()).as_slice(), [Action::Send(_), Action::Done]));
+        assert!(matches!(
+            MacroRun::new("m".into(), parse("a\n@stop\nb").unwrap()).step(Instant::now()).as_slice(),
+            [Action::Send(_), Action::Done]
+        ));
     }
 
     #[test]

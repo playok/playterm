@@ -2,10 +2,8 @@
 //! list and the site manager: folder rows with a folder icon, and a badge with each site's
 //! connection type (SSH, Telnet, serial, RDP).
 
-
-
-use eframe::egui::{self, Color32, RichText};
 use eframe::egui::collapsing_header::CollapsingState;
+use eframe::egui::{self, Color32, RichText};
 use playterm_config::{ProfileStore, SessionProfile, folder_name};
 use playterm_i18n::t;
 use playterm_net::Protocol;

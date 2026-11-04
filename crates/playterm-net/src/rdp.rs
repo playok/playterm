@@ -20,8 +20,7 @@ use ironrdp_cliprdr::backend::{ClipboardMessage, ClipboardMessageProxy, CliprdrB
 use ironrdp_connector::connection_activation::ConnectionActivationState;
 use ironrdp_connector::sspi::generator::NetworkRequest;
 use ironrdp_connector::{
-    BitmapConfig, ClientConnector, ConnectorError, ConnectorErrorKind, ConnectorResult, Credentials, DesktopSize,
-    ServerName,
+    BitmapConfig, ClientConnector, ConnectorError, ConnectorErrorKind, ConnectorResult, Credentials, DesktopSize, ServerName,
 };
 use ironrdp_core::WriteBuf;
 use ironrdp_displaycontrol::client::DisplayControlClient;
@@ -154,12 +153,7 @@ impl SharedScreen {
         let rect = self.dirty.take()?;
         let rgba = copy_rect(self.image.data(), self.image.stride(), rect);
         let [left, top, right, bottom] = rect;
-        Some(RdpFrame {
-            width: self.image.width(),
-            height: self.image.height(),
-            rect: [left, top, right - left, bottom - top],
-            rgba,
-        })
+        Some(RdpFrame { width: self.image.width(), height: self.image.height(), rect: [left, top, right - left, bottom - top], rgba })
     }
 }
 
@@ -178,15 +172,34 @@ pub enum RdpMouseButton {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RdpInput {
     /// A key by its PS/2 set-1 scan code; `0xE0xx` for extended keys (arrows, Insert, right Ctrl, ...).
-    Key { scancode: u16, pressed: bool },
+    Key {
+        scancode: u16,
+        pressed: bool,
+    },
     /// Characters, typed as Unicode keyboard events (layout and IME independent).
     Text(String),
-    MouseMove { x: u16, y: u16 },
-    MouseButton { button: RdpMouseButton, pressed: bool, x: u16, y: u16 },
+    MouseMove {
+        x: u16,
+        y: u16,
+    },
+    MouseButton {
+        button: RdpMouseButton,
+        pressed: bool,
+        x: u16,
+        y: u16,
+    },
     /// Wheel rotation in 1/120 notches; positive turns away from the user (up / right).
-    Wheel { delta: i16, horizontal: bool, x: u16, y: u16 },
+    Wheel {
+        delta: i16,
+        horizontal: bool,
+        x: u16,
+        y: u16,
+    },
     /// The desktop should take this size (when it follows the tab).
-    Resize { width: u16, height: u16 },
+    Resize {
+        width: u16,
+        height: u16,
+    },
 }
 
 pub mod scancode {
@@ -412,10 +425,7 @@ impl ClipboardThread {
             // The window goes away on the thread that made it.
             drop(clipboard);
         })?;
-        let (factory, thread_id) = ready_rx
-            .recv()
-            .map_err(|_| anyhow!("clipboard thread ended"))?
-            .map_err(|e| anyhow!(e))?;
+        let (factory, thread_id) = ready_rx.recv().map_err(|_| anyhow!("clipboard thread ended"))?.map_err(|e| anyhow!(e))?;
         Ok(Self { factory, thread_id })
     }
 }
@@ -457,11 +467,7 @@ pub(crate) fn spawn(params: ConnectParams, commands: mpsc::UnboundedReceiver<Ses
     }
 }
 
-async fn run(
-    params: ConnectParams,
-    mut commands: mpsc::UnboundedReceiver<SessionCommand>,
-    sink: EventSink,
-) -> anyhow::Result<()> {
+async fn run(params: ConnectParams, mut commands: mpsc::UnboundedReceiver<SessionCommand>, sink: EventSink) -> anyhow::Result<()> {
     // The clipboard window lives as long as the session (across password retries).
     let (clip_tx, mut clip_rx) = mpsc::unbounded_channel();
     #[cfg(windows)]
@@ -490,11 +496,7 @@ async fn run(
         let current = match password.take() {
             Some(p) => p,
             None => {
-                let target = if params.username.is_empty() {
-                    params.host.clone()
-                } else {
-                    format!("{}@{}", params.username, params.host)
-                };
+                let target = if params.username.is_empty() { params.host.clone() } else { format!("{}@{}", params.username, params.host) };
                 let answers = sink
                     .prompt(
                         tr!("{target} 비밀번호", "Password for {target}"),
@@ -541,16 +543,16 @@ fn classify(e: &ConnectorError) -> Failure {
         _ => return Failure::Error(e.to_string()),
     };
     let status = err.nstatus.map(|s| s.0);
-    if status.is_some_and(|s| BAD_CREDENTIALS.contains(&s))
-        || err.error_type == ironrdp_connector::sspi::ErrorKind::LogonDenied
-    {
+    if status.is_some_and(|s| BAD_CREDENTIALS.contains(&s)) || err.error_type == ironrdp_connector::sspi::ErrorKind::LogonDenied {
         return Failure::BadPassword;
     }
     let reason = match status {
         Some(0xC000_0072) => Some(t("계정이 사용 중지되어 있습니다", "The account is disabled")),
         Some(0xC000_0234) => Some(t("계정이 잠겨 있습니다", "The account is locked out")),
         Some(0xC000_0071) => Some(t("비밀번호가 만료되었습니다", "The password has expired")),
-        Some(0xC000_0224) => Some(t("비밀번호를 바꿔야 합니다 (서버에서 먼저 변경하세요)", "The password must be changed (change it on the server first)")),
+        Some(0xC000_0224) => {
+            Some(t("비밀번호를 바꿔야 합니다 (서버에서 먼저 변경하세요)", "The password must be changed (change it on the server first)"))
+        }
         Some(0xC000_006E) => Some(t("계정 제한으로 로그온할 수 없습니다", "Logon is not allowed by an account restriction")),
         Some(0xC000_015B) => Some(t("이 계정은 원격 로그온 권한이 없습니다", "The account is not allowed to log on remotely")),
         _ => None,
@@ -634,9 +636,7 @@ fn client_connector(
         // The audio output channel (rdpsnd), played through the system's default output with
         // the uncompressed (PCM) formats every server offers. The output device opens when the
         // server starts playing, so a PC without one connects all the same.
-        connector.attach_static_channel(ironrdp_rdpsnd::client::Rdpsnd::new(Box::new(
-            ironrdp_rdpsnd_native::cpal::RdpsndBackend::new(),
-        )));
+        connector.attach_static_channel(ironrdp_rdpsnd::client::Rdpsnd::new(Box::new(ironrdp_rdpsnd_native::cpal::RdpsndBackend::new())));
     }
     Ok(connector)
 }
@@ -675,9 +675,8 @@ async fn connect(
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
     let erased: Box<dyn AsyncReadWrite + Unpin + Send + Sync> = Box::new(tls);
     let mut framed = TokioFramed::new_with_leftover(erased, leftover);
-    let server_public_key = ironrdp_tls::extract_tls_server_public_key(&cert)
-        .ok_or_else(|| anyhow!("unable to extract the TLS server public key"))?
-        .to_owned();
+    let server_public_key =
+        ironrdp_tls::extract_tls_server_public_key(&cert).ok_or_else(|| anyhow!("unable to extract the TLS server public key"))?.to_owned();
     let outcome = ironrdp_tokio::connect_finalize(
         upgraded,
         connector,

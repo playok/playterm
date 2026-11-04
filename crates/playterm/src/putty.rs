@@ -141,7 +141,9 @@ pub fn convert(name: &str, values: &Values) -> ImportedSession {
             2 => SerialParity::Even,
             0 => SerialParity::None,
             _ => {
-                notes.push(t("Mark/Space 패리티는 지원하지 않아 None 으로 설정했습니다", "Mark/Space parity is not supported, set to None").into());
+                notes.push(
+                    t("Mark/Space 패리티는 지원하지 않아 None 으로 설정했습니다", "Mark/Space parity is not supported, set to None").into(),
+                );
                 SerialParity::None
             }
         };
@@ -213,8 +215,7 @@ pub fn load(key: &str) -> Result<Vec<ImportedSession>, String> {
 mod registry {
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_SZ, RegCloseKey, RegEnumKeyExW,
-        RegEnumValueW, RegOpenKeyExW,
+        HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_SZ, RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW,
     };
 
     use super::{RegValue, Values};
@@ -280,16 +281,7 @@ mod registry {
             let mut kind = 0u32;
             // SAFETY: buffers and lengths describe valid memory.
             let r = unsafe {
-                RegEnumValueW(
-                    key.0,
-                    index,
-                    name.as_mut_ptr(),
-                    &mut name_len,
-                    std::ptr::null(),
-                    &mut kind,
-                    data.as_mut_ptr(),
-                    &mut data_len,
-                )
+                RegEnumValueW(key.0, index, name.as_mut_ptr(), &mut name_len, std::ptr::null(), &mut kind, data.as_mut_ptr(), &mut data_len)
             };
             if r == ERROR_NO_MORE_ITEMS {
                 break;

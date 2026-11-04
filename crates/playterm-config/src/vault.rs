@@ -53,16 +53,12 @@ impl std::fmt::Display for VaultError {
             VaultError::Locked => f.write_str(t("볼트가 잠겨 있습니다", "The password vault is locked")),
             VaultError::AlreadyExists => f.write_str(t("볼트가 이미 존재합니다", "The password vault already exists")),
             VaultError::Missing => f.write_str(t("볼트 파일이 없습니다", "The password vault file does not exist")),
-            VaultError::EmptyPassword => {
-                f.write_str(t("마스터 비밀번호는 비워둘 수 없습니다", "The master password cannot be empty"))
-            }
+            VaultError::EmptyPassword => f.write_str(t("마스터 비밀번호는 비워둘 수 없습니다", "The master password cannot be empty")),
             VaultError::Replaced => f.write_str(t(
                 "다른 창에서 볼트를 새로 만들었습니다. 잠금을 다시 풀어 주세요",
                 "The password vault was recreated in another window. Unlock it again",
             )),
-            VaultError::Format(detail) => {
-                f.write_str(&tr!("볼트 파일 형식 오류: {detail}", "Invalid password vault file: {detail}"))
-            }
+            VaultError::Format(detail) => f.write_str(&tr!("볼트 파일 형식 오류: {detail}", "Invalid password vault file: {detail}")),
             // Transparent, like the inner error.
             VaultError::Io(e) => std::fmt::Display::fmt(e, f),
         }
@@ -132,14 +128,8 @@ impl Kdf {
     }
 
     fn aad(&self, salt: &[u8]) -> Vec<u8> {
-        format!(
-            "playterm-vault:v{FORMAT_VERSION}:{KDF_NAME}:{}:{}:{}:{}",
-            self.m_cost,
-            self.t_cost,
-            self.p_cost,
-            B64.encode(salt)
-        )
-        .into_bytes()
+        format!("playterm-vault:v{FORMAT_VERSION}:{KDF_NAME}:{}:{}:{}:{}", self.m_cost, self.t_cost, self.p_cost, B64.encode(salt))
+            .into_bytes()
     }
 }
 
@@ -175,20 +165,13 @@ impl Unlocked {
 type Decrypted = (BTreeMap<String, Zeroizing<String>>, BTreeMap<String, String>);
 
 /// Decrypts the contents of `file` (whose salt is `salt`) with `key`.
-fn decrypt(
-    key: &[u8; 32],
-    kdf: Kdf,
-    salt: &[u8],
-    file: &VaultFile,
-) -> Result<Decrypted, VaultError> {
+fn decrypt(key: &[u8; 32], kdf: Kdf, salt: &[u8], file: &VaultFile) -> Result<Decrypted, VaultError> {
     let nonce: [u8; NONCE_LEN] = decode_fixed(&file.nonce, "nonce")?;
     let ciphertext = B64.decode(&file.ciphertext).map_err(|e| VaultError::Format(e.to_string()))?;
     let cipher = XChaCha20Poly1305::new(&Key::from(*key));
     let aad = kdf.aad(salt);
     let plaintext = Zeroizing::new(
-        cipher
-            .decrypt(&XNonce::from(nonce), Payload { msg: &ciphertext, aad: &aad })
-            .map_err(|_| VaultError::WrongPassword)?,
+        cipher.decrypt(&XNonce::from(nonce), Payload { msg: &ciphertext, aad: &aad }).map_err(|_| VaultError::WrongPassword)?,
     );
     let text = std::str::from_utf8(&plaintext).map_err(|e| VaultError::Format(e.to_string()))?;
     let contents: Contents = toml::from_str(text).map_err(|e| VaultError::Format(e.to_string()))?;
@@ -239,12 +222,7 @@ impl Vault {
         };
         let file: VaultFile = toml::from_str(&text).map_err(|e| VaultError::Format(e.to_string()))?;
         if file.version != FORMAT_VERSION || file.kdf != KDF_NAME {
-            return Err(VaultError::Format(tr!(
-                "지원하지 않는 버전: v{} {}",
-                "Unsupported version: v{} {}",
-                file.version,
-                file.kdf
-            )));
+            return Err(VaultError::Format(tr!("지원하지 않는 버전: v{} {}", "Unsupported version: v{} {}", file.version, file.kdf)));
         }
         if file.m_cost > MAX_M_COST_KIB || file.t_cost > MAX_T_COST {
             return Err(VaultError::Format(t("KDF 비용이 비정상적으로 큽니다", "The KDF cost is abnormally high").into()));
@@ -303,12 +281,8 @@ impl Vault {
     /// the site's current one (or `None` if the site is gone).
     pub fn bind_missing(&mut self, target_of: impl Fn(&str) -> Option<String>) -> Result<(), VaultError> {
         self.update(|u| {
-            let missing: Vec<(String, String)> = u
-                .secrets
-                .keys()
-                .filter(|id| !u.targets.contains_key(*id))
-                .filter_map(|id| Some((id.clone(), target_of(id)?)))
-                .collect();
+            let missing: Vec<(String, String)> =
+                u.secrets.keys().filter(|id| !u.targets.contains_key(*id)).filter_map(|id| Some((id.clone(), target_of(id)?))).collect();
             let changed = !missing.is_empty();
             u.targets.extend(missing);
             changed
@@ -345,12 +319,9 @@ impl Vault {
 
     fn save(&self) -> Result<(), VaultError> {
         let unlocked = self.unlocked.as_ref().ok_or(VaultError::Locked)?;
-        let contents = ContentsRef {
-            secrets: unlocked.secrets.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect(),
-            targets: &unlocked.targets,
-        };
-        let plaintext =
-            Zeroizing::new(toml::to_string(&contents).map_err(|e| VaultError::Format(e.to_string()))?);
+        let contents =
+            ContentsRef { secrets: unlocked.secrets.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect(), targets: &unlocked.targets };
+        let plaintext = Zeroizing::new(toml::to_string(&contents).map_err(|e| VaultError::Format(e.to_string()))?);
 
         let mut nonce = [0u8; NONCE_LEN];
         getrandom::fill(&mut nonce).map_err(|e| io::Error::other(e.to_string()))?;

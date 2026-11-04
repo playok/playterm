@@ -13,7 +13,10 @@ const MAX_HISTORY: usize = 100;
 pub enum ComposeAction {
     Send(Send),
     /// Run saved macro `k` in the tabs the bar sends to (`to_all` as in [`Send`]).
-    Macro { k: usize, to_all: bool },
+    Macro {
+        k: usize,
+        to_all: bool,
+    },
     /// Open "Manage macros".
     ManageMacros,
 }
@@ -122,7 +125,10 @@ impl ComposeBar {
                 }
             })
             .response
-            .on_hover_text(t("저장된 매크로를 보낼 탭(현재 탭 / 모든 탭)에서 실행합니다", "Runs a saved macro in the tabs the bar sends to (this tab / all tabs)"));
+            .on_hover_text(t(
+                "저장된 매크로를 보낼 탭(현재 탭 / 모든 탭)에서 실행합니다",
+                "Runs a saved macro in the tabs the bar sends to (this tab / all tabs)",
+            ));
         });
 
         if !send {

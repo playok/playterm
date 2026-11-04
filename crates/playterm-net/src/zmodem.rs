@@ -568,9 +568,7 @@ impl Download {
     /// sends them before other bytes. (A ZDLE at the end waits for the next byte.)
     fn drain(&mut self, input: &[u8]) {
         self.drain.extend_from_slice(input);
-        let last = (0..self.drain.len())
-            .rev()
-            .find(|&i| self.drain[i] == ZDLE && self.drain.get(i + 1).is_some_and(|&next| next >= 0x40));
+        let last = (0..self.drain.len()).rev().find(|&i| self.drain[i] == ZDLE && self.drain.get(i + 1).is_some_and(|&next| next >= 0x40));
         if let Some(i) = last {
             self.drain.drain(..=i);
         }
@@ -742,9 +740,7 @@ impl Download {
                 true,
                 reply,
             ),
-            ZABORT | ZCAN | ZFERR => {
-                self.fail(t("서버가 전송을 중단했습니다", "The server stopped the transfer").into(), false, reply)
-            }
+            ZABORT | ZCAN | ZFERR => self.fail(t("서버가 전송을 중단했습니다", "The server stopped the transfer").into(), false, reply),
             _ => {}
         }
     }
@@ -1142,7 +1138,14 @@ impl Upload {
                 }
                 let Some(file) = &mut self.file else { return };
                 if pos > file.size {
-                    self.fail(tr!("서버가 파일 크기를 넘는 위치({pos})를 요청했습니다", "The server asked for a position ({pos}) past the end of the file"), true, reply);
+                    self.fail(
+                        tr!(
+                            "서버가 파일 크기를 넘는 위치({pos})를 요청했습니다",
+                            "The server asked for a position ({pos}) past the end of the file"
+                        ),
+                        true,
+                        reply,
+                    );
                     return;
                 }
                 if !matches!(self.stage, UpStage::Offered) {
@@ -1246,7 +1249,13 @@ impl Upload {
             return;
         }
         let (wide, ctl, streaming) = (self.crc32, self.escctl, self.streaming);
-        let window = if streaming { WINDOW } else if self.buffer > 0 { self.buffer.min(STOP_AND_WAIT) } else { STOP_AND_WAIT };
+        let window = if streaming {
+            WINDOW
+        } else if self.buffer > 0 {
+            self.buffer.min(STOP_AND_WAIT)
+        } else {
+            STOP_AND_WAIT
+        };
         let Some(file) = &mut self.file else { return };
         let mut buf = vec![0u8; SEND_BLOCK];
         loop {
@@ -1404,10 +1413,7 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
         Some(i) if i > 0 => (&name[..i], &name[i..]),
         _ => (name, ""),
     };
-    (1..)
-        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
-        .find(|p| !p.exists())
-        .expect("some name is free")
+    (1..).map(|n| dir.join(format!("{stem} ({n}){ext}"))).find(|p| !p.exists()).expect("some name is free")
 }
 
 #[cfg(test)]
@@ -1605,7 +1611,8 @@ mod tests {
         assert_eq!(files(dir.path()), Vec::<String>::new());
         assert_eq!(download.outcome(), None, "still dropping what was on its way");
         // (The shell echoes the CAN bytes it got after the sender ended.)
-        let late = [block(&all_bytes(3000), ZCRCG, true), block(&all_bytes(500), ZCRCE, true), b"\r\n$ \x18\x18\x08 \x08".to_vec()].concat();
+        let late =
+            [block(&all_bytes(3000), ZCRCG, true), block(&all_bytes(500), ZCRCE, true), b"\r\n$ \x18\x18\x08 \x08".to_vec()].concat();
         assert!(feed(&mut download, &late, 1).is_empty());
         assert!(download.tick(Instant::now()).is_empty());
         assert_eq!(download.outcome(), None, "not quiet yet");
@@ -1825,13 +1832,8 @@ mod tests {
     /// really ran against lrzsz.
     fn lrzsz(program: &str, args: &[&str], dir: &Path) -> Option<std::process::Child> {
         use std::process::{Command, Stdio};
-        let child = Command::new(program)
-            .args(args)
-            .current_dir(dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn();
+        let child =
+            Command::new(program).args(args).current_dir(dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn();
         match child {
             Ok(child) => Some(child),
             Err(e) if std::env::var_os("PLAYTERM_REQUIRE_LRZSZ").is_some() => {

@@ -34,9 +34,7 @@ impl StateMark {
     fn of(state: &SessionState) -> Self {
         let (icon, color, label) = match state {
             SessionState::Local => (icon::STATE_LOCAL, Color32::from_rgb(140, 140, 140), t("로컬 프롬프트", "Local prompt")),
-            SessionState::Connecting => {
-                (icon::STATE_CONNECTING, Color32::from_rgb(220, 180, 40), t("연결 중…", "Connecting…"))
-            }
+            SessionState::Connecting => (icon::STATE_CONNECTING, Color32::from_rgb(220, 180, 40), t("연결 중…", "Connecting…")),
             SessionState::Connected => (icon::STATE_CONNECTED, Color32::from_rgb(60, 190, 90), t("연결됨", "Connected")),
             SessionState::Closed => (icon::STATE_CLOSED, Color32::from_rgb(200, 70, 70), t("연결 끊김", "Disconnected")),
         };
@@ -177,21 +175,12 @@ impl Dock {
     }
 
     fn any_group(&self) -> Option<TileId> {
-        self.tree
-            .tiles
-            .iter()
-            .find(|(_, t)| matches!(t, Tile::Container(Container::Tabs(_))))
-            .map(|(&id, _)| id)
+        self.tree.tiles.iter().find(|(_, t)| matches!(t, Tile::Container(Container::Tabs(_)))).map(|(&id, _)| id)
     }
 
     /// More than one tab group is on screen.
     fn is_split(&self) -> bool {
-        self.tree
-            .tiles
-            .iter()
-            .filter(|(id, t)| matches!(t, Tile::Container(Container::Tabs(_))) && self.tree.is_visible(**id))
-            .count()
-            > 1
+        self.tree.tiles.iter().filter(|(id, t)| matches!(t, Tile::Container(Container::Tabs(_))) && self.tree.is_visible(**id)).count() > 1
     }
 
     /// Shows the tab groups and the sessions in them in all remaining space.
@@ -280,11 +269,8 @@ impl Behavior<u64> for DockView<'_> {
         let pane_rect = ui.available_rect_before_wrap();
         let session = &mut self.sessions[i];
         let autofocus = self.autofocus && is_active;
-        let output = if session.shows_rdp() {
-            rdp_view::show(ui, session, autofocus)
-        } else {
-            view::show(ui, session, autofocus, self.style)
-        };
+        let output =
+            if session.shows_rdp() { rdp_view::show(ui, session, autofocus) } else { view::show(ui, session, autofocus, self.style) };
         if output.focused {
             self.focused = Some(id);
         }
@@ -328,10 +314,7 @@ impl Behavior<u64> for DockView<'_> {
         } else {
             ui.visuals().text_color()
         };
-        let mut parts = vec![
-            (mark.icon.rich_text().color(mark.color), font.clone()),
-            (RichText::new(" "), font.clone()),
-        ];
+        let mut parts = vec![(mark.icon.rich_text().color(mark.color), font.clone()), (RichText::new(" "), font.clone())];
         if let Some(label) = s.site_label() {
             let color = s.tab_color.map_or(ui.visuals().strong_text_color(), crate::menu::color32);
             parts.push((RichText::new(format!("{label} ")).strong().color(color), font.clone()));

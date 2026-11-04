@@ -7,8 +7,8 @@ use eframe::egui;
 use playterm_config::{AutoLogin, LoginStep, SessionProfile, TabColor};
 use playterm_i18n::{t, tr};
 use playterm_net::{
-    ForwardKind, ForwardRule, KeepAlive, KeepAliveMode, Protocol, SerialFlow, SerialParity, SerialPortEntry,
-    SerialSettings, decode_escapes, list_ports,
+    ForwardKind, ForwardRule, KeepAlive, KeepAliveMode, Protocol, SerialFlow, SerialParity, SerialPortEntry, SerialSettings,
+    decode_escapes, list_ports,
 };
 use playterm_term::Charset;
 use zeroize::Zeroizing;
@@ -73,12 +73,10 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
 /// Expands a leading `~` to the user's home directory.
 pub fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
-            match directories::BaseDirs::new() {
-                Some(dirs) => dirs.home_dir().join(rest.trim_start_matches(['/', '\\'])),
-                None => PathBuf::from(path),
-            }
-        }
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => match directories::BaseDirs::new() {
+            Some(dirs) => dirs.home_dir().join(rest.trim_start_matches(['/', '\\'])),
+            None => PathBuf::from(path),
+        },
         _ => PathBuf::from(path),
     }
 }
@@ -121,11 +119,8 @@ fn serial_rows(
                 ui.weak(t("COM 포트가 없습니다", "No COM ports"));
             }
             for entry in ports.iter() {
-                let label = if entry.description.is_empty() {
-                    entry.name.clone()
-                } else {
-                    format!("{}  {}", entry.name, entry.description)
-                };
+                let label =
+                    if entry.description.is_empty() { entry.name.clone() } else { format!("{}  {}", entry.name, entry.description) };
                 if ui.selectable_label(s.port == entry.name, label).clicked() {
                     s.port = entry.name.clone();
                 }
@@ -422,10 +417,7 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
         ui.end_row();
 
         ui.label("");
-        ui.checkbox(
-            &mut p.use_agent,
-            tr!("SSH 에이전트 사용 ({})", "Use the SSH agent ({})", crate::platform::ssh_agents()),
-        );
+        ui.checkbox(&mut p.use_agent, tr!("SSH 에이전트 사용 ({})", "Use the SSH agent ({})", crate::platform::ssh_agents()));
         ui.end_row();
     }
 
@@ -514,9 +506,11 @@ impl ForwardRow {
 
     fn to_rule(&self, n: usize) -> Result<ForwardRule, String> {
         let port = |s: &str, what: &str| {
-            s.trim().parse::<u16>().ok().filter(|&p| p > 0).ok_or_else(|| {
-                tr!("포워딩 {n}: {what} 포트가 잘못되었습니다", "Port forwarding {n}: invalid {what} port")
-            })
+            s.trim()
+                .parse::<u16>()
+                .ok()
+                .filter(|&p| p > 0)
+                .ok_or_else(|| tr!("포워딩 {n}: {what} 포트가 잘못되었습니다", "Port forwarding {n}: invalid {what} port"))
         };
         let mut rule = ForwardRule {
             kind: self.kind,
@@ -578,8 +572,7 @@ impl ProfileForm {
     /// Whether anything was changed since the form was opened.
     pub fn is_dirty(&self) -> bool {
         let (profile, port, baud, forwards) = &self.initial;
-        !self.password.is_empty()
-            || (&self.profile, &self.port, &self.baud, &self.forwards) != (profile, port, baud, forwards)
+        !self.password.is_empty() || (&self.profile, &self.port, &self.baud, &self.forwards) != (profile, port, baud, forwards)
     }
 
     /// Draws the form. Returns `true` if Enter was pressed in one of its text fields.
@@ -591,8 +584,7 @@ impl ProfileForm {
         egui::Grid::new("profile-form").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             if opts.meta {
                 ui.label(t("이름", "Name"));
-                let name =
-                    ui.add(egui::TextEdit::singleline(&mut p.name).hint_text(t("비우면 user@host", "user@host if empty")));
+                let name = ui.add(egui::TextEdit::singleline(&mut p.name).hint_text(t("비우면 user@host", "user@host if empty")));
                 if !self.focus_requested {
                     name.request_focus();
                     self.focus_requested = true;
@@ -602,9 +594,7 @@ impl ProfileForm {
 
                 ui.label(t("폴더", "Folder"));
                 ui.horizontal(|ui| {
-                    let folder = ui.add(
-                        egui::TextEdit::singleline(&mut p.folder).hint_text(t("없음", "None")).desired_width(150.0),
-                    );
+                    let folder = ui.add(egui::TextEdit::singleline(&mut p.folder).hint_text(t("없음", "None")).desired_width(150.0));
                     submit |= enter(ui, &folder);
                     let existing: Vec<&String> = opts.folders.iter().filter(|f| !f.is_empty()).collect();
                     if !existing.is_empty() {
@@ -831,21 +821,16 @@ impl ProfileForm {
             let mut remove = None;
             egui::Grid::new("forward-rows").num_columns(5).spacing([6.0, 4.0]).show(ui, |ui| {
                 for (i, row) in self.forwards.iter_mut().enumerate() {
-                    egui::ComboBox::from_id_salt(("fwd-kind", i))
-                        .width(110.0)
-                        .selected_text(row.kind.to_string())
-                        .show_ui(ui, |ui| {
-                            for k in ForwardKind::ALL {
-                                ui.selectable_value(&mut row.kind, k, k.to_string());
-                            }
-                        });
+                    egui::ComboBox::from_id_salt(("fwd-kind", i)).width(110.0).selected_text(row.kind.to_string()).show_ui(ui, |ui| {
+                        for k in ForwardKind::ALL {
+                            ui.selectable_value(&mut row.kind, k, k.to_string());
+                        }
+                    });
                     ui.horizontal(|ui| {
                         let hint = if row.kind == ForwardKind::Remote { t("(서버)", "(server)") } else { "127.0.0.1" };
                         ui.add(egui::TextEdit::singleline(&mut row.bind_host).hint_text(hint).desired_width(80.0));
                         ui.label(":");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut row.bind_port).hint_text(t("포트", "port")).desired_width(45.0),
-                        );
+                        ui.add(egui::TextEdit::singleline(&mut row.bind_port).hint_text(t("포트", "port")).desired_width(45.0));
                     });
                     if row.kind == ForwardKind::Dynamic {
                         ui.label("SOCKS5");
@@ -853,17 +838,9 @@ impl ProfileForm {
                     } else {
                         ui.label("→");
                         ui.horizontal(|ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut row.dest_host)
-                                    .hint_text(t("호스트", "host"))
-                                    .desired_width(90.0),
-                            );
+                            ui.add(egui::TextEdit::singleline(&mut row.dest_host).hint_text(t("호스트", "host")).desired_width(90.0));
                             ui.label(":");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut row.dest_port)
-                                    .hint_text(t("포트", "port"))
-                                    .desired_width(45.0),
-                            );
+                            ui.add(egui::TextEdit::singleline(&mut row.dest_port).hint_text(t("포트", "port")).desired_width(45.0));
                         });
                     }
                     if ui.add(icon::icon_button(icon::DELETE).small()).on_hover_text(t("삭제", "Delete")).clicked() {
@@ -914,10 +891,13 @@ impl ProfileForm {
             if p.serial.port.is_empty() {
                 return Err(t("시리얼 포트를 입력하세요 (예: COM3)", "Enter a serial port (e.g. COM3)").into());
             }
-            p.serial.baud = self.baud.trim().parse().ok().filter(|&b: &u32| b > 0).ok_or(t(
-                "속도(baud)는 양의 정수여야 합니다",
-                "The speed (baud) must be a positive integer",
-            ))?;
+            p.serial.baud = self
+                .baud
+                .trim()
+                .parse()
+                .ok()
+                .filter(|&b: &u32| b > 0)
+                .ok_or(t("속도(baud)는 양의 정수여야 합니다", "The speed (baud) must be a positive integer"))?;
             p.host = p.serial.port.clone();
             p.port = 0;
             p.identity_file.clear();
@@ -946,8 +926,7 @@ impl ProfileForm {
                 if p.username.is_empty() {
                     return Err(t("SSH 사용자 이름을 입력하세요", "Enter the SSH user name").into());
                 }
-                p.forwards =
-                    self.forwards.iter().enumerate().map(|(i, r)| r.to_rule(i + 1)).collect::<Result<_, _>>()?;
+                p.forwards = self.forwards.iter().enumerate().map(|(i, r)| r.to_rule(i + 1)).collect::<Result<_, _>>()?;
             }
             Protocol::Serial => unreachable!("handled above"),
             Protocol::Rdp => {
@@ -973,11 +952,7 @@ fn validate_auto_login(a: &AutoLogin) -> Result<AutoLogin, String> {
         .filter(|s| !s.expect.is_empty() || !s.send.trim().is_empty())
         .collect();
     if let Some(n) = steps.iter().position(|s| s.expect.is_empty()) {
-        return Err(tr!(
-            "자동 로그인 {}단계: 기다릴 문자열을 입력하세요",
-            "Automatic login step {}: enter the text to wait for",
-            n + 1
-        ));
+        return Err(tr!("자동 로그인 {}단계: 기다릴 문자열을 입력하세요", "Automatic login step {}: enter the text to wait for", n + 1));
     }
     if a.enabled && steps.is_empty() {
         return Err(t(
@@ -994,11 +969,7 @@ mod tests {
 
     #[test]
     fn splits_pasted_addresses() {
-        let a = |user: Option<&str>, host: &str, port: Option<u16>| Address {
-            user: user.map(str::to_owned),
-            host: host.to_owned(),
-            port,
-        };
+        let a = |user: Option<&str>, host: &str, port: Option<u16>| Address { user: user.map(str::to_owned), host: host.to_owned(), port };
         assert_eq!(split_address("web01"), a(None, "web01", None));
         assert_eq!(split_address(" deploy@web01 "), a(Some("deploy"), "web01", None));
         assert_eq!(split_address("web01:2222"), a(None, "web01", Some(2222)));

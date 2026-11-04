@@ -112,9 +112,7 @@ fn nudge() {}
 
 #[cfg(windows)]
 fn apply(want: PreventSleep) {
-    use windows_sys::Win32::System::Power::{
-        ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
-    };
+    use windows_sys::Win32::System::Power::{ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
     let flags = match want {
         PreventSleep::Off => ES_CONTINUOUS,
         PreventSleep::System => ES_CONTINUOUS | ES_SYSTEM_REQUIRED,

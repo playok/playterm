@@ -15,7 +15,9 @@ use crate::compose_bar::{self, ComposeBar};
 use crate::console::Request;
 use crate::dialogs::{self, QuickConnect, QuickConnectResult, VaultDialog, VaultMode, VaultResult};
 use crate::dock::{BROADCAST_COLOR, Dock};
+use crate::icon;
 use crate::import_dialog::{ImportDialog, ImportResult, ImportSource};
+use crate::licenses::LicensesDialog;
 use crate::logging::{self, LogPlan};
 use crate::menu::{self, Command, MenuState};
 use crate::power::{ScreenSaverGuard, SleepGuard};
@@ -25,12 +27,10 @@ use crate::session::{Session, SessionSpec, SessionState, TermSetup, printable};
 use crate::settings_dialog::{SettingsDialog, SettingsResult};
 use crate::sidebar::{self, Sidebar, SidebarAction, VaultState};
 use crate::site_manager::{SiteManager, SiteManagerResult};
-use crate::licenses::LicensesDialog;
 use crate::template_dialog::{TemplateDialog, TemplateResult};
-use crate::view::UserInput;
 use crate::update::{self, Updater};
+use crate::view::UserInput;
 use crate::{clip_keys, clipboard, fonts, local_fs, status_bar, view};
-use crate::icon;
 
 const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
 /// Largest text a remote program may put on the clipboard (OSC 52).
@@ -279,10 +279,7 @@ impl PlaytermApp {
         apply_ui(&cc.egui_ctx, &settings);
         let (store, mut status) = load_profiles(&config_dir.join("sessions.toml"));
         if let Some(e) = settings_error {
-            status = Some(tr!(
-                "설정 파일을 읽을 수 없어 기본값을 씁니다: {e}",
-                "Cannot read the settings file, using the defaults: {e}"
-            ));
+            status = Some(tr!("설정 파일을 읽을 수 없어 기본값을 씁니다: {e}", "Cannot read the settings file, using the defaults: {e}"));
         }
         if let Err(e) = fonts::install(&cc.egui_ctx, &settings.font) {
             status = Some(e);
@@ -369,9 +366,8 @@ impl PlaytermApp {
     /// Connects `spec` in the tab it was typed in, in the current tab if that is an unused
     /// prompt, or else in a new tab.
     fn open_spec(&mut self, spec: SessionSpec) {
-        let target = self.connect_target.take().or_else(|| {
-            self.sessions.get(self.active).filter(|s| s.state == SessionState::Local).map(|s| s.id)
-        });
+        let target =
+            self.connect_target.take().or_else(|| self.sessions.get(self.active).filter(|s| s.state == SessionState::Local).map(|s| s.id));
         if let Some(i) = target.and_then(|id| self.index_of(id)).filter(|&i| self.sessions[i].in_console()) {
             self.sessions[i].start(spec, &self.net, self.waker.clone());
             self.active = i;
@@ -426,13 +422,15 @@ impl PlaytermApp {
             return None;
         }
         let Some(m) = self.settings.macros.iter().find(|m| m.name == name) else {
-            self.status = Some(tr!("연결 후 매크로 '{name}' 가 없어 실행하지 않습니다", "The macro '{name}' to run after connecting does not exist"));
+            self.status =
+                Some(tr!("연결 후 매크로 '{name}' 가 없어 실행하지 않습니다", "The macro '{name}' to run after connecting does not exist"));
             return None;
         };
         match crate::macros::parse(&m.script) {
             Ok(steps) => Some((m.name.clone(), steps)),
             Err(e) => {
-                self.status = Some(tr!("연결 후 매크로 '{name}' 를 실행할 수 없습니다: {e}", "Cannot run the macro '{name}' after connecting: {e}"));
+                self.status =
+                    Some(tr!("연결 후 매크로 '{name}' 를 실행할 수 없습니다: {e}", "Cannot run the macro '{name}' after connecting: {e}"));
                 None
             }
         }
@@ -531,11 +529,7 @@ impl PlaytermApp {
         if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
             let dialog = VaultDialog::new(
                 VaultMode::Unlock,
-                tr!(
-                    "'{}' 의 저장된 비밀번호를 사용합니다.",
-                    "Uses the saved password of '{}'.",
-                    profile.display_name()
-                ),
+                tr!("'{}' 의 저장된 비밀번호를 사용합니다.", "Uses the saved password of '{}'.", profile.display_name()),
             );
             let target = self.connect_target.take();
             self.modal = Some(Modal::Vault(dialog, Pending::Connect(id.to_owned(), target)));
@@ -628,11 +622,7 @@ impl PlaytermApp {
         }
         let wants_secret = ids.iter().filter_map(|id| self.store.get(id)).any(|p| p.save_password);
         if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
-            let reason = tr!(
-                "사이트 {}개의 저장된 비밀번호를 사용합니다.",
-                "Uses the saved passwords of {} sites.",
-                ids.len()
-            );
+            let reason = tr!("사이트 {}개의 저장된 비밀번호를 사용합니다.", "Uses the saved passwords of {} sites.", ids.len());
             self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, reason), Pending::ConnectMany(ids, layout)));
             return;
         }
@@ -1458,8 +1448,7 @@ impl PlaytermApp {
             }
             Command::ToggleAlwaysOnTop => {
                 self.always_on_top = !self.always_on_top;
-                let level =
-                    if self.always_on_top { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal };
+                let level = if self.always_on_top { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal };
                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
             }
 
@@ -1553,12 +1542,8 @@ impl PlaytermApp {
                         let r = self.store.upsert(p);
                         self.report(t("사이트 저장 실패", "Could not save the site"), r);
                     }
-                    let place =
-                        if folder.is_empty() { String::new() } else { tr!(" ('{folder}' 폴더)", " (folder '{folder}')") };
-                    self.info = Some(tr!(
-                        "{source} 세션 {count}개를 가져왔습니다{place}",
-                        "Imported {count} {source} sessions{place}"
-                    ));
+                    let place = if folder.is_empty() { String::new() } else { tr!(" ('{folder}' 폴더)", " (folder '{folder}')") };
+                    self.info = Some(tr!("{source} 세션 {count}개를 가져왔습니다{place}", "Imported {count} {source} sessions{place}"));
                     self.show_sidebar = true;
                 }
             },
@@ -1602,10 +1587,7 @@ impl PlaytermApp {
             },
             Modal::ConfirmDeleteTemplate(id) => {
                 let name = self.store.template(&id).map(|tpl| tpl.name.clone()).unwrap_or_default();
-                let text = tr!(
-                    "'{name}' 템플릿을 삭제할까요? (사이트는 그대로 남습니다)",
-                    "Delete template '{name}'? (Its sites stay.)"
-                );
+                let text = tr!("'{name}' 템플릿을 삭제할까요? (사이트는 그대로 남습니다)", "Delete template '{name}'? (Its sites stay.)");
                 match dialogs::confirm(ctx, t("템플릿 삭제", "Delete template"), &text, t("삭제", "Delete")) {
                     None => self.modal = Some(Modal::ConfirmDeleteTemplate(id)),
                     Some(false) => {}
@@ -1776,7 +1758,10 @@ impl PlaytermApp {
                 }
             }
             if self.sessions.get(self.active).is_some_and(|s| s.can_sftp())
-                && ui.add(icon::button(icon::SFTP, "SFTP")).on_hover_text(t("SFTP 탐색기 (Ctrl+Shift+X)", "SFTP explorer (Ctrl+Shift+X)")).clicked()
+                && ui
+                    .add(icon::button(icon::SFTP, "SFTP"))
+                    .on_hover_text(t("SFTP 탐색기 (Ctrl+Shift+X)", "SFTP explorer (Ctrl+Shift+X)"))
+                    .clicked()
             {
                 action = Some(Command::ToggleSftpPanel);
             }
@@ -1828,8 +1813,7 @@ impl PlaytermApp {
 
     /// Files dropped on the window are uploaded into the active session's SFTP directory.
     fn dropped_files(&mut self, ctx: &egui::Context) {
-        let paths: Vec<PathBuf> =
-            ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_owned()).filter(|p| p.exists()).collect());
+        let paths: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_owned()).filter(|p| p.exists()).collect());
         if paths.is_empty() {
             return;
         }
@@ -1857,7 +1841,8 @@ impl PlaytermApp {
                     "SFTP 탐색기: SSH 로 연결된 탭에서 원격 파일을 보고 올리거나 받을 수 있습니다.",
                     "SFTP explorer: shows, uploads and downloads remote files in a tab connected over SSH.",
                 ));
-                if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)")).clicked() {
+                if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)")).clicked()
+                {
                     self.sftp_panel = false;
                 }
             });
@@ -1870,7 +1855,10 @@ impl PlaytermApp {
         ui.horizontal(|ui| {
             ui.strong(t("SFTP 탐색기", "SFTP explorer"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                close = ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)")).clicked();
+                close = ui
+                    .add(icon::icon_button(icon::CLOSE).small())
+                    .on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)"))
+                    .clicked();
             });
         });
         if close {
@@ -2037,11 +2025,8 @@ impl PlaytermApp {
             if !session.take_zmodem_question() {
                 continue;
             }
-            let title = tr!(
-                "ZMODEM 으로 받은 파일을 저장할 폴더 - {}",
-                "Folder for the files received with ZMODEM - {}",
-                session.tab_title()
-            );
+            let title =
+                tr!("ZMODEM 으로 받은 파일을 저장할 폴더 - {}", "Folder for the files received with ZMODEM - {}", session.tab_title());
             let (start, ctx) = (start.clone(), ctx.clone());
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
@@ -2183,8 +2168,7 @@ impl eframe::App for PlaytermApp {
                 self.update_dialog(&ctx);
             }
         }
-        let modal_open =
-            prompt_open || self.modal.is_some() || self.updater.is_open();
+        let modal_open = prompt_open || self.modal.is_some() || self.updater.is_open();
         // Beside the (non-modal) site manager a terminal takes the keyboard only when clicked,
         // so typing after opening the manager does not reach a shell.
         let autofocus = !modal_open && self.site_manager.is_none();
@@ -2194,10 +2178,7 @@ impl eframe::App for PlaytermApp {
         // Added before the side panel so it spans the whole window width.
         if self.settings.status_bar {
             let session = self.sessions.get(self.active);
-            let awake = status_bar::Awake {
-                sleep: self.sleep_guard.active(),
-                screensaver: self.screensaver_guard.active(),
-            };
+            let awake = status_bar::Awake { sleep: self.sleep_guard.active(), screensaver: self.screensaver_guard.active() };
             egui::Panel::bottom("status").show(ui, |ui| status_bar::show(ui, session, awake));
         }
         if self.show_sidebar {
@@ -2220,12 +2201,11 @@ impl eframe::App for PlaytermApp {
             self.sftp_strip_ui(ui);
         } else {
             let mut sftp_panel = self.sftp_panel;
-            egui::Panel::right("sftp-panel")
-                .resizable(true)
-                .default_size(340.0)
-                .min_size(240.0)
-                .drag_to_open(false)
-                .show_collapsible(ui, &mut sftp_panel, |ui| self.sftp_panel_ui(ui));
+            egui::Panel::right("sftp-panel").resizable(true).default_size(340.0).min_size(240.0).drag_to_open(false).show_collapsible(
+                ui,
+                &mut sftp_panel,
+                |ui| self.sftp_panel_ui(ui),
+            );
             // Closed with its ✕ (inside) or by dragging the edge (outside).
             self.sftp_panel = self.sftp_panel && sftp_panel;
         }

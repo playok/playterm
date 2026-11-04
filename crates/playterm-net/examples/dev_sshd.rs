@@ -48,14 +48,7 @@ struct DevServer {
 impl server::Server for DevServer {
     type Handler = Self;
     fn new_client(&mut self, _: Option<SocketAddr>) -> Self {
-        Self {
-            channels: Arc::default(),
-            shells: Arc::default(),
-            scripts: Arc::default(),
-            line: Vec::new(),
-            kbd_round: 0,
-            ..self.clone()
-        }
+        Self { channels: Arc::default(), shells: Arc::default(), scripts: Arc::default(), line: Vec::new(), kbd_round: 0, ..self.clone() }
     }
 }
 
@@ -74,10 +67,7 @@ fn reject(kbd: bool) -> Auth {
 /// Reads the key blobs of an OpenSSH `authorized_keys` file.
 fn load_authorized(path: &str) -> Vec<PublicKey> {
     let text = std::fs::read_to_string(path).expect("authorized keys file");
-    text.lines()
-        .filter_map(|l| l.split_whitespace().nth(1))
-        .filter_map(|b64| parse_public_key_base64(b64).ok())
-        .collect()
+    text.lines().filter_map(|l| l.split_whitespace().nth(1)).filter_map(|b64| parse_public_key_base64(b64).ok()).collect()
 }
 
 impl server::Handler for DevServer {
@@ -94,8 +84,7 @@ impl server::Handler for DevServer {
         _submethods: &str,
         response: Option<server::Response<'a>>,
     ) -> Result<Auth, Self::Error> {
-        let answers: Vec<String> =
-            response.map(|r| r.map(|b| String::from_utf8_lossy(&b).into_owned()).collect()).unwrap_or_default();
+        let answers: Vec<String> = response.map(|r| r.map(|b| String::from_utf8_lossy(&b).into_owned()).collect()).unwrap_or_default();
         println!("keyboard-interactive for {user:?}, round {}, {} answers", self.kbd_round, answers.len());
         let ask = |prompts: Vec<(std::borrow::Cow<'static, str>, bool)>| Auth::Partial {
             name: "".into(),
@@ -173,9 +162,7 @@ impl server::Handler for DevServer {
         let (handle, address, port) = (session.handle(), address.to_owned(), *port);
         tokio::spawn(async move {
             while let Ok((mut tcp, peer)) = listener.accept().await {
-                let channel = handle
-                    .channel_open_forwarded_tcpip(address.clone(), port, peer.ip().to_string(), peer.port().into())
-                    .await;
+                let channel = handle.channel_open_forwarded_tcpip(address.clone(), port, peer.ip().to_string(), peer.port().into()).await;
                 if let Ok(channel) = channel {
                     tokio::spawn(async move {
                         let _ = tokio::io::copy_bidirectional(&mut tcp, &mut channel.into_stream()).await;

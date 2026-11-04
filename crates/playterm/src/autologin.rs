@@ -109,11 +109,7 @@ mod tests {
 
     fn runner(steps: &[(&str, &str)], password: Option<&str>) -> LoginRunner {
         let steps = steps.iter().map(|(e, s)| LoginStep { expect: e.to_string(), send: s.to_string() }).collect();
-        LoginRunner::new(LoginScript {
-            steps,
-            user: "admin".into(),
-            password: password.map(|p| Zeroizing::new(p.to_owned())),
-        })
+        LoginRunner::new(LoginScript { steps, user: "admin".into(), password: password.map(|p| Zeroizing::new(p.to_owned())) })
     }
 
     fn sent(action: Option<LoginAction>) -> String {

@@ -224,8 +224,8 @@ mod imp {
     use playterm_i18n::tr;
     use windows_sys::Win32::Foundation::{GetLastError, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        ICMP_ECHO_REPLY, ICMPV6_ECHO_REPLY_LH, IP_REQ_TIMED_OUT, IP_SUCCESS, Icmp6CreateFile, Icmp6ParseReplies,
-        Icmp6SendEcho2, IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho,
+        ICMP_ECHO_REPLY, ICMPV6_ECHO_REPLY_LH, IP_REQ_TIMED_OUT, IP_SUCCESS, Icmp6CreateFile, Icmp6ParseReplies, Icmp6SendEcho2,
+        IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho,
     };
     use windows_sys::Win32::Networking::WinSock::{AF_INET6, IN6_ADDR, IN6_ADDR_0, SOCKADDR_IN6, SOCKADDR_IN6_0};
 
@@ -284,12 +284,9 @@ mod imp {
             };
             let from = (reply.Address != 0).then(|| IpAddr::V4(Ipv4Addr::from(reply.Address.to_ne_bytes())));
             match (status, from) {
-                (IP_SUCCESS, Some(from)) => PingEvent::Reply {
-                    from,
-                    bytes: reply.DataSize.into(),
-                    time_ms: reply.RoundTripTime,
-                    ttl: Some(reply.Options.Ttl),
-                },
+                (IP_SUCCESS, Some(from)) => {
+                    PingEvent::Reply { from, bytes: reply.DataSize.into(), time_ms: reply.RoundTripTime, ttl: Some(reply.Options.Ttl) }
+                }
                 (IP_REQ_TIMED_OUT, _) => PingEvent::TimedOut,
                 (status, from) => PingEvent::Failed { from, status },
             }
@@ -341,9 +338,7 @@ mod imp {
             }
             let from = (octets != [0; 16]).then(|| IpAddr::V6(Ipv6Addr::from(octets)));
             match (status, from) {
-                (IP_SUCCESS, Some(from)) => {
-                    PingEvent::Reply { from, bytes: data.len(), time_ms: reply.RoundTripTime, ttl: None }
-                }
+                (IP_SUCCESS, Some(from)) => PingEvent::Reply { from, bytes: data.len(), time_ms: reply.RoundTripTime, ttl: None },
                 (IP_REQ_TIMED_OUT, _) => PingEvent::TimedOut,
                 (status, from) => PingEvent::Failed { from, status },
             }
