@@ -253,6 +253,11 @@ impl MacroRun {
 
 // -- the editor -------------------------------------------------------------------------------
 
+const LIST_WIDTH: f32 = 170.0;
+const EDITOR_WIDTH: f32 = 460.0;
+/// The list and the editor (name, script, help) side by side.
+const BODY_HEIGHT: f32 = 400.0;
+
 pub enum MacroDialogResult {
     Open,
     Cancel,
@@ -294,9 +299,14 @@ impl MacroDialog {
         let modal = egui::Modal::new(egui::Id::unique("macro-dialog")).show(ctx, |ui| {
             ui.heading(t("매크로 관리", "Macros"));
             ui.add_space(6.0);
-            ui.horizontal_top(|ui| {
+            // A modal has no height of its own: a body of a fixed size, or the separator between
+            // the list and the editor would take the whole height, making the modal taller on
+            // every frame (it then crept up off the screen).
+            let body = egui::vec2(LIST_WIDTH + EDITOR_WIDTH + 2.0 * ui.spacing().item_spacing.x + 6.0, BODY_HEIGHT);
+            ui.allocate_ui_with_layout(body, egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                ui.set_min_size(body);
                 ui.vertical(|ui| {
-                    ui.set_width(170.0);
+                    ui.set_width(LIST_WIDTH);
                     ui.horizontal(|ui| {
                         if ui.add(icon::button(icon::ADD, t("추가", "Add"))).clicked() {
                             let name = tr!("매크로 {}", "Macro {}", self.macros.len() + 1);
@@ -325,7 +335,7 @@ impl MacroDialog {
                 });
                 ui.separator();
                 ui.vertical(|ui| {
-                    ui.set_width(460.0);
+                    ui.set_width(EDITOR_WIDTH);
                     match self.selected.and_then(|i| self.macros.get_mut(i)) {
                         Some(m) => {
                             ui.horizontal(|ui| {
