@@ -20,6 +20,7 @@ mod logging;
 mod macros;
 mod menu;
 mod mouse;
+mod picker;
 mod platform;
 mod power;
 mod profile_form;

@@ -135,11 +135,11 @@ impl ImportDialog {
                 None => ui.label(t("Xshell 세션 폴더를 찾지 못했습니다.", "The Xshell sessions folder was not found.")),
             };
             if ui.add(icon::button(icon::BROWSE, t("다른 폴더…", "Other folder…")).small()).clicked() {
-                let mut dialog = rfd::FileDialog::new().set_title(t("Xshell 세션 폴더", "Xshell sessions folder"));
+                let mut picker = crate::picker::Picker::new(crate::picker::Kind::Folder, t("Xshell 세션 폴더", "Xshell sessions folder"));
                 if let Some(dir) = &self.dir {
-                    dialog = dialog.set_directory(dir);
+                    picker = picker.directory(dir);
                 }
-                if let Some(dir) = dialog.pick_folder() {
+                if let Some(dir) = picker.pick_one() {
                     self.dir = Some(dir);
                     self.load(store);
                 }

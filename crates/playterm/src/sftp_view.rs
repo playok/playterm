@@ -226,12 +226,17 @@ impl SftpBrowser {
         let targets: Vec<(RemoteEntry, PathBuf)> = if let [single] = items.as_slice()
             && !single.is_dir
         {
-            match rfd::FileDialog::new().set_title(t("다운로드 위치", "Download to")).set_file_name(&single.name).save_file() {
+            match crate::picker::Picker::new(crate::picker::Kind::Save, t("다운로드 위치", "Download to"))
+                .file_name(&single.name)
+                .pick_one()
+            {
                 Some(path) => vec![(single.clone(), path)],
                 None => return,
             }
         } else {
-            match rfd::FileDialog::new().set_title(t("다운로드할 폴더 선택", "Choose a folder to download to")).pick_folder() {
+            match crate::picker::Picker::new(crate::picker::Kind::Folder, t("다운로드할 폴더 선택", "Choose a folder to download to"))
+                .pick_one()
+            {
                 Some(dir) => {
                     // The server names these: one that could reach outside the folder is refused.
                     let (safe, unsafe_names): (Vec<_>, Vec<_>) = items.into_iter().partition(|e| is_safe_local_name(&e.name));
@@ -342,12 +347,13 @@ impl SftpBrowser {
                 .add(icon::button(icon::UPLOAD, t("업로드", "Upload")))
                 .on_hover_text(t("파일 선택 (창에 끌어다 놓아도 됩니다)", "Choose files (or drop them on the window)"))
                 .clicked()
-                && let Some(files) = rfd::FileDialog::new().set_title(t("업로드할 파일", "Files to upload")).pick_files()
+                && let Some(files) = crate::picker::Picker::new(crate::picker::Kind::Files, t("업로드할 파일", "Files to upload")).pick()
             {
                 self.upload_paths(files);
             }
             if ui.add(icon::button(icon::UPLOAD_FOLDER, t("폴더 업로드", "Upload folder"))).clicked()
-                && let Some(dir) = rfd::FileDialog::new().set_title(t("업로드할 폴더", "Folder to upload")).pick_folder()
+                && let Some(dir) =
+                    crate::picker::Picker::new(crate::picker::Kind::Folder, t("업로드할 폴더", "Folder to upload")).pick_one()
             {
                 self.upload_paths(vec![dir]);
             }
