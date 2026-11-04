@@ -43,6 +43,8 @@ pub struct ViewOutput {
     pub focused: bool,
     /// Something clicked in the view asks the app for this (the connection line).
     pub command: Option<crate::menu::Command>,
+    /// The connection line's "Reconnect" was clicked (the tab's index is the dock's to know).
+    pub reconnect: bool,
 }
 
 /// Keyboard input as typed (before encoding), so it can be repeated in another tab with that
@@ -118,7 +120,11 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, autofocus: bool, style: &V
     let area = match &line {
         Some(text) => {
             let (strip, rest) = full.split_top_bottom_at_y(full.top() + LINE_HEIGHT);
-            output.command = connection_line(ui, session, strip, text);
+            match connection_line(ui, session, strip, text) {
+                Some(LineAction::EditSite(id)) => output.command = Some(crate::menu::Command::EditSite(id)),
+                Some(LineAction::Reconnect) => output.reconnect = true,
+                None => {}
+            }
             rest
         }
         None => full,
@@ -689,80 +695,134 @@ fn cell_text(cell: &Cell) -> String {
 /// to use the prompt instead. Gone as soon as something is typed.
 fn start_screen(ui: &mut egui::Ui, rect: Rect, style: &ViewStyle) -> Option<crate::menu::Command> {
     use crate::menu::Command;
-    let width = 440.0_f32.min(rect.width() - 24.0).max(200.0);
-    let card = Rect::from_center_size(rect.center() - Vec2::new(0.0, rect.height() * 0.1), Vec2::new(width, 10.0));
+    // Inside the pane, whatever its size (#145): too small for the card, the prompt's own
+    // hint says what to type.
+    if rect.width() < 240.0 || rect.height() < 200.0 {
+        return None;
+    }
+    let width = 440.0_f32.min(rect.width() - 24.0);
+    // Centred on the card's height of the last frame (about 260 points the first time).
+    let height_id = egui::Id::unique("start-card-height");
+    let height: f32 = ui.data(|d| d.get_temp(height_id)).unwrap_or(260.0);
+    let top = (rect.center().y - rect.height() * 0.1 - height / 2.0)
+        .clamp(rect.top() + 12.0, (rect.bottom() - height - 12.0).max(rect.top() + 12.0));
+    let card = Rect::from_min_max(egui::pos2(rect.center().x - width / 2.0, top), egui::pos2(rect.center().x + width / 2.0, rect.bottom()));
     let mut command = None;
-    ui.scope_builder(egui::UiBuilder::new().max_rect(card.with_max_y(rect.bottom())), |ui| {
-        egui::Frame::popup(ui.style()).inner_margin(16.0).show(ui, |ui| {
-            ui.set_width(width - 32.0);
-            ui.heading("playterm");
-            ui.weak(t("연결할 곳을 고르세요.", "Choose where to connect."));
-            ui.add_space(8.0);
-            if !style.recent.is_empty() {
-                ui.strong(t("최근 연결", "Recent"));
-                for site in &style.recent {
-                    ui.horizontal(|ui| {
-                        crate::site_tree::badge(ui, site.protocol);
-                        if ui.link(&site.name).on_hover_text(t("연결", "Connect")).clicked() {
-                            command = Some(Command::ConnectSite(site.id.clone()));
-                        }
-                    });
-                }
+    let shown = ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
+        ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+        egui::Frame::popup(ui.style())
+            .inner_margin(16.0)
+            .show(ui, |ui| {
+                ui.set_width(width - 32.0);
+                ui.heading("playterm");
+                ui.weak(t("연결할 곳을 고르세요.", "Choose where to connect."));
                 ui.add_space(8.0);
-            }
-            ui.horizontal_wrapped(|ui| {
-                if ui.add(crate::icon::primary(ui, crate::icon::ADD, t("빠른 연결", "Quick Connect"))).clicked() {
-                    command = Some(Command::QuickConnect);
+                if !style.recent.is_empty() {
+                    ui.strong(t("최근 연결", "Recent"));
+                    for site in &style.recent {
+                        ui.horizontal(|ui| {
+                            crate::site_tree::badge(ui, site.protocol);
+                            if ui.link(&site.name).on_hover_text(t("연결", "Connect")).clicked() {
+                                command = Some(Command::ConnectSite(site.id.clone()));
+                            }
+                        });
+                    }
+                    ui.add_space(8.0);
                 }
-                if ui.add(crate::icon::button(crate::icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
-                    command = Some(Command::NewSite);
-                }
-                if ui.add(crate::icon::button(crate::icon::IMPORT, t("PuTTY 가져오기", "Import PuTTY"))).clicked() {
-                    command = Some(Command::ImportPutty);
-                }
-                if ui.add(crate::icon::button(crate::icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
-                    command = Some(Command::ImportXshell);
-                }
-            });
-            ui.add_space(8.0);
-            ui.weak(t(
-                "명령으로 쓰려면 아무 키나 누르세요 — ssh, telnet, open, sites, ls, help …",
-                "To use commands, just type — ssh, telnet, open, sites, ls, help …",
-            ));
-        });
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add(crate::icon::primary(ui, crate::icon::ADD, t("빠른 연결", "Quick Connect"))).clicked() {
+                        command = Some(Command::QuickConnect);
+                    }
+                    if ui.add(crate::icon::button(crate::icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
+                        command = Some(Command::NewSite);
+                    }
+                    if ui.add(crate::icon::button(crate::icon::IMPORT, t("PuTTY 가져오기", "Import PuTTY"))).clicked() {
+                        command = Some(Command::ImportPutty);
+                    }
+                    if ui.add(crate::icon::button(crate::icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
+                        command = Some(Command::ImportXshell);
+                    }
+                });
+                ui.add_space(8.0);
+                ui.weak(t(
+                    "명령으로 쓰려면 아무 키나 누르세요 — ssh, telnet, open, sites, ls, help …",
+                    "To use commands, just type — ssh, telnet, open, sites, ls, help …",
+                ));
+            })
+            .response
+            .rect
+            .height()
     });
+    ui.data_mut(|d| d.insert_temp(height_id, shown.inner));
     command
 }
 
 /// Height of the connection line above a remote terminal.
 const LINE_HEIGHT: f32 = 22.0;
 
-/// The connection line: protocol, address, state and encoding, in the site's color. A click
-/// opens the site's settings; the context menu copies the address.
-fn connection_line(ui: &mut egui::Ui, session: &Session, strip: Rect, text: &str) -> Option<crate::menu::Command> {
-    let visuals = ui.visuals();
+/// What the connection line's buttons ask for.
+enum LineAction {
+    EditSite(String),
+    Reconnect,
+}
+
+/// `a` moved towards `b` by `t` (0 to 1), channel by channel.
+fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+}
+
+/// The connection line's background: the panel tinted with the site's color, light on a light
+/// look and dark on a dark one, so its text stays readable on both (#158).
+pub(crate) fn line_fill(visuals: &egui::Visuals, color: Option<Color32>) -> Color32 {
+    match color {
+        Some(c) if visuals.dark_mode => mix(visuals.panel_fill, c, 0.30),
+        Some(c) => mix(visuals.panel_fill, c, 0.16),
+        None => visuals.panel_fill,
+    }
+}
+
+/// The connection line: label, protocol, address and state, in the site's color, ending in "…"
+/// when the pane is narrow (#149). Buttons at its right end reconnect a closed tab (#120) and
+/// open a saved site's settings (#137); the rest of the line does nothing on a click, and its
+/// context menu copies the address.
+fn connection_line(ui: &mut egui::Ui, session: &Session, strip: Rect, text: &str) -> Option<LineAction> {
+    let visuals = ui.visuals().clone();
     let color = session.tab_color.map(crate::menu::color32);
-    let fill = color.map_or(visuals.panel_fill, |c| c.gamma_multiply(0.35));
     let painter = ui.painter_at(strip);
-    painter.rect_filled(strip, 0.0, fill);
+    painter.rect_filled(strip, 0.0, line_fill(&visuals, color));
     if let Some(c) = color {
         painter.rect_filled(Rect::from_min_size(strip.min, Vec2::new(3.0, strip.height())), 0.0, c);
     }
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), egui::TextStyle::Small.resolve(ui.style()), visuals.text_color());
-    painter.galley(egui::pos2(strip.left() + 10.0, strip.center().y - galley.size().y / 2.0), galley, visuals.text_color());
     painter.hline(strip.x_range(), strip.bottom() - 0.5, egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color));
 
     let id = egui::Id::unique(("connection-line", session.id));
     let response = ui.interact(strip, id, Sense::click());
     let site = session.site().map(str::to_owned);
-    let hint = match &site {
-        Some(_) => t("클릭: 사이트 설정 · 우클릭: 주소 복사", "Click: site settings · Right-click: copy the address"),
-        None => t("우클릭: 주소 복사", "Right-click: copy the address"),
-    };
-    let response = response.on_hover_text(hint);
-    if site.is_some() {
-        response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+    let mut action = None;
+    // The buttons, from the right end.
+    let mut right = strip.right() - 4.0;
+    if let Some(id) = &site {
+        let button = egui::Button::new(crate::icon::MANAGE.rich_text()).frame(false);
+        if line_button(ui, &mut right, strip, button, t("사이트 설정", "Site settings")) {
+            action = Some(LineAction::EditSite(id.clone()));
+        }
     }
+    if session.state == SessionState::Closed && session.has_target() {
+        let button = crate::icon::button(crate::icon::RECONNECT, t("다시 연결", "Reconnect"));
+        if line_button(ui, &mut right, strip, button, t("같은 곳에 다시 연결", "Connect to the same place again")) {
+            action = Some(LineAction::Reconnect);
+        }
+    }
+
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, visuals.strong_text_color());
+    job.wrap = egui::text::TextWrapping::truncate_at_width((right - strip.left() - 14.0).max(0.0));
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    let truncated = galley.elided;
+    painter.galley(egui::pos2(strip.left() + 10.0, strip.center().y - galley.size().y / 2.0), galley, visuals.strong_text_color());
+
+    let response = if truncated { response.on_hover_text(text) } else { response };
     response.context_menu(|ui| {
         if let Some(address) = session.address()
             && ui.button(tr!("주소 복사: {}", "Copy the address: {}", address)).clicked()
@@ -771,7 +831,19 @@ fn connection_line(ui: &mut egui::Ui, session: &Session, strip: Rect, text: &str
             ui.close();
         }
     });
-    site.filter(|_| response.clicked()).map(crate::menu::Command::EditSite)
+    action
+}
+
+/// A small button at the right end of the connection line, left of `right`, which moves past
+/// it. Returns whether it was clicked.
+fn line_button(ui: &mut egui::Ui, right: &mut f32, strip: Rect, button: egui::Button<'_>, tip: &str) -> bool {
+    let slot = Rect::from_min_max(egui::pos2(strip.left(), strip.top() + 1.0), egui::pos2(*right, strip.bottom() - 1.0));
+    let response = ui.scope_builder(egui::UiBuilder::new().max_rect(slot).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
+        ui.add(button.small())
+    });
+    let response = response.inner;
+    *right = response.rect.left() - 4.0;
+    response.on_hover_text(tip).clicked()
 }
 
 /// Space between the edge of the terminal area and its text.

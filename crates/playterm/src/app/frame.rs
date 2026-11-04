@@ -77,9 +77,13 @@ impl eframe::App for PlaytermApp {
         let autofocus = !modal_open && self.site_manager.is_none();
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
-        // Hidden with the toolbar while there is nothing to say.
-        if self.settings.toolbar || self.broadcast || self.status.is_some() || self.info.is_some() {
+        // Only the toolbar: messages and the simultaneous input state show over the terminal
+        // (see `notices`), so the terminal keeps its size when they come and go (#118, #132).
+        if self.settings.toolbar {
             egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
+        }
+        if let Some(info) = self.info.take() {
+            crate::toast::info(&ctx, &info);
         }
         // Added before the side panel so it spans the whole window width.
         if self.settings.status_bar {
@@ -89,10 +93,13 @@ impl eframe::App for PlaytermApp {
         }
         if self.show_sidebar {
             let vault = self.vault_state();
+            // Never more than 40 % of the window, so the terminal keeps its room (#141).
+            let max = (ui.available_width() * 0.4).max(160.0);
             let action = egui::Panel::left("sessions")
                 .resizable(true)
                 .default_size(220.0)
                 .min_size(140.0)
+                .max_size(max)
                 .show(ui, |ui| self.sidebar.show(ui, &self.store, vault))
                 .inner;
             if let Some(action) = action {
@@ -142,9 +149,10 @@ impl eframe::App for PlaytermApp {
         }
 
         let style = self.view_style();
-        let output = egui::CentralPanel::no_frame()
-            .show(ui, |ui| self.dock.show(ui, &mut self.sessions, self.active, autofocus, self.broadcast, &style))
-            .inner;
+        let central = egui::CentralPanel::no_frame()
+            .show(ui, |ui| self.dock.show(ui, &mut self.sessions, self.active, autofocus, self.broadcast, &style));
+        let output = central.inner;
+        self.notices(&ctx, central.response.rect);
         if let Some(px) = output.active_px {
             self.view_px = px;
         }

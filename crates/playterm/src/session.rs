@@ -428,7 +428,8 @@ impl Session {
         })
     }
 
-    /// The line above the terminal: `SSH · user@host:22 · Connected 12 min · UTF-8`.
+    /// The line above the terminal: `[PROD] · SSH · user@host:22 · Connected 12 min`. The
+    /// encoding and the data counts are in the status bar, not repeated here (#148).
     pub fn connection_line(&self) -> Option<String> {
         let Remote { params: p, .. } = self.remote.as_ref()?;
         let state = match self.state {
@@ -450,9 +451,6 @@ impl Session {
             parts.push(p.serial.line_summary());
         }
         parts.push(state);
-        if p.protocol != Protocol::Rdp {
-            parts.push(self.charset_label());
-        }
         Some(parts.join(" · "))
     }
 
@@ -1379,7 +1377,11 @@ impl Session {
     /// The encoding for the status bar: the setting, or what automatic detection found.
     pub fn charset_label(&self) -> String {
         match (self.charset, self.terminal.detected_charset()) {
-            (Charset::Auto, None) => t("자동 감지 중 (UTF-8 로 표시)", "Detecting (shown as UTF-8)").into(),
+            // "Detecting" only while output can still come in (#147).
+            (Charset::Auto, None) if self.state == SessionState::Connected => {
+                t("자동 감지 중 (UTF-8 로 표시)", "Detecting (shown as UTF-8)").into()
+            }
+            (Charset::Auto, None) => t("자동 (UTF-8)", "Auto (UTF-8)").into(),
             (Charset::Auto, Some(found)) => tr!("{found} (자동 감지)", "{found} (auto-detected)"),
             (set, _) => set.to_string(),
         }

@@ -233,6 +233,13 @@ impl PlaytermApp {
             SidebarAction::DeleteTemplate(id) => self.modal = Some(Modal::ConfirmDeleteTemplate(id)),
             SidebarAction::Manage(id) => self.open_site_manager(id.as_deref(), false, None),
             SidebarAction::New => self.open_site_manager(None, true, None),
+            SidebarAction::Hide => self.show_sidebar = false,
+            SidebarAction::ImportPutty => {
+                self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::Putty))));
+            }
+            SidebarAction::ImportXshell => {
+                self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::Xshell))));
+            }
             SidebarAction::Duplicate(id) => {
                 self.duplicate_profile(&id);
             }

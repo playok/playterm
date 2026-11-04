@@ -326,15 +326,15 @@ impl SiteManager {
     fn tree(&mut self, ui: &mut egui::Ui, store: &ProfileStore, next: &mut Option<Next>, result: &mut SiteManagerResult) {
         let site = self.selected_site().map(str::to_owned);
         let dirty = self.is_dirty();
-        ui.horizontal_wrapped(|ui| {
+        // One line (#157): duplicate and delete as icons, named in their tooltips.
+        ui.horizontal(|ui| {
             if ui.add(icon::button(icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
                 *next = Some(Next::Select(Some(Selection::New(self.target_folder()))));
             }
             if ui.add(icon::button(icon::NEW_FOLDER, t("새 폴더", "New folder"))).clicked() {
                 self.folder_prompt = Some(FolderPrompt::new_in(self.target_folder()));
             }
-            if ui
-                .add_enabled(site.is_some() && !dirty, icon::button(icon::DUPLICATE, t("복제", "Duplicate")))
+            if icon::named_icon_button(ui, icon::DUPLICATE, t("복제", "Duplicate"), site.is_some() && !dirty)
                 .on_disabled_hover_text(t(
                     "저장된 사이트를 선택하세요 (변경 사항은 먼저 저장)",
                     "Select a saved site (save your changes first)",
@@ -344,7 +344,7 @@ impl SiteManager {
             {
                 *result = SiteManagerResult::Duplicate(id.clone());
             }
-            if ui.add_enabled(self.selected.is_some(), icon::button(icon::DELETE, t("삭제", "Delete"))).clicked() {
+            if icon::named_icon_button(ui, icon::DELETE, t("삭제", "Delete"), self.selected.is_some()).clicked() {
                 match &site {
                     Some(id) => *result = SiteManagerResult::Delete(id.clone()),
                     // An unsaved site is simply dropped.
