@@ -100,12 +100,11 @@ impl PlaytermApp {
                 let Some(session) = self.sessions.get_mut(i) else { return };
                 let dir = logging::default_log_dir();
                 let _ = std::fs::create_dir_all(&dir);
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_title(t("로그 파일", "Log file"))
-                    .set_directory(&dir)
-                    .set_file_name(logging::file_name(&session.tab_title()))
-                    .add_filter(t("로그", "Logs"), &["log", "txt"])
-                    .save_file()
+                if let Some(path) = crate::picker::Picker::new(crate::picker::Kind::Save, t("로그 파일", "Log file"))
+                    .directory(&dir)
+                    .file_name(logging::file_name(&session.tab_title()))
+                    .filter(t("로그", "Logs"), &["log", "txt"])
+                    .pick_one()
                 {
                     session.start_log(&path, mode);
                 }

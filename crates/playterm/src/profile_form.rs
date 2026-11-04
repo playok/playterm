@@ -87,12 +87,11 @@ fn pick_key_file(current: &str) -> Option<PathBuf> {
         "" => expand_home("~/.ssh"),
         c => expand_home(c).parent().map(PathBuf::from).unwrap_or_default(),
     };
-    rfd::FileDialog::new()
-        .set_title(t("SSH 개인 키 선택", "Choose an SSH private key"))
-        .set_directory(start)
-        .add_filter(t("모든 파일", "All files"), &["*"])
-        .add_filter(t("PuTTY 키 (*.ppk)", "PuTTY keys (*.ppk)"), &["ppk"])
-        .pick_file()
+    crate::picker::Picker::new(crate::picker::Kind::File, t("SSH 개인 키 선택", "Choose an SSH private key"))
+        .directory(start)
+        .filter(t("모든 파일", "All files"), &["*"])
+        .filter(t("PuTTY 키 (*.ppk)", "PuTTY keys (*.ppk)"), &["ppk"])
+        .pick_one()
 }
 
 /// Serial line fields. Returns `true` if Enter was pressed in a text field.
@@ -194,7 +193,7 @@ fn log_ui(ui: &mut egui::Ui, log: &mut playterm_config::LogSettings) {
             let default_dir = crate::logging::default_log_dir().display().to_string();
             ui.add(egui::TextEdit::singleline(&mut log.dir).hint_text(default_dir).desired_width(240.0));
             if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
-                && let Some(dir) = rfd::FileDialog::new().set_title(t("로그 폴더", "Log folder")).pick_folder()
+                && let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t("로그 폴더", "Log folder")).pick_one()
             {
                 log.dir = dir.display().to_string();
             }

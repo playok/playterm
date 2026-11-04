@@ -16,7 +16,7 @@ impl PlaytermApp {
             let (start, ctx) = (start.clone(), ctx.clone());
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(rfd::FileDialog::new().set_title(title).set_directory(&start).pick_folder());
+                let _ = tx.send(crate::picker::Picker::new(crate::picker::Kind::Folder, title).directory(&start).pick_one());
                 ctx.request_repaint();
             });
             self.zmodem_questions.push((session.id, rx));
@@ -56,7 +56,7 @@ impl PlaytermApp {
             let (start, ctx) = (start.clone(), ctx.clone());
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(rfd::FileDialog::new().set_title(title).set_directory(&start).pick_files());
+                let _ = tx.send(crate::picker::Picker::new(crate::picker::Kind::Files, title).directory(&start).pick());
                 ctx.request_repaint();
             });
             self.upload_questions.push((session.id, rx));

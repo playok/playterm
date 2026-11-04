@@ -196,10 +196,9 @@ impl SettingsDialog {
                 .add(icon::button(icon::BROWSE, t("파일에서…", "From file…")))
                 .on_hover_text(t("TTF / OTF / TTC 글꼴 파일", "TTF / OTF / TTC font file"))
                 .clicked()
-                && let Some(path) = rfd::FileDialog::new()
-                    .set_title(t("터미널 글꼴 파일", "Terminal font file"))
-                    .add_filter(t("글꼴", "Fonts"), &["ttf", "otf", "ttc"])
-                    .pick_file()
+                && let Some(path) = crate::picker::Picker::new(crate::picker::Kind::File, t("터미널 글꼴 파일", "Terminal font file"))
+                    .filter(t("글꼴", "Fonts"), &["ttf", "otf", "ttc"])
+                    .pick_one()
             {
                 self.draft.font = path.display().to_string();
             }
@@ -384,10 +383,9 @@ impl SettingsDialog {
         ui.horizontal(|ui| {
             let folder = local_fs::zmodem_folder(&self.draft.zmodem_dir);
             if ui.add(icon::button(icon::BROWSE, t("바꾸기…", "Change…"))).clicked()
-                && let Some(dir) = rfd::FileDialog::new()
-                    .set_title(t("ZMODEM 으로 받은 파일을 저장할 폴더", "Folder for files received with ZMODEM"))
-                    .set_directory(&folder)
-                    .pick_folder()
+                && let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t("ZMODEM 으로 받은 파일을 저장할 폴더", "Folder for files received with ZMODEM"))
+                    .directory(&folder)
+                    .pick_one()
             {
                 self.draft.zmodem_dir = dir.display().to_string();
             }

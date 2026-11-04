@@ -482,7 +482,9 @@ cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 
 - Screen-flow tests (`crates/playterm/src/ui_tests.rs`, egui_kittest) run the whole app without a window and drive it as a user would, finding
   buttons by their labels (Quick Connect → Telnet, the site manager's save / unsaved-changes question / Escape, settings preview and Cancel,
-  macros, simultaneous input, dialogs staying in place).
+  macros, simultaneous input, dialogs staying in place, SSH host key and password → the SFTP explorer's Try again, a device's `rz` → file picker →
+  ZMODEM upload). File pickers go through the `picker` module, answered by the tests; the SSH server is `playterm-net`'s `testing` feature
+  (test builds only).
 - Code is formatted with `cargo fmt --all` (settings: `rustfmt.toml`). Commits that only reformat are listed in `.git-blame-ignore-revs`; to skip them
   in a local `git blame`: `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
 - Every pull request and push to `master` runs GitHub Actions (`.github/workflows/ci.yml`): a format check (`cargo fmt --check`), clippy (`-D warnings`) and all tests on Windows and
