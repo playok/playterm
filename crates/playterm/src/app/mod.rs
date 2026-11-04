@@ -32,16 +32,16 @@ use crate::update::{self, Updater};
 use crate::view::UserInput;
 use crate::{clip_keys, clipboard, fonts, local_fs, status_bar, view};
 
-mod sessions;
-mod vault;
-mod prompt;
 mod broadcast;
-mod settings;
 mod commands;
-mod ui;
-mod zmodem;
 mod frame;
+mod prompt;
+mod sessions;
+mod settings;
 mod theme;
+mod ui;
+mod vault;
+mod zmodem;
 
 use self::broadcast::broadcast_status;
 use self::theme::apply_ui;
@@ -357,7 +357,6 @@ impl PlaytermApp {
         }
         Ok(app)
     }
-
 }
 
 /// The folder of the settings, sites, vault and known hosts. `PLAYTERM_CONFIG_DIR` allows a
