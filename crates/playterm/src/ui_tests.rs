@@ -315,7 +315,9 @@ fn site_manager_saves_asks_and_closes_with_escape() {
     assert!(!harness.state().test_site_manager_open(), "Escape closes the manager");
 
     // Open again, then click the terminal beside it: Escape is the terminal's now.
-    click(&mut harness, "사이트 관리 (Ctrl+Shift+S)");
+    // The key as this platform writes it (Ctrl+Shift+S, or ⌃⇧S on macOS).
+    let manage = format!("사이트 관리 ({})", crate::keys::hint(crate::keys::Shortcut::SiteManager));
+    click(&mut harness, &manage);
     assert!(harness.state().test_site_manager_open());
     let window = harness.get_by_role_and_label(Role::Window, "사이트 관리").rect();
     click_at(&mut harness, egui::pos2(window.center().x, window.max.y + 40.0));
