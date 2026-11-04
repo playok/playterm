@@ -137,15 +137,27 @@ impl russh_sftp::server::Handler for FsHandler {
         }
     }
 
-    async fn open(&mut self, id: u32, filename: String, flags: OpenFlags, _a: FileAttributes) -> Result<Handle, Self::Error> {
-        let file = fs::OpenOptions::new()
+    async fn open(&mut self, id: u32, filename: String, flags: OpenFlags, attrs: FileAttributes) -> Result<Handle, Self::Error> {
+        let mut options = fs::OpenOptions::new();
+        options
             .read(flags.contains(OpenFlags::READ))
             .write(flags.contains(OpenFlags::WRITE))
             .append(flags.contains(OpenFlags::APPEND))
-            .create(flags.contains(OpenFlags::CREATE))
-            .truncate(flags.contains(OpenFlags::TRUNCATE))
-            .open(self.real(&filename))
-            .map_err(io_code)?;
+            .truncate(flags.contains(OpenFlags::TRUNCATE));
+        // As OpenSSH's: EXCLUDE creates only a new file (O_EXCL, not following a link), with the
+        // requested permissions.
+        if flags.contains(OpenFlags::EXCLUDE) {
+            options.create_new(true);
+        } else {
+            options.create(flags.contains(OpenFlags::CREATE));
+        }
+        #[cfg(unix)]
+        if let Some(mode) = attrs.permissions {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode & 0o7777);
+        }
+        #[cfg(not(unix))]
+        let _ = attrs;
+        let file = options.open(self.real(&filename)).map_err(io_code)?;
         Ok(Handle { id, handle: self.insert(Open::File(file)) })
     }
 

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use playterm_i18n::{t, tr};
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::session::Waker;
@@ -383,16 +384,17 @@ async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress:
 }
 
 /// The remote file an upload is written to before it replaces `remote`: next to it (same
-/// folder, so the rename stays on one filesystem), new, hidden.
-fn remote_part_path(remote: &str) -> String {
-    use std::sync::atomic::AtomicUsize;
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// folder, so the rename stays on one filesystem), hidden, with a random name nobody can
+/// prepare (say, as a link to elsewhere) in advance.
+fn remote_part_path(remote: &str) -> anyhow::Result<String> {
     let (dir, name) = match remote.rsplit_once('/') {
         Some((dir, name)) => (format!("{dir}/"), name),
         None => (String::new(), remote),
     };
-    let unique = format!("{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
-    format!("{dir}.{name}.{unique}.part")
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|e| anyhow::anyhow!("random: {e}"))?;
+    let token: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!("{dir}.{name}.{token}.part"))
 }
 
 /// Uploads `local` to `remote` through a temporary remote file that replaces it only once
@@ -403,9 +405,18 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     let mut src = tokio::fs::File::open(local)
         .await
         .with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", local.display()))?;
-    let part = remote_part_path(remote);
+    let part = remote_part_path(remote)?;
+    // A file being replaced keeps its permissions (an executable script, a private file): the
+    // temporary file is created with them, so its data is never open to more than the old was.
+    let permissions = sftp.metadata(remote).await.ok().and_then(|old| old.permissions).map(|mode| mode & 0o7777);
+    let attributes = russh_sftp::protocol::FileAttributes { permissions, ..russh_sftp::protocol::FileAttributes::empty() };
+    // Exclusive: never an existing file, nor a link to one.
+    let flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
+    let mut dst = sftp
+        .open_with_flags_and_attributes(part.as_str(), flags, attributes)
+        .await
+        .with_context(|| tr!("{remote} 을(를) 만들 수 없습니다", "Cannot create {remote}"))?;
     let result = async {
-        let mut dst = sftp.create(part.as_str()).await.with_context(|| tr!("{remote} 을(를) 만들 수 없습니다", "Cannot create {remote}"))?;
         let mut buf = vec![0u8; CHUNK];
         loop {
             let n = src.read(&mut buf).await?;
@@ -416,15 +427,7 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
             progress.advance(n)?;
         }
         dst.shutdown().await?;
-        drop(dst);
         progress.advance(0)?;
-        // A file being replaced keeps its permissions (e.g. an executable script).
-        if let Ok(old) = sftp.metadata(remote).await
-            && old.permissions.is_some()
-        {
-            let attrs = russh_sftp::protocol::FileAttributes { permissions: old.permissions, ..Default::default() };
-            let _ = sftp.set_metadata(part.as_str(), attrs).await;
-        }
         anyhow::Ok(())
     }
     .await;
@@ -595,6 +598,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn upload_temporary_names_are_unpredictable() {
+        let a = remote_part_path("/srv/app.sh").unwrap();
+        let b = remote_part_path("/srv/app.sh").unwrap();
+        assert_ne!(a, b);
+        assert!(a.starts_with("/srv/.app.sh.") && a.ends_with(".part"), "{a}");
+        assert_eq!(a.len(), "/srv/.app.sh.".len() + 32 + ".part".len(), "a 128-bit token");
+        assert!(remote_part_path("plain").unwrap().starts_with(".plain."));
+    }
+
     /// OpenSSH's own `sftp-server` on this machine, when it has one.
     fn openssh_sftp_server() -> Option<&'static str> {
         ["/usr/libexec/sftp-server", "/usr/lib/openssh/sftp-server", "/usr/lib/ssh/sftp-server", "/usr/libexec/openssh/sftp-server"]
@@ -646,6 +659,17 @@ mod tests {
         assert_eq!(parts(), 0);
         #[cfg(unix)]
         assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&target).unwrap().permissions()) & 0o777, 0o750);
+
+        // A private file stays private: the temporary file is created with its mode, so the
+        // data is never readable by others, not even while uploading.
+        #[cfg(unix)]
+        {
+            let secret = dir.path().join("secret.txt");
+            std::fs::write(&secret, b"x").unwrap();
+            std::fs::set_permissions(&secret, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+            upload_file(&conn.inner.sftp, &new, &secret.to_string_lossy(), progress()).await.unwrap();
+            assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&secret).unwrap().permissions()) & 0o777, 0o600);
+        }
 
         // A new file is simply created.
         let fresh = dir.path().join("fresh.txt");
