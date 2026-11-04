@@ -383,10 +383,10 @@ async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress:
     result
 }
 
-/// The remote file an upload is written to before it replaces `remote`: next to it (same
-/// folder, so the rename stays on one filesystem), hidden, with a random name nobody can
-/// prepare (say, as a link to elsewhere) in advance.
-fn remote_part_path(remote: &str) -> anyhow::Result<String> {
+/// A hidden name next to `remote` (same folder, so renames stay on one filesystem) ending in
+/// `.{kind}`, with a random part nobody can prepare (say, as a link to elsewhere) in advance:
+/// the file an upload is written to (`part`), or the old file while it is replaced (`old`).
+fn remote_temp_path(remote: &str, kind: &str) -> anyhow::Result<String> {
     let (dir, name) = match remote.rsplit_once('/') {
         Some((dir, name)) => (format!("{dir}/"), name),
         None => (String::new(), remote),
@@ -394,7 +394,7 @@ fn remote_part_path(remote: &str) -> anyhow::Result<String> {
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(|e| anyhow::anyhow!("random: {e}"))?;
     let token: String = random.iter().map(|b| format!("{b:02x}")).collect();
-    Ok(format!("{dir}.{name}.{token}.part"))
+    Ok(format!("{dir}.{name}.{token}.{kind}"))
 }
 
 /// Uploads `local` to `remote` through a temporary remote file that replaces it only once
@@ -405,7 +405,7 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     let mut src = tokio::fs::File::open(local)
         .await
         .with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", local.display()))?;
-    let part = remote_part_path(remote)?;
+    let part = remote_temp_path(remote, "part")?;
     // A file being replaced keeps its permissions (an executable script, a private file): the
     // temporary file is created with them, so its data is never open to more than the old was.
     let permissions = sftp.metadata(remote).await.ok().and_then(|old| old.permissions).map(|mode| mode & 0o7777);
@@ -441,33 +441,58 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     }
 }
 
-/// Renames the complete upload `part` onto `remote`. SFTP's rename refuses an existing target
-/// on many servers (OpenSSH's among them): the old file is then removed first, and should the
-/// rename still fail, the upload is kept under its temporary name and the error says where.
+/// Renames the complete upload `part` onto `remote`, never deleting the file already there
+/// before the new one has taken its name.
+///
+/// A plain rename comes first: servers that replace the target with it do so in one step. SFTP
+/// v3 servers (OpenSSH's among them) refuse an existing target; the old file then moves aside
+/// to a hidden backup name, the upload takes its place, and only then is the backup removed. If
+/// the upload cannot take the name, the backup moves back, and the error says what is where.
 async fn replace_remote(sftp: &SftpSession, part: &str, remote: &str) -> anyhow::Result<()> {
-    if sftp.rename(part, remote).await.is_ok() {
-        return Ok(());
-    }
+    let first = match sftp.rename(part, remote).await {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
     if !sftp.try_exists(remote).await.unwrap_or(false) {
         // Not an existing target that got in the way: the upload is of no use then.
         let r = sftp.rename(part, remote).await;
         if r.is_err() {
             let _ = sftp.remove_file(part).await;
         }
-        return r.with_context(|| tr!("{remote} 을(를) 만들 수 없습니다", "Cannot create {remote}"));
+        return r.with_context(|| tr!("{remote} 을(를) 만들 수 없습니다 ({first})", "Cannot create {remote} ({first})"));
     }
-    if let Err(e) = sftp.remove_file(remote).await {
-        // The old file stays as it was.
+    let backup = remote_temp_path(remote, "old")?;
+    if let Err(e) = sftp.rename(remote, backup.as_str()).await {
+        // The old file stays where it is; the upload is dropped.
         let _ = sftp.remove_file(part).await;
-        return Err(anyhow::Error::new(e).context(tr!("{remote} 을(를) 바꿀 수 없습니다", "Cannot replace {remote}")));
+        return Err(anyhow::anyhow!(tr!(
+            "{remote} 을(를) 바꿀 수 없어 원래 파일을 그대로 두었습니다 ({e})",
+            "Could not replace {remote}; the file there was left as it was ({e})"
+        )));
     }
-    match sftp.rename(part, remote).await {
-        Ok(()) => Ok(()),
-        Err(e) => Err(anyhow::anyhow!(tr!(
-            "{remote} 을(를) 바꾸지 못했습니다 ({e}). 올린 파일은 {part} 에 있습니다",
-            "Could not replace {remote} ({e}). The uploaded file is at {part}"
-        ))),
+    if let Err(e) = sftp.rename(part, remote).await {
+        // Put the old file back.
+        return match sftp.rename(backup.as_str(), remote).await {
+            Ok(()) => {
+                let _ = sftp.remove_file(part).await;
+                Err(anyhow::anyhow!(tr!(
+                    "{remote} 을(를) 바꾸지 못해 원래 파일로 되돌렸습니다 ({e})",
+                    "Could not replace {remote}; the file there was put back ({e})"
+                )))
+            }
+            Err(e2) => Err(anyhow::anyhow!(tr!(
+                "{remote} 을(를) 바꾸지 못했고({e}) 원래 파일도 되돌리지 못했습니다({e2}). 원래 파일은 {backup}, 올린 파일은 {part} 에 있습니다",
+                "Could not replace {remote} ({e}) nor put the old file back ({e2}). The old file is at {backup}, the upload at {part}"
+            ))),
+        };
     }
+    if let Err(e) = sftp.remove_file(backup.as_str()).await {
+        return Err(anyhow::anyhow!(tr!(
+            "{remote} 은(는) 바꿨지만 이전 파일의 백업 {backup} 을(를) 지우지 못했습니다 ({e})",
+            "{remote} was replaced, but the backup of the old file, {backup}, could not be removed ({e})"
+        )));
+    }
+    Ok(())
 }
 
 /// Remote tree as (relative path, is_dir, size), parents before children. The walk stops when
@@ -638,12 +663,12 @@ mod tests {
 
     #[test]
     fn upload_temporary_names_are_unpredictable() {
-        let a = remote_part_path("/srv/app.sh").unwrap();
-        let b = remote_part_path("/srv/app.sh").unwrap();
+        let a = remote_temp_path("/srv/app.sh", "part").unwrap();
+        let b = remote_temp_path("/srv/app.sh", "part").unwrap();
         assert_ne!(a, b);
         assert!(a.starts_with("/srv/.app.sh.") && a.ends_with(".part"), "{a}");
         assert_eq!(a.len(), "/srv/.app.sh.".len() + 32 + ".part".len(), "a 128-bit token");
-        assert!(remote_part_path("plain").unwrap().starts_with(".plain."));
+        assert!(remote_temp_path("plain", "part").unwrap().starts_with(".plain."));
     }
 
     /// OpenSSH's own `sftp-server` on this machine, when it has one.
@@ -678,7 +703,16 @@ mod tests {
         #[cfg(unix)]
         std::fs::set_permissions(&target, std::os::unix::fs::PermissionsExt::from_mode(0o750)).unwrap();
         let remote = target.to_string_lossy().into_owned();
-        let parts = || std::fs::read_dir(dir.path()).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".part")).count();
+        // Leftover uploads (.part) or backups of replaced files (.old).
+        let parts = || {
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter(|e| {
+                    let name = e.as_ref().unwrap().file_name().to_string_lossy().into_owned();
+                    name.ends_with(".part") || name.ends_with(".old")
+                })
+                .count()
+        };
 
         assert!(upload_file(&conn.inner.sftp, &dir.path().join("missing"), &remote, progress()).await.is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"old");

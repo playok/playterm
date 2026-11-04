@@ -75,6 +75,28 @@ fn ok(id: u32) -> Status {
     Status { id, status_code: StatusCode::Ok, error_message: "Ok".into(), language_tag: "en-US".into() }
 }
 
+/// Failures to inject: a rename whose target contains the pattern fails, this many more
+/// times (tests use names of their own, as they run in parallel).
+static RENAME_FAILURES: std::sync::Mutex<Vec<(String, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// Makes the next `times` renames to a path containing `pattern` fail (as a server error, or a
+/// connection gone, would).
+#[allow(dead_code)]
+pub fn fail_renames(pattern: &str, times: usize) {
+    RENAME_FAILURES.lock().unwrap().push((pattern.to_owned(), times));
+}
+
+fn injected_rename_failure(to: &str) -> bool {
+    let mut failures = RENAME_FAILURES.lock().unwrap();
+    match failures.iter_mut().find(|(p, n)| *n > 0 && to.contains(p.as_str())) {
+        Some((_, n)) => {
+            *n -= 1;
+            true
+        }
+        None => false,
+    }
+}
+
 fn io_code(e: std::io::Error) -> StatusCode {
     match e.kind() {
         std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
@@ -201,6 +223,9 @@ impl russh_sftp::server::Handler for FsHandler {
     }
 
     async fn rename(&mut self, id: u32, from: String, to: String) -> Result<Status, Self::Error> {
+        if injected_rename_failure(&to) {
+            return Err(StatusCode::Failure);
+        }
         // Like OpenSSH's sftp-server (SFTP v3): an existing target is not replaced.
         if fs::symlink_metadata(self.real(&to)).is_ok() {
             return Err(StatusCode::Failure);
