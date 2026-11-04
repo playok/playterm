@@ -231,6 +231,16 @@ fn closing_a_connected_tab_asks_and_it_opens_again() {
         assert!(!harness.state().test_modal_open(), "nothing to lose: no question");
         assert_eq!(harness.state_mut().test_sessions().len(), n - 1);
     }
+
+    // Enter is the highlighted "Close".
+    let connected = |h: &mut App| h.state_mut().test_sessions().iter().filter(|s| s.state == SessionState::Connected).count();
+    let before = connected(&mut harness);
+    menu(&mut harness, "탭", "탭 닫기");
+    assert!(harness.state().test_modal_open(), "asked again");
+    harness.key_press(egui::Key::Enter);
+    harness.run_steps(2);
+    assert!(!harness.state().test_modal_open(), "Enter answered");
+    assert_eq!(connected(&mut harness), before - 1, "and closed the tab");
 }
 
 /// "Disconnect" is in the tab menu (#117) and ends the connection, keeping the tab.

@@ -721,8 +721,12 @@ fn start_screen(ui: &mut egui::Ui, rect: Rect, style: &ViewStyle) -> Option<crat
                     ui.strong(t("최근 연결", "Recent"));
                     for site in &style.recent {
                         ui.horizontal(|ui| {
+                            // A long name ends in "…" inside the card instead of pushing its
+                            // right edge out of the pane; the tooltip has all of it.
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                             crate::site_tree::badge(ui, site.protocol);
-                            if ui.link(&site.name).on_hover_text(t("연결", "Connect")).clicked() {
+                            let tip = format!("{} — {}", site.name, t("연결", "Connect"));
+                            if ui.link(&site.name).on_hover_text(tip).clicked() {
                                 command = Some(Command::ConnectSite(site.id.clone()));
                             }
                         });
@@ -982,5 +986,44 @@ mod padding_tests {
         // Too small for a margin: the area itself.
         let tiny = Rect::from_min_size(Pos2::ZERO, Vec2::new(8.0, 8.0));
         assert_eq!(text_rect(tiny), tiny);
+    }
+}
+
+#[cfg(test)]
+mod start_screen_tests {
+    use super::*;
+
+    /// A narrow pane and a long site name: the card and everything in it stays inside the pane,
+    /// the name ending in "…".
+    #[test]
+    fn a_long_name_stays_inside_the_card() {
+        let ctx = egui::Context::default();
+        let long = "db-primary-very-long-hostname-for-testing.internal.example.com";
+        let style = ViewStyle {
+            font_size: 14.0,
+            selection: Color32::BLUE,
+            clipboard: ClipboardKeys::default(),
+            recent: vec![RecentSite { id: "a".into(), name: long.into(), protocol: playterm_net::Protocol::Ssh }],
+            alt_is_meta: false,
+        };
+        let pane = Rect::from_min_size(Pos2::new(100.0, 50.0), Vec2::new(300.0, 400.0));
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                start_screen(ui, pane, &style);
+            });
+            out.textures_delta.clear();
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some((t.galley.text().to_owned(), t.galley.elided, Rect::from_min_size(t.pos, t.galley.size()))),
+                    _ => None,
+                })
+                .collect();
+        }
+        let (_, elided, rect) = texts.iter().find(|(t, ..)| t == long).expect("the site is listed");
+        assert!(*elided, "the name is shortened");
+        assert!(pane.contains_rect(*rect), "{rect:?} outside {pane:?}");
     }
 }
