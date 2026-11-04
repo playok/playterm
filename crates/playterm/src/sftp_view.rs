@@ -45,6 +45,17 @@ pub struct SftpBrowser {
     status: Option<(String, bool)>,
     transfers: Vec<Transfer>,
     prompt: Option<Prompt>,
+    /// Where the browser was asked to open, and whether the login directory was already tried
+    /// in its place (it is tried once: a failing login directory, or a connection gone, must not
+    /// be asked again and again).
+    start: String,
+    fallback_tried: bool,
+}
+
+/// What to do when the first listing (no directory shown yet) of `failed` failed: list the
+/// login directory instead, once, or stop and let the user try again.
+fn first_listing_fallback(failed: &str, fallback_tried: bool) -> Option<&'static str> {
+    (!fallback_tried && failed != ".").then_some(".")
 }
 
 pub fn human_size(bytes: u64) -> String {
@@ -83,8 +94,11 @@ impl SftpBrowser {
     /// Opens at `start` (the terminal's current directory, when known), else the login
     /// directory.
     pub fn new(conn: SftpConnection, start: Option<String>) -> Self {
-        conn.list(start.as_deref().unwrap_or("."));
+        let start = start.unwrap_or_else(|| ".".into());
+        conn.list(&start);
         Self {
+            start,
+            fallback_tried: false,
             conn,
             follow_requested: false,
             cwd: String::new(),
@@ -117,7 +131,17 @@ impl SftpBrowser {
         if !self.cwd.is_empty() {
             let cwd = self.cwd.clone();
             self.navigate(&cwd);
+        } else if !self.loading {
+            self.retry_start();
         }
+    }
+
+    /// Asks again for the first directory, after it (and the login directory) failed.
+    fn retry_start(&mut self) {
+        self.fallback_tried = false;
+        self.status = None;
+        let start = self.start.clone();
+        self.navigate(&start);
     }
 
     /// Applies pending SFTP events.
@@ -139,9 +163,13 @@ impl SftpBrowser {
                         }
                         Err(e) if self.cwd.is_empty() => {
                             // The first directory could not be listed (no permission, say):
-                            // the login directory instead.
+                            // the login directory instead, once. If that fails too, the error
+                            // stays with a way to try again.
                             self.status = Some((e, true));
-                            self.navigate(".");
+                            if let Some(fallback) = first_listing_fallback(&path, self.fallback_tried) {
+                                self.fallback_tried = true;
+                                self.navigate(fallback);
+                            }
                         }
                         Err(e) => {
                             self.path_input = self.cwd.clone();
@@ -346,6 +374,11 @@ impl SftpBrowser {
             |ui| {
                 if self.loading && self.entries.is_empty() {
                     ui.spinner();
+                } else if self.cwd.is_empty() {
+                    ui.weak(t("원격 폴더를 열 수 없습니다 (아래 오류).", "The remote folder could not be opened (error below)."));
+                    if ui.add(icon::button(icon::RETRY, t("다시 시도", "Try again"))).clicked() {
+                        self.retry_start();
+                    }
                 }
                 self.entry_grid(ui)
             },
@@ -664,6 +697,16 @@ fn select(selected: &mut BTreeSet<String>, anchor: &mut Option<String>, order: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_first_listing_falls_back_once() {
+        // The terminal's folder failed: the login directory, once.
+        assert_eq!(first_listing_fallback("/root/secret", false), Some("."));
+        assert_eq!(first_listing_fallback(".", true), None, "the login directory failed too: stop");
+        // Opened at the login directory, which failed (unreadable home, connection closed).
+        assert_eq!(first_listing_fallback(".", false), None);
+        assert_eq!(first_listing_fallback("/x", true), None);
+    }
 
     #[test]
     fn selecting_with_ctrl_and_shift() {
