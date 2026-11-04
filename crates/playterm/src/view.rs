@@ -716,6 +716,9 @@ fn start_screen(ui: &mut egui::Ui, rect: Rect, style: &ViewStyle) -> Option<crat
         frame
             .show(ui, |ui| {
                 ui.set_width(width - 2.0 * CARD_MARGIN);
+                // A solid bar, there whenever the content is taller than the card: the usual
+                // thin one only shows under the pointer, hiding that there is more below.
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
                 egui::ScrollArea::vertical()
                     .id_salt("start-card")
                     .max_height(max_content)
@@ -1060,5 +1063,36 @@ mod start_screen_tests {
         }
         let height: f32 = ctx.data(|d| d.get_temp(egui::Id::unique("start-card-height"))).expect("the card is shown");
         assert!(height <= pane.height() - 24.0 + 0.5, "card {height} in a pane {}", pane.height());
+    }
+
+    /// The narrow, tall, visible rectangles (scroll bars) the card draws in a pane `height` points high,
+    /// the pointer elsewhere.
+    fn scroll_bars(height: f32) -> usize {
+        let ctx = egui::Context::default();
+        let recent =
+            (0..4).map(|k| RecentSite { id: k.to_string(), name: format!("site-{k}"), protocol: playterm_net::Protocol::Ssh }).collect();
+        let style =
+            ViewStyle { font_size: 14.0, selection: Color32::BLUE, clipboard: ClipboardKeys::default(), recent, alt_is_meta: false };
+        let pane = Rect::from_min_size(Pos2::new(100.0, 50.0), Vec2::new(300.0, height));
+        let mut n = 0;
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                start_screen(ui, pane, &style);
+            });
+            out.textures_delta.clear();
+            n = out
+                .shapes
+                .iter()
+                .filter(|s| matches!(&s.shape, Shape::Rect(r) if r.rect.width() < 12.0 && r.rect.height() > 20.0 && r.fill.a() > 0))
+                .count();
+        }
+        n
+    }
+
+    /// There is more below: a low card shows its scroll bar without the pointer on it.
+    #[test]
+    fn a_low_card_shows_its_scroll_bar() {
+        assert_eq!(scroll_bars(600.0), 0, "everything fits a tall card");
+        assert!(scroll_bars(220.0) > 0, "a scroll bar in the low card");
     }
 }
