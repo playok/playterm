@@ -114,6 +114,7 @@ impl Section {
             Section::Terminal => draft.scrollback = d.scrollback,
             Section::Clipboard => {
                 draft.clipboard = d.clipboard;
+                draft.shortcuts = d.shortcuts;
                 draft.option_as_meta = d.option_as_meta;
             }
             Section::Connection => {
@@ -373,6 +374,23 @@ impl SettingsDialog {
                 "켜면 Option+글자가 셸의 Alt 단축키(예: Option+B 한 단어 뒤로)로 갑니다. 끄면 macOS 가 만드는 문자(é, © …)를 입력합니다.",
                 "On: Option+letter goes to the shell as an Alt shortcut (e.g. Option+B, word back). Off: it types the character macOS makes (é, ©, …).",
             ));
+            ui.end_row();
+        }
+        // App shortcuts that take keys terminal programs use too (#125): off, the keys go to
+        // the terminal.
+        if !cfg!(target_os = "macos") {
+            ui.label(t("단축키", "Shortcuts"));
+            ui.horizontal(|ui| {
+                let s = &mut self.draft.shortcuts;
+                ui.checkbox(&mut s.alt_arrows_switch_tabs, t("Alt+←/→ 탭 전환", "Alt+←/→ switch tabs")).on_hover_text(t(
+                    "끄면 Alt+←/→ 가 터미널로 갑니다 (셸·편집기의 단어 이동). 탭 전환은 Ctrl+Tab 으로도 됩니다.",
+                    "Off: Alt+←/→ go to the terminal (word movement in shells and editors). Ctrl+Tab also switches tabs.",
+                ));
+                ui.checkbox(&mut s.ctrl_zoom, t("Ctrl+= / - / 0 글꼴 크기", "Ctrl+= / - / 0 font size")).on_hover_text(t(
+                    "끄면 이 키들이 터미널로 갑니다. 글꼴 크기는 Ctrl+휠과 보기 메뉴로도 바꿉니다.",
+                    "Off: these keys go to the terminal. Ctrl+wheel and the View menu still change the font size.",
+                ));
+            });
             ui.end_row();
         }
         let keys = &mut self.draft.clipboard;

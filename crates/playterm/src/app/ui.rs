@@ -1,6 +1,7 @@
 //! Drawing the window: menu bar, tab bar, side panels and dialogs.
 
 use super::*;
+use crate::keys::Shortcut;
 
 impl PlaytermApp {
     /// Shows the app-level modal, if any, and applies its outcome.
@@ -21,7 +22,7 @@ impl PlaytermApp {
                 }
             },
             Modal::Shortcuts => {
-                if !dialogs::shortcuts(ctx, &self.settings.clipboard) {
+                if !dialogs::shortcuts(ctx, &self.settings.clipboard, &self.settings.shortcuts) {
                     self.modal = Some(Modal::Shortcuts);
                 }
             }
@@ -211,14 +212,12 @@ impl PlaytermApp {
 
     /// App shortcuts, consumed before the terminal sees the key events.
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
-        let keys = self.settings.clipboard;
-        for (shortcut, what) in shortcut_table() {
+        let clip = self.settings.clipboard;
+        let shortcuts = self.settings.shortcuts;
+        for binding in crate::keys::bindings() {
+            let what = binding.what;
             // Turned off in the settings: the key goes to the terminal.
-            let off = match what {
-                Shortcut::Copy => !keys.ctrl_shift_c,
-                Shortcut::Paste => !keys.ctrl_shift_v,
-                _ => false,
-            };
+            let off = !crate::keys::enabled(binding, &shortcuts, clip.ctrl_shift_c, clip.ctrl_shift_v);
             // A window tabs were moved to has no menus or side panels: only what works on its tabs.
             let tab_only = matches!(
                 what,
@@ -236,13 +235,14 @@ impl PlaytermApp {
                     | Shortcut::ZoomReset
             );
             let off = off || (self.current_window != MAIN_WINDOW && !tab_only);
-            if off || !ctx.input_mut(|i| i.consume_shortcut(shortcut)) {
+            if off || !ctx.input_mut(|i| i.consume_shortcut(&binding.keys)) {
                 continue;
             }
             let i = self.active;
             let command = match what {
                 Shortcut::QuickConnect => Command::QuickConnect,
                 Shortcut::NewTab => Command::NewTab,
+                Shortcut::ReopenClosed => Command::ReopenClosed,
                 Shortcut::SiteManager => Command::SiteManager,
                 Shortcut::Sidebar => Command::ToggleSidebar,
                 Shortcut::Find => Command::Find,
@@ -330,7 +330,10 @@ impl PlaytermApp {
                     egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.5, theme::broadcast_color(ui.visuals()))).show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(text).strong().color(theme::broadcast_color(ui.visuals()))).on_hover_text(tip);
-                            if ui.add(icon::button(icon::TURN_OFF, t("끄기", "Turn off")).small()).on_hover_text("Ctrl+Shift+I").clicked()
+                            if ui
+                                .add(icon::button(icon::TURN_OFF, t("끄기", "Turn off")).small())
+                                .on_hover_text(crate::keys::hint(Shortcut::Broadcast))
+                                .clicked()
                             {
                                 action = Some(Command::ToggleBroadcast);
                             }
@@ -388,13 +391,11 @@ impl PlaytermApp {
         match self.sessions.get_mut(self.active).and_then(|s| s.sftp.as_mut()).filter(|_| panel) {
             Some(browser) => browser.upload_paths(paths),
             None => {
-                self.status = Some(
-                    t(
-                        "파일을 올리려면 먼저 SFTP 탐색기(Ctrl+Shift+X)를 여세요 (SFTP 가 없는 장비는 서버에서 rz 를 실행하세요)",
-                        "Open the SFTP explorer (Ctrl+Shift+X) first to upload files (on devices without SFTP, run rz on the server)",
-                    )
-                    .into(),
-                )
+                let keys = crate::keys::hint(Shortcut::SftpPanel);
+                self.status = Some(tr!(
+                    "파일을 올리려면 먼저 SFTP 탐색기({keys})를 여세요 (SFTP 가 없는 장비는 서버에서 rz 를 실행하세요)",
+                    "Open the SFTP explorer ({keys}) first to upload files (on devices without SFTP, run rz on the server)"
+                ))
             }
         }
     }
@@ -408,7 +409,10 @@ impl PlaytermApp {
                     "SFTP 탐색기: SSH 로 연결된 탭에서 원격 파일을 보고 올리거나 받을 수 있습니다.",
                     "SFTP explorer: shows, uploads and downloads remote files in a tab connected over SSH.",
                 ));
-                if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)")).clicked()
+                if ui
+                    .add(icon::icon_button(icon::CLOSE).small())
+                    .on_hover_text(format!("{} ({})", t("닫기", "Close"), crate::keys::hint(Shortcut::SftpPanel)))
+                    .clicked()
                 {
                     self.sftp_panel = false;
                 }
@@ -424,7 +428,7 @@ impl PlaytermApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 close = ui
                     .add(icon::icon_button(icon::CLOSE).small())
-                    .on_hover_text(t("닫기 (Ctrl+Shift+X)", "Close (Ctrl+Shift+X)"))
+                    .on_hover_text(format!("{} ({})", t("닫기", "Close"), crate::keys::hint(Shortcut::SftpPanel)))
                     .clicked();
             });
         });

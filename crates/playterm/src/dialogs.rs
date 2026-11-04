@@ -1,7 +1,7 @@
 //! Modal dialogs. Each `show` returns what the user decided; the app performs the action.
 
 use eframe::egui;
-use playterm_config::{ClipboardKeys, SessionProfile};
+use playterm_config::{ClipboardKeys, SessionProfile, ShortcutKeys};
 use playterm_i18n::{t, tr};
 use zeroize::Zeroizing;
 
@@ -348,27 +348,10 @@ pub fn confirm_paste(ctx: &egui::Context, text: &str, others: &[String]) -> Opti
 }
 
 /// Keys and what they do, in the current language.
-fn shortcut_list(keys: &ClipboardKeys) -> Vec<(String, &'static str)> {
-    let mut list: Vec<(String, &'static str)> = [
-        ("Ctrl+Shift+N", t("새 탭 (로컬 명령 프롬프트)", "New tab (local prompt)")),
-        ("Ctrl+Shift+T", t("빠른 연결", "Quick Connect")),
-        ("Ctrl+Shift+S", t("사이트 관리", "Site Manager")),
-        ("Ctrl+Shift+B", t("사이트 목록 표시/숨김", "Show/hide the site list")),
-        (
-            "Ctrl+Shift+F",
-            t("찾기 (스크롤백 포함, Enter: 위로 · Shift+Enter: 아래로)", "Find (including scrollback, Enter: up · Shift+Enter: down)"),
-        ),
-        ("Ctrl+Shift+X / Ctrl+Shift+E", t("SFTP 탐색기 (옆 패널) 열기/닫기", "SFTP explorer (side panel) on/off")),
-        ("Ctrl+Shift+M", t("명령 입력창 (하단) 열기/닫기", "Command input bar on/off")),
-        ("Ctrl+Shift+I", t("모든 탭에 동시 입력 (켜기/끄기)", "Type into all tabs (on/off)")),
-        ("Ctrl+Tab / Ctrl+Shift+Tab", t("다음 / 이전 탭", "Next / previous tab")),
-        ("Alt+→ / Alt+←", t("다음 / 이전 탭", "Next / previous tab")),
-        ("Ctrl+Shift+D", t("탭 복제", "Duplicate tab")),
-        ("Ctrl+Shift+W", t("탭 닫기", "Close tab")),
-    ]
-    .into_iter()
-    .map(|(k, what)| (k.to_owned(), what))
-    .collect();
+/// The app's shortcuts come from their table (`keys`), so the list always says what the keys do
+/// (#128); the clipboard keys and mouse gestures follow.
+fn shortcut_list(keys: &ClipboardKeys, shortcuts: &ShortcutKeys) -> Vec<(String, &'static str)> {
+    let mut list = crate::keys::list(shortcuts);
     let copy: Vec<&str> = [(keys.ctrl_shift_c, "Ctrl+Shift+C"), (keys.ctrl_insert, "Ctrl+Insert")]
         .into_iter()
         .filter_map(|(on, k)| on.then_some(k))
@@ -402,8 +385,6 @@ fn shortcut_list(keys: &ClipboardKeys) -> Vec<(String, &'static str)> {
                 t("Shift+드래그", "Shift+drag"),
                 t("마우스를 쓰는 프로그램 안에서도 로컬 선택", "Select locally even in programs that use the mouse"),
             ),
-            ("F11", t("전체 화면", "Full screen")),
-            ("Ctrl+= / Ctrl+- / Ctrl+0", t("글꼴 크게 / 작게 / 기본 크기", "Larger / smaller / default font size")),
             (t("Ctrl+휠", "Ctrl+wheel"), t("글꼴 크기", "Font size")),
             (
                 t("탭 끌기", "Drag a tab"),
@@ -421,14 +402,14 @@ fn shortcut_list(keys: &ClipboardKeys) -> Vec<(String, &'static str)> {
 }
 
 /// Keyboard shortcut list. Returns `true` once closed.
-pub fn shortcuts(ctx: &egui::Context, keys: &ClipboardKeys) -> bool {
+pub fn shortcuts(ctx: &egui::Context, keys: &ClipboardKeys, shortcuts: &ShortcutKeys) -> bool {
     let mut done = false;
     let close = modal("shortcuts", ctx, |ui| {
         ui.set_width(440.0);
         ui.heading(t("단축키", "Keyboard shortcuts"));
         ui.add_space(6.0);
         egui::Grid::new("shortcut-list").num_columns(2).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
-            for (combo, what) in shortcut_list(keys) {
+            for (combo, what) in shortcut_list(keys, shortcuts) {
                 ui.monospace(combo);
                 ui.label(what);
                 ui.end_row();

@@ -14,6 +14,7 @@ mod fonts;
 mod icon;
 mod import_dialog;
 mod input;
+mod keys;
 mod licenses;
 mod local_fs;
 mod logging;

@@ -72,6 +72,23 @@ impl PreventSleep {
     pub const ALL: [PreventSleep; 3] = [PreventSleep::Off, PreventSleep::System, PreventSleep::Display];
 }
 
+/// App shortcuts that take keys programs in the terminal also use; off, those keys go to the
+/// terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShortcutKeys {
+    /// Alt+← / Alt+→ switch tabs (shells and editors move by words with them otherwise).
+    pub alt_arrows_switch_tabs: bool,
+    /// Ctrl+= / Ctrl+- / Ctrl+0 change the font size.
+    pub ctrl_zoom: bool,
+}
+
+impl Default for ShortcutKeys {
+    fn default() -> Self {
+        Self { alt_arrows_switch_tabs: false, ctrl_zoom: true }
+    }
+}
+
 /// Which keys and mouse buttons copy and paste in the terminal. A key that is off goes to the
 /// remote side as a key (Ctrl+V as ^V, Shift+Insert as Insert, ...).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,7 +121,9 @@ impl Default for ClipboardKeys {
             ctrl_c: true,
             ctrl_shift_c: true,
             ctrl_insert: true,
-            ctrl_v: true,
+            // Off: vim's block selection and the shell's ^V need it (#152); Ctrl+Shift+V and
+            // Shift+Insert paste.
+            ctrl_v: false,
             ctrl_shift_v: true,
             shift_insert: true,
             right_click_paste: false,
@@ -143,6 +162,8 @@ pub struct AppSettings {
     pub confirm_close: bool,
     /// Copy / paste keys of the terminal.
     pub clipboard: ClipboardKeys,
+    /// App shortcuts that can be given back to the terminal.
+    pub shortcuts: ShortcutKeys,
     /// Tree or grid in the site manager.
     pub site_view: SiteView,
     /// Folder ZMODEM downloads (`sz` on the server) are saved in; empty = the Downloads folder.
@@ -249,6 +270,7 @@ impl Default for AppSettings {
             connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
             confirm_close: true,
             clipboard: ClipboardKeys::default(),
+            shortcuts: ShortcutKeys::default(),
             site_view: SiteView::Tree,
             zmodem_dir: String::new(),
             zmodem_ask: true,
@@ -298,7 +320,8 @@ mod tests {
             prevent_screensaver: true,
             connect_timeout: 60,
             confirm_close: false,
-            clipboard: ClipboardKeys { copy_on_select: true, ctrl_v: false, right_click_paste: true, ..Default::default() },
+            clipboard: ClipboardKeys { copy_on_select: true, ctrl_v: true, right_click_paste: true, ..Default::default() },
+            shortcuts: ShortcutKeys { alt_arrows_switch_tabs: true, ctrl_zoom: false },
             site_view: SiteView::Grid,
             zmodem_dir: "D:\\받은 파일".into(),
             zmodem_ask: false,

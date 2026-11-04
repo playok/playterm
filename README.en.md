@@ -127,7 +127,7 @@ playterm rdp://user@host                  # Windows Remote Desktop
 
 ## Local command prompt
 
-A tab that is not connected (a new tab with Ctrl+Shift+N, a tab whose connection ended, or when no tab is open) shows a `playterm>` prompt.
+A tab that is not connected (a new tab with Ctrl+Shift+T, a tab whose connection ended, or when no tab is open) shows a `playterm>` prompt.
 Connection commands connect in that tab, and the prompt comes back when the connection ends.
 
 | Command | Does |
@@ -200,7 +200,7 @@ Connection commands connect in that tab, and the prompt comes back when the conn
     host key or typing a password. Applies to new connections.
   - Copy / paste: the keys the terminal uses.
     - Copy: **copy on select** (as in PuTTY, off by default) · Ctrl+C (only with a selection, ^C otherwise) · Ctrl+Shift+C · Ctrl+Insert
-    - Paste: Ctrl+V · Ctrl+Shift+V · Shift+Insert · **right click** (as in PuTTY, off by default — then Ctrl+right click opens the menu) · **middle click** (off by default)
+    - Paste: Ctrl+Shift+V · Shift+Insert · Ctrl+V (off by default) · **right click** (as in PuTTY, off by default — then Ctrl+right click opens the menu) · **middle click** (off by default)
     - Keys turned off go to the remote side as they are (with Ctrl+V off, vim and others get ^V). Menus and the shortcut list show the keys that are on.
     - Dialogs and text fields always take Ctrl+C/V/X, Ctrl/Shift+Insert and Shift+Delete, whatever the setting.
     - Remote copy (OSC 52, on by default): remote programs such as tmux or vim can put text on this PC's clipboard, only from the tab on screen,
@@ -452,13 +452,15 @@ On macOS playterm does not replace the signed `playterm.app` itself: **Open the 
 
 | Keys | Action |
 |---|---|
-| Ctrl+Shift+N | New tab (local command prompt) |
-| Ctrl+Shift+T | Quick Connect |
+| Ctrl+Shift+T (or Ctrl+Shift+N) | New tab (local command prompt) |
+| Ctrl+Shift+O | Quick Connect |
+| Ctrl+Shift+R | Reopen closed tab |
+| Ctrl+, | Settings |
 | Ctrl+Shift+S | Site Manager |
 | Ctrl+Shift+W / middle click | Close tab |
 | Ctrl+Shift+D | Duplicate tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
-| Alt+→ / Alt+← | Next / previous tab |
+| Alt+→ / Alt+← | Next / previous tab (off by default — turn on in Tools → Settings → Keyboard & clipboard) |
 | Ctrl+Shift+B | Show/hide the site list |
 | Ctrl+Shift+F | Find (including scrollback) |
 | Ctrl+Shift+E | SFTP explorer (side panel) on/off (same as Ctrl+Shift+X) |
@@ -469,7 +471,7 @@ On macOS playterm does not replace the signed `playterm.app` itself: **Open the 
 | Shift+drag | Local selection even inside programs that use the mouse (vim `mouse=a`, htop, mc, tmux) |
 | Ctrl+C | Copy if there is a selection, otherwise send ^C |
 | Ctrl+Shift+C, Ctrl+Insert | Copy |
-| Ctrl+Shift+V, Ctrl+V, Shift+Insert | Paste |
+| Ctrl+Shift+V, Shift+Insert (Ctrl+V when turned on in the settings) | Paste |
 | (setting) drag to select / right or middle click | Copy on select / paste — Copy / paste in Tools → Settings (off by default) |
 | F11 | Full screen |
 | Ctrl+wheel, Ctrl+= / Ctrl+- / Ctrl+0 | Font larger / smaller / default size |
