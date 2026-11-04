@@ -722,6 +722,7 @@ fn device_redirection(rdp: &RdpSettings) -> anyhow::Result<Option<ironrdp_rdpdr:
 
 /// The drive name the remote desktop shows ("<name> on <this PC>"): the folder's name, or the
 /// drive letter for the root of a drive.
+#[cfg(windows)]
 fn drive_name(folder: &Path) -> String {
     match folder.file_name() {
         Some(name) => name.to_string_lossy().into_owned(),
