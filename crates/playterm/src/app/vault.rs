@@ -327,3 +327,24 @@ impl PlaytermApp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_password_goes_only_where_it_was_saved_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = playterm_config::Vault::new(dir.path().join("vault.bin"));
+        vault.create("master").unwrap();
+        let site = SessionProfile { id: "a".into(), host: "db01".into(), port: 22, username: "ops".into(), ..Default::default() };
+        assert!(matches!(bound_secret(&vault, &site), Ok(None)), "no password saved");
+        vault.set("a", &vault_target(&site), "s3cret").unwrap();
+        assert_eq!(bound_secret(&vault, &site).unwrap().as_deref().map(String::as_str), Some("s3cret"));
+        // The file was changed to point elsewhere: the password is not handed out.
+        let moved = SessionProfile { host: "evil.example".into(), ..site.clone() };
+        assert_eq!(bound_secret(&vault, &moved).unwrap_err(), vault_target(&site));
+        let other_user = SessionProfile { username: "root".into(), ..site.clone() };
+        assert!(bound_secret(&vault, &other_user).is_err());
+    }
+}

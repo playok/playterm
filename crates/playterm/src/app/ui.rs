@@ -423,3 +423,6 @@ impl PlaytermApp {
         }
     }
 }
+
+/// Width of the SFTP explorer folded on a tab without SFTP.
+pub(super) const SFTP_STRIP: f32 = 34.0;

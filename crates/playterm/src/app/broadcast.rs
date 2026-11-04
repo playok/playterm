@@ -85,3 +85,36 @@ impl PlaytermApp {
         }
     }
 }
+
+/// What the simultaneous-input indicator says with `others` tabs receiving, and its tooltip.
+pub(super) fn broadcast_status(others: usize) -> (String, &'static str) {
+    if others == 0 {
+        (
+            t("동시 입력 켜짐 · 받을 탭 없음", "Typing into all tabs · no other tab").into(),
+            t(
+                "입력을 함께 받을 연결된 탭이 없습니다. 다른 탭을 연결하거나, 탭 우클릭 → 동시 입력에 포함으로 넣으세요.",
+                "No other connected tab takes the input. Connect another tab, or right-click a tab → Include in simultaneous input.",
+            ),
+        )
+    } else {
+        (
+            tr!("동시 입력 켜짐 · 다른 탭 {others}개", "Typing into all tabs · {others} other"),
+            t(
+                "이 탭에 치는 내용이 주황색 테두리의 탭에도 똑같이 입력됩니다. 탭 우클릭으로 뺄 수 있습니다.",
+                "What you type here also goes to the tabs framed in orange. Right-click a tab to leave it out.",
+            ),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broadcast_status_says_when_nothing_receives() {
+        playterm_i18n::set_english(false);
+        assert!(broadcast_status(0).0.contains("받을 탭 없음"));
+        assert!(broadcast_status(3).0.contains("다른 탭 3개"));
+    }
+}
