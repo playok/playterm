@@ -13,7 +13,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **Split view**: drag tabs to the edges to see several sessions at once
 - **Connect many at once**: Ctrl/Shift+click sites to open them together, or save them as a **template** (tabs, columns, rows or grid) and open it with a double-click
 - **SSH extras**: key authentication (OpenSSH / PuTTY `.ppk`, Pageant, Windows OpenSSH agent), `-L` / `-R` / `-D` port forwarding, and an SFTP explorer panel beside the terminal
-- **Remote Desktop**: resolution that follows the tab size, shared clipboard, sound, Unicode/IME input, and certificate pinning
+- **Remote Desktop**: resolution that follows the tab size, shared clipboard, sound, folder and printer sharing, Unicode/IME input, and certificate pinning
 - **Password vault**: saved passwords are encrypted with a master password (Argon2id + XChaCha20-Poly1305)
 - **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads and uploads (`sz`/`rz`)
 - **Site manager**: folders, per-site tab colors, PuTTY and Xshell session import, and a `playterm>` command prompt in unconnected tabs
@@ -373,6 +373,8 @@ Choose protocol **RDP** in the Site Manager, type `rdp [user@]host[:port]` at th
 - **Shared clipboard** (site setting, on by default): the Windows clipboard and the remote clipboard are kept in step, so copy and paste work both ways.
 - Text sent from the command input bar or by typing into all tabs reaches RDP tabs too.
 - **Sound** (site setting, on by default): the remote computer's sound plays on this PC's default output (mstsc's "Play on this computer"). Off, the server is told not to send it.
+- **Shared folder** (site setting): the chosen folder shows up as a drive in "This PC" of the remote desktop (mstsc's "Local Resources → Drives"). With **Read-only** on, the remote side cannot change or delete files. Only the folder itself is reachable: `..`, device paths, and links or junctions pointing outside it are never opened. A folder that is missing (an unplugged USB drive, say) is left out and the desktop connects without it.
+- **Printer** (site setting, off by default): print from the remote desktop on this PC's default printer. The printer appears only if the remote computer has a driver of the same name (no Easy Print yet).
 - Not supported yet: microphone input, drive and printer redirection, RD Gateway, Kerberos (domain accounts authenticate with NTLM).
 
 Test RDP server: `tools\dev-rdpd` (`cargo run --release` → 127.0.0.1:3389, tester / secret). It draws crosshairs that follow the mouse and prints the keyboard and mouse input it receives.

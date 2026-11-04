@@ -63,6 +63,8 @@ const MAX_PASSWORD_TRIES: usize = 3;
 const MAX_DESKTOP_SIDE: u16 = 8192;
 /// Shortest time between two screens sent to the UI.
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+/// How often answers the shared-folder backend finished on its own threads are sent.
+const DEVICE_REPLY_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Per-site RDP options.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,11 +77,17 @@ pub struct RdpSettings {
     pub clipboard: bool,
     /// Play the remote desktop's sound on this PC (as mstsc's "Play on this computer").
     pub sound: bool,
+    /// A folder of this PC shown in the remote desktop as a drive; empty shares none.
+    pub drive_folder: String,
+    /// The remote desktop can read the shared folder but not change it.
+    pub drive_read_only: bool,
+    /// Print from the remote desktop on this PC's default printer.
+    pub printer: bool,
 }
 
 impl Default for RdpSettings {
     fn default() -> Self {
-        Self { width: 0, height: 0, clipboard: true, sound: true }
+        Self { width: 0, height: 0, clipboard: true, sound: true, drive_folder: String::new(), drive_read_only: false, printer: false }
     }
 }
 
@@ -89,6 +97,21 @@ impl RdpSettings {
 
     pub fn fits_tab(&self) -> bool {
         self.width == 0 || self.height == 0
+    }
+
+    /// The folder to share, if any.
+    pub fn shared_folder(&self) -> Option<&str> {
+        Some(self.drive_folder.trim()).filter(|f| !f.is_empty())
+    }
+
+    /// The shared folder, when it is not a folder on this PC (sharing is Windows-only).
+    fn missing_folder(&self) -> Option<&str> {
+        self.shared_folder().filter(|f| cfg!(windows) && !Path::new(f).is_dir())
+    }
+
+    /// Whether the device redirection channel (drives, printers) is needed.
+    fn redirects_devices(&self) -> bool {
+        self.shared_folder().is_some() || self.printer
     }
 }
 
@@ -620,7 +643,7 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite> AsyncReadWrite for T {}
 type Upgraded = TokioFramed<Box<dyn AsyncReadWrite + Unpin + Send + Sync>>;
 
 /// The connection sequence with the channels `params` asks for: display control, and the
-/// clipboard and sound when they are on.
+/// clipboard, sound, and shared folder and printer when they are on.
 fn client_connector(
     params: &ConnectParams,
     password: &str,
@@ -638,7 +661,72 @@ fn client_connector(
         // server starts playing, so a PC without one connects all the same.
         connector.attach_static_channel(ironrdp_rdpsnd::client::Rdpsnd::new(Box::new(ironrdp_rdpsnd_native::cpal::RdpsndBackend::new())));
     }
+    if let Some(rdpdr) = device_redirection(&params.rdp)? {
+        if !params.rdp.sound {
+            // Servers talk to the device channel only next to an audio channel (MS-RDPEFS
+            // Appendix A <1>), as mstsc's "Do not play" does: this one plays nothing, and the
+            // logon info still asks for no audio.
+            connector.attach_static_channel(ironrdp_rdpsnd::client::Rdpsnd::new(Box::new(ironrdp_rdpsnd::client::NoopRdpsndBackend)));
+        }
+        connector.attach_static_channel(rdpdr);
+    }
     Ok(connector)
+}
+
+/// The device redirection channel (rdpdr) for the shared folder and the default printer, when
+/// either is on.
+///
+/// The Windows backend opens every path the server asks for relative to the shared folder's
+/// handle, refusing `..`, device names and reparse points (links, junctions) that would lead
+/// outside it, and refuses changes on a read-only share.
+#[cfg(windows)]
+fn device_redirection(rdp: &RdpSettings) -> anyhow::Result<Option<ironrdp_rdpdr::Rdpdr>> {
+    use ironrdp_rdpdr::RdpdrBackendFactory as _;
+    use ironrdp_rdpdr_native::{FIRST_NAMED_DRIVE_DEVICE_ID, RedirectedDrive, WindowsRdpdrBackendFactory};
+
+    if !rdp.redirects_devices() {
+        return Ok(None);
+    }
+    let mut drives = Vec::new();
+    if let Some(folder) = rdp.shared_folder() {
+        let folder = Path::new(folder);
+        let drive = RedirectedDrive::new(FIRST_NAMED_DRIVE_DEVICE_ID, drive_name(folder), folder, rdp.drive_read_only).map_err(|_| {
+            anyhow!(tr!(
+                "공유 폴더를 열 수 없습니다: {} (C:\\폴더 처럼 드라이브 문자로 시작하는 폴더여야 합니다)",
+                "Cannot open the shared folder: {} (it must be a folder on a drive letter, like C:\\folder)",
+                folder.display()
+            ))
+        })?;
+        drives.push(drive);
+    }
+    let factory = WindowsRdpdrBackendFactory::from_drives(drives).map_err(|e| anyhow!(e))?.with_default_printer(rdp.printer);
+    let product = factory.build_rdpdr_backend().map_err(|e| anyhow!(e))?;
+    let printers = product.printers().to_vec();
+    let (backend, drives) = product.into_parts();
+    let mut rdpdr = ironrdp_rdpdr::Rdpdr::new(backend, client_name())
+        .with_drives(Some(drives.iter().map(|d| (d.device_id(), d.name().to_owned())).collect()));
+    for printer in printers {
+        rdpdr = rdpdr.with_redirected_printer(printer);
+    }
+    Ok(Some(rdpdr))
+}
+
+/// Folder and printer sharing use the Windows backend only.
+#[cfg(not(windows))]
+fn device_redirection(rdp: &RdpSettings) -> anyhow::Result<Option<ironrdp_rdpdr::Rdpdr>> {
+    if rdp.redirects_devices() {
+        log::warn!("rdp: folder and printer sharing is only available on Windows");
+    }
+    Ok(None)
+}
+
+/// The drive name the remote desktop shows ("<name> on <this PC>"): the folder's name, or the
+/// drive letter for the root of a drive.
+fn drive_name(folder: &Path) -> String {
+    match folder.file_name() {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => folder.to_string_lossy().trim_end_matches(['\\', '/']).to_owned(),
+    }
 }
 
 /// TCP, TLS (with the certificate check) and the connection sequence up to the active session.
@@ -655,6 +743,20 @@ async fn connect(
     let client_addr = stream.local_addr()?;
     let mut framed = TokioFramed::new(stream);
 
+    // A shared folder that is gone (a removed USB drive, say) is left out rather than shown as a
+    // broken drive, and does not keep the desktop from connecting.
+    let without_folder;
+    let params = match params.rdp.missing_folder() {
+        Some(folder) => {
+            sink.notice(tr!(
+                "공유 폴더가 없어 공유하지 않고 연결합니다: {folder}",
+                "The shared folder does not exist; connecting without it: {folder}"
+            ));
+            without_folder = ConnectParams { rdp: RdpSettings { drive_folder: String::new(), ..params.rdp.clone() }, ..params.clone() };
+            &without_folder
+        }
+        None => params,
+    };
     let mut connector = client_connector(params, password, clipboard, client_addr)?;
 
     let should_upgrade = match ironrdp_tokio::connect_begin(&mut framed, &mut connector).await {
@@ -758,6 +860,10 @@ async fn session(
     let mut frames = tokio::time::interval(FRAME_INTERVAL);
     frames.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut housekeeping = tokio::time::interval(Duration::from_secs(5));
+    // Shared-folder requests the backend answers later (locks, folder change notices).
+    let redirects_devices = stage.get_svc_processor::<ironrdp_rdpdr::Rdpdr>().is_some();
+    let mut device_replies = tokio::time::interval(DEVICE_REPLY_INTERVAL);
+    device_replies.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // The screen changed since the UI was last woken.
     let mut changed = true;
     let mut closing: Option<tokio::time::Instant> = None;
@@ -829,6 +935,18 @@ async fn session(
                     let messages = cliprdr.drive_timeouts()?;
                     let frame = stage.process_svc_processor_messages(messages)?;
                     if frame.is_empty() { Vec::new() } else { vec![ActiveStageOutput::ResponseFrame(frame)] }
+                }
+                None => Vec::new(),
+            },
+            _ = device_replies.tick(), if redirects_devices => match stage.get_svc_processor_mut::<ironrdp_rdpdr::Rdpdr>() {
+                Some(rdpdr) => {
+                    let messages = rdpdr.poll_deferred_messages()?;
+                    if messages.is_empty() {
+                        Vec::new()
+                    } else {
+                        let frame = stage.process_svc_processor_messages(ironrdp_svc::SvcProcessorMessages::<ironrdp_rdpdr::Rdpdr>::new(messages))?;
+                        vec![ActiveStageOutput::ResponseFrame(frame)]
+                    }
                 }
                 None => Vec::new(),
             },
@@ -937,10 +1055,12 @@ fn clipboard_message(stage: &mut ActiveStage, message: ClipboardMessage) -> anyh
 mod tests {
     use super::*;
 
-    #[test]
-    fn sound_asks_for_the_audio_channel() {
-        let addr: std::net::SocketAddr = "127.0.0.1:50000".parse().unwrap();
-        let mut params = ConnectParams {
+    fn test_addr() -> std::net::SocketAddr {
+        "127.0.0.1:50000".parse().unwrap()
+    }
+
+    fn test_params() -> ConnectParams {
+        ConnectParams {
             protocol: crate::Protocol::Rdp,
             host: "pc".into(),
             port: 3389,
@@ -962,7 +1082,13 @@ mod tests {
             connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
             jump: None,
             x11: None,
-        };
+        }
+    }
+
+    #[test]
+    fn sound_asks_for_the_audio_channel() {
+        let addr = test_addr();
+        let mut params = test_params();
         assert!(params.rdp.sound, "on by default, as mstsc");
         let on = client_connector(&params, "pw", None, addr).unwrap();
         assert!(on.config.enable_audio_playback);
@@ -971,6 +1097,68 @@ mod tests {
         let off = client_connector(&params, "pw", None, addr).unwrap();
         assert!(!off.config.enable_audio_playback, "the server is told not to send sound");
         assert!(off.static_channels.get_by_type::<ironrdp_rdpsnd::client::Rdpsnd>().is_none());
+    }
+
+    #[test]
+    fn no_device_channel_unless_something_is_shared() {
+        let params = test_params();
+        assert!(!params.rdp.redirects_devices(), "nothing is shared by default");
+        let connector = client_connector(&params, "pw", None, test_addr()).unwrap();
+        assert!(connector.static_channels.get_by_type::<ironrdp_rdpdr::Rdpdr>().is_none());
+    }
+
+    #[test]
+    fn a_blank_folder_shares_nothing() {
+        let mut rdp = RdpSettings { drive_folder: "  ".into(), ..Default::default() };
+        assert_eq!(rdp.shared_folder(), None);
+        assert!(!rdp.redirects_devices());
+        rdp.drive_folder = r" C:\work ".into();
+        assert_eq!(rdp.shared_folder(), Some(r"C:\work"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drive_names_come_from_the_folder() {
+        assert_eq!(drive_name(Path::new(r"C:\Users\me\문서")), "문서");
+        assert_eq!(drive_name(Path::new(r"D:\")), "D:");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_shared_folder_asks_for_the_device_channel_even_without_sound() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut params = test_params();
+        params.rdp.sound = false;
+        params.rdp.drive_folder = dir.path().display().to_string();
+        params.rdp.drive_read_only = true;
+        let connector = client_connector(&params, "pw", None, test_addr()).unwrap();
+        assert!(connector.static_channels.get_by_type::<ironrdp_rdpdr::Rdpdr>().is_some());
+        assert!(
+            connector.static_channels.get_by_type::<ironrdp_rdpsnd::client::Rdpsnd>().is_some(),
+            "servers use the device channel only next to an audio channel"
+        );
+        assert!(!connector.config.enable_audio_playback, "the server is still told not to send sound");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_missing_folder_is_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rdp = RdpSettings { drive_folder: dir.path().display().to_string(), ..Default::default() };
+        assert_eq!(rdp.missing_folder(), None);
+        rdp.drive_folder = dir.path().join("gone").display().to_string();
+        assert_eq!(rdp.missing_folder(), Some(rdp.drive_folder.as_str()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_relative_or_network_folder_is_refused() {
+        let mut params = test_params();
+        for folder in [r"relative\folder", r"\\server\share", r"\\?\C:\Windows"] {
+            params.rdp.drive_folder = folder.into();
+            let Err(err) = client_connector(&params, "pw", None, test_addr()) else { panic!("{folder} was accepted") };
+            assert!(err.to_string().contains(folder), "{err}");
+        }
     }
 
     /// Plays a second of silence through this PC's default output, as the server's sound
