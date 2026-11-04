@@ -15,6 +15,8 @@ mod sftp;
 mod ssh;
 mod ssh_auth;
 mod telnet;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod x11;
 pub mod zmodem;
 
