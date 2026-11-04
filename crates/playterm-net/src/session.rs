@@ -211,12 +211,36 @@ pub(crate) enum SessionCommand {
     Close,
 }
 
+/// Output received and not yet taken by the UI may not grow past this: the connection then
+/// stops reading until the UI catches up (the server waits, as flow control has it), so a
+/// flood of output cannot fill the memory.
+pub const MAX_PENDING_OUTPUT: usize = 8 * 1024 * 1024;
+
+/// Received output waiting in the event queue, shared by the connection and the UI.
+#[derive(Default)]
+struct Backlog {
+    bytes: std::sync::atomic::AtomicUsize,
+    /// The UI took some, or went away.
+    taken: tokio::sync::Notify,
+    closed: std::sync::atomic::AtomicBool,
+}
+
 /// UI-side handle to a running session. Dropping it closes the session.
 pub struct SessionHandle {
     commands: mpsc::UnboundedSender<SessionCommand>,
     events: std_mpsc::Receiver<SessionEvent>,
     /// The RDP screen and what changed since the UI last looked.
     screen: Arc<Mutex<SharedScreen>>,
+    backlog: Arc<Backlog>,
+    waker: Waker,
+}
+
+impl Drop for SessionHandle {
+    fn drop(&mut self) {
+        // A connection waiting for the UI to take output must not wait for ever.
+        self.backlog.closed.store(true, std::sync::atomic::Ordering::Release);
+        self.backlog.taken.notify_waiters();
+    }
 }
 
 impl SessionHandle {
@@ -224,8 +248,15 @@ impl SessionHandle {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = std_mpsc::channel();
         let screen = Arc::new(Mutex::new(SharedScreen::default()));
-        let sink = EventSink { tx: ev_tx, waker, screen: screen.clone(), deadline: Deadline::default() };
-        (Self { commands: cmd_tx, events: ev_rx, screen }, cmd_rx, sink)
+        let backlog = Arc::new(Backlog::default());
+        let sink = EventSink {
+            tx: ev_tx,
+            waker: waker.clone(),
+            screen: screen.clone(),
+            deadline: Deadline::default(),
+            backlog: backlog.clone(),
+        };
+        (Self { commands: cmd_tx, events: ev_rx, screen, backlog, waker }, cmd_rx, sink)
     }
 
     /// Keyboard and mouse input for an RDP session.
@@ -271,7 +302,22 @@ impl SessionHandle {
     }
 
     pub fn try_recv(&self) -> Option<SessionEvent> {
-        self.events.try_recv().ok()
+        let event = self.events.try_recv().ok()?;
+        if let SessionEvent::Data(data) = &event {
+            self.backlog.bytes.fetch_sub(data.len(), std::sync::atomic::Ordering::AcqRel);
+            self.backlog.taken.notify_waiters();
+        }
+        Some(event)
+    }
+
+    /// Received output not yet taken with [`SessionHandle::try_recv`], in bytes.
+    pub fn pending_output(&self) -> usize {
+        self.backlog.bytes.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Asks the UI for another frame (to take events it left for later).
+    pub fn wake(&self) {
+        (self.waker)();
     }
 }
 
@@ -282,6 +328,7 @@ pub(crate) struct EventSink {
     screen: Arc<Mutex<SharedScreen>>,
     /// The connect time limit; paused while a prompt waits on the user.
     deadline: Deadline,
+    backlog: Arc<Backlog>,
 }
 
 impl EventSink {
@@ -297,6 +344,26 @@ impl EventSink {
     pub fn send(&self, event: SessionEvent) {
         let _ = self.tx.send(event);
         (self.waker)();
+    }
+
+    /// Hands received output to the UI, first waiting while it has [`MAX_PENDING_OUTPUT`]
+    /// or more still to take: reading from the connection pauses meanwhile. Returns at once
+    /// when the UI is gone.
+    pub(crate) async fn data(&self, data: Vec<u8>) {
+        use std::sync::atomic::Ordering;
+        if data.is_empty() {
+            return;
+        }
+        loop {
+            let taken = self.backlog.taken.notified();
+            if self.backlog.closed.load(Ordering::Acquire) || self.backlog.bytes.load(Ordering::Acquire) < MAX_PENDING_OUTPUT {
+                break;
+            }
+            // Woken when the UI takes some; the timeout only guards against a missed wake.
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(200), taken).await;
+        }
+        self.backlog.bytes.fetch_add(data.len(), Ordering::AcqRel);
+        self.send(SessionEvent::Data(data));
     }
 
     pub fn waker(&self) -> Waker {
@@ -368,5 +435,50 @@ impl EventSink {
         self.send(SessionEvent::AuthPrompt(AuthPrompt { title, instructions, fields, user, account_password, reply }));
         let _waiting_on_user = self.deadline.pause();
         rx.await.ok().flatten()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn output_waits_for_the_ui_past_the_limit() {
+        let (handle, _commands, sink) = SessionHandle::new(Arc::new(|| {}));
+        const CHUNK: usize = 1024 * 1024;
+        const CHUNKS: usize = 32;
+        let sender = tokio::spawn(async move {
+            for _ in 0..CHUNKS {
+                sink.data(vec![b'x'; CHUNK]).await;
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // The connection stopped at the limit instead of queueing everything.
+        assert!(!sender.is_finished());
+        let pending = handle.pending_output();
+        assert!((MAX_PENDING_OUTPUT..=MAX_PENDING_OUTPUT + CHUNK).contains(&pending), "{pending}");
+        // Taking output lets it go on; all of it arrives.
+        let mut received = 0;
+        while received < CHUNK * CHUNKS {
+            match handle.try_recv() {
+                Some(SessionEvent::Data(d)) => received += d.len(),
+                Some(_) => {}
+                None => tokio::time::sleep(std::time::Duration::from_millis(1)).await,
+            }
+            assert!(handle.pending_output() <= MAX_PENDING_OUTPUT + CHUNK);
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), sender).await.unwrap().unwrap();
+        assert_eq!(handle.pending_output(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_closed_tab_does_not_keep_the_connection_waiting() {
+        let (handle, _commands, sink) = SessionHandle::new(Arc::new(|| {}));
+        sink.data(vec![0; MAX_PENDING_OUTPUT]).await;
+        let waiting = tokio::spawn(async move { sink.data(vec![0; 10]).await });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(!waiting.is_finished(), "full: it waits");
+        drop(handle);
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiting).await.expect("released when the tab closed").unwrap();
     }
 }
