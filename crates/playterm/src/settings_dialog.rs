@@ -63,6 +63,13 @@ fn swatch(ui: &mut egui::Ui, theme: &Theme) {
 const SECTION_HEIGHT: f32 = 330.0;
 /// Width of a settings section.
 const SECTION_WIDTH: f32 = 520.0;
+/// The smallest a section gets in a small window (it scrolls then).
+const MIN_SECTION_WIDTH: f32 = 280.0;
+const MIN_SECTION_HEIGHT: f32 = 160.0;
+/// Room the dialog leaves to the window's edges.
+const DIALOG_MARGIN: f32 = 40.0;
+/// The dialog's heading, buttons and frame, around the section.
+const DIALOG_CHROME: f32 = 90.0;
 
 /// A hint after a setting, dim. Kept short to fit the section (wrapped text would change the
 /// layout from frame to frame).
@@ -146,7 +153,12 @@ impl SettingsDialog {
     pub fn show(&mut self, ctx: &egui::Context) -> SettingsResult {
         let mut result = None;
         let modal = egui::Modal::new(egui::Id::unique("settings")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
-            ui.set_width(SECTION_LIST_WIDTH + SECTION_WIDTH + 16.0);
+            // As big as the window leaves room for: a small window (a screen split in two, a large
+            // text scale) scrolls the section instead of cutting the dialog off.
+            let room = ui.ctx().content_rect().size();
+            let width = (room.x - DIALOG_MARGIN - SECTION_LIST_WIDTH - 25.0).clamp(MIN_SECTION_WIDTH, SECTION_WIDTH);
+            let height = (room.y - DIALOG_MARGIN - DIALOG_CHROME).clamp(MIN_SECTION_HEIGHT, SECTION_HEIGHT);
+            ui.set_width(SECTION_LIST_WIDTH + width + 16.0);
             ui.heading(t("설정", "Settings"));
             ui.add_space(6.0);
             ui.horizontal_top(|ui| {
@@ -163,14 +175,14 @@ impl SettingsDialog {
                     }
                 });
                 // A line as tall as the section (a separator would take the whole height).
-                let (line, _) = ui.allocate_exact_size(egui::vec2(9.0, SECTION_HEIGHT), Sense::hover());
+                let (line, _) = ui.allocate_exact_size(egui::vec2(9.0, height), Sense::hover());
                 ui.painter().vline(line.center().x, line.y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
-                let size = egui::vec2(SECTION_WIDTH, SECTION_HEIGHT);
+                let size = egui::vec2(width, height);
                 let rect = egui::Rect::from_min_size(ui.cursor().min, size);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
                     ui.set_min_size(size);
                     ui.set_max_size(size);
-                    self.section_ui(ui);
+                    egui::ScrollArea::both().id_salt("settings-section").auto_shrink([false, false]).show(ui, |ui| self.section_ui(ui));
                 });
             });
             ui.separator();
@@ -646,6 +658,36 @@ mod section_tests {
         assert!(max - min < 2.0, "heights {heights:?}");
         // And its width: it stays where it is (#143).
         assert!(lefts.iter().all(|&x| (x - lefts[0]).abs() < 0.5), "left edges {lefts:?}");
+    }
+
+    /// A small window (500×400 points: 750×600 pixels at 150 %): the whole dialog stays inside
+    /// it, its buttons too, and the section scrolls.
+    #[test]
+    fn the_dialog_fits_a_small_window() {
+        playterm_i18n::set_english(false);
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 400.0));
+        let mut dialog = SettingsDialog::new(&AppSettings::default());
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                let _ = dialog.show(ui.ctx());
+            });
+            out.textures_delta.clear();
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some((t.galley.text().to_owned(), egui::Rect::from_min_size(t.pos, t.galley.size()))),
+                    _ => None,
+                })
+                .collect();
+        }
+        for needed in ["설정", "화면", "확인", "취소", "기본값으로"] {
+            let (_, rect) = texts.iter().find(|(t, _)| t.contains(needed)).unwrap_or_else(|| panic!("{needed} missing: {texts:?}"));
+            assert!(screen.contains_rect(*rect), "{needed} at {rect:?} is outside the window");
+        }
     }
 
     /// "Reset to defaults" (#121) resets the section on show and nothing else: macros, recent
