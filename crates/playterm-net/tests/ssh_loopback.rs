@@ -994,6 +994,69 @@ fn sftp_upload_replaces_an_existing_file_only_when_complete() {
     }
 }
 
+/// Leftover hidden files of uploads (`.part`) and replacements (`.old`) of `name` in `dir`,
+/// with their contents.
+fn leftovers(dir: &std::path::Path, name: &str) -> Vec<(String, Vec<u8>)> {
+    let mut out: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with(&format!(".{name}.")))
+        .map(|p| (p.extension().unwrap().to_string_lossy().into_owned(), std::fs::read(&p).unwrap()))
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn sftp_a_failed_replacement_never_loses_the_old_file() {
+    let fx = Fixture::new("sftp-replace-fault", &[]);
+    fx.trust_host();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+    let root = fx.dir.join("sftp");
+    let target = root.join("replace-fault.sh");
+    let new = fx.dir.join("new.sh");
+    std::fs::write(&new, b"new").unwrap();
+    let failed = |state: TransferState| match state {
+        TransferState::Failed(e) => e,
+        other => panic!("expected a failure, got {other:?}"),
+    };
+
+    // The upload cannot take the name (the plain rename and the one after moving the old file
+    // aside fail): the old file is put back, the upload dropped.
+    std::fs::write(&target, b"old").unwrap();
+    common::sftp_fs::fail_renames("/replace-fault.sh", 2);
+    let e = failed(transfer_result(&sftp, sftp.upload(&new, "/replace-fault.sh")));
+    assert!(e.contains("replace-fault.sh"), "{e}");
+    assert_eq!(std::fs::read(&target).unwrap(), b"old");
+    assert_eq!(leftovers(&root, "replace-fault.sh"), []);
+
+    // Not even the old file can be put back (the connection is gone, say): nothing is deleted,
+    // and the error says where the old file and the upload are.
+    common::sftp_fs::fail_renames("/replace-fault.sh", 3);
+    let e = failed(transfer_result(&sftp, sftp.upload(&new, "/replace-fault.sh")));
+    assert!(!target.exists());
+    assert_eq!(leftovers(&root, "replace-fault.sh"), [("old".to_owned(), b"old".to_vec()), ("part".to_owned(), b"new".to_vec())]);
+    assert!(e.contains(".old") && e.contains(".part"), "{e}");
+    for (kind, _) in leftovers(&root, "replace-fault.sh") {
+        let leftover = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).find(|p| p.extension().unwrap() == kind.as_str()).unwrap();
+        std::fs::remove_file(leftover).unwrap();
+    }
+
+    // The old file cannot even be moved aside: it stays, the upload is dropped.
+    std::fs::write(&target, b"old").unwrap();
+    common::sftp_fs::fail_renames("/.replace-fault.sh.", 1);
+    failed(transfer_result(&sftp, sftp.upload(&new, "/replace-fault.sh")));
+    assert_eq!(std::fs::read(&target).unwrap(), b"old");
+    assert_eq!(leftovers(&root, "replace-fault.sh"), []);
+
+    // Without failures: replaced, nothing left over.
+    assert_eq!(transfer_result(&sftp, sftp.upload(&new, "/replace-fault.sh")), TransferState::Finished);
+    assert_eq!(std::fs::read(&target).unwrap(), b"new");
+    assert_eq!(leftovers(&root, "replace-fault.sh"), []);
+}
+
 #[test]
 fn sftp_cancelled_download_keeps_the_existing_file() {
     let fx = Fixture::new("sftp-cancel-down", &[]);
