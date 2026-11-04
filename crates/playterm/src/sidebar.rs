@@ -9,6 +9,7 @@ use playterm_config::{ProfileStore, SessionProfile, SiteTemplate, TemplateLayout
 use playterm_i18n::{t, tr};
 
 use crate::icon;
+use crate::keys::{Shortcut, hint};
 use crate::site_tree;
 
 pub enum SidebarAction {
@@ -231,15 +232,20 @@ impl Sidebar {
                 if icon::named_icon_button(
                     ui,
                     icon::SIDEBAR_HIDE,
-                    t("사이트 목록 숨기기 (Ctrl+Shift+B)", "Hide the site list (Ctrl+Shift+B)"),
+                    &format!("{} ({})", t("사이트 목록 숨기기", "Hide the site list"), hint(Shortcut::Sidebar)),
                     true,
                 )
                 .clicked()
                 {
                     action = Some(SidebarAction::Hide);
                 }
-                if icon::named_icon_button(ui, icon::SITE_MANAGER, t("사이트 관리 (Ctrl+Shift+S)", "Site Manager (Ctrl+Shift+S)"), true)
-                    .clicked()
+                if icon::named_icon_button(
+                    ui,
+                    icon::SITE_MANAGER,
+                    &format!("{} ({})", t("사이트 관리", "Site Manager"), hint(Shortcut::SiteManager)),
+                    true,
+                )
+                .clicked()
                 {
                     action = Some(SidebarAction::Manage(self.selected.clone()));
                 }

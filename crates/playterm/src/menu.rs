@@ -5,6 +5,7 @@ use playterm_config::TabColor;
 use playterm_i18n::{t, tr};
 use playterm_term::LogMode;
 
+use crate::keys::{Shortcut, hint};
 use crate::session::Session;
 use crate::sidebar::VaultState;
 
@@ -206,10 +207,10 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
 
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button(t("파일", "File"), |ui| {
-            item(ui, out, t("새 탭", "New tab"), keys("Ctrl+Shift+N", "⌘T"), true, Command::NewTab);
-            item(ui, out, t("새 창", "New window"), keys("", "⌘N"), true, Command::NewWindow);
-            item(ui, out, t("빠른 연결…", "Quick Connect…"), "Ctrl+Shift+T", true, Command::QuickConnect);
-            item(ui, out, t("사이트 관리…", "Site Manager…"), "Ctrl+Shift+S", true, Command::SiteManager);
+            item(ui, out, t("새 탭", "New tab"), &hint(Shortcut::NewTab), true, Command::NewTab);
+            item(ui, out, t("새 창", "New window"), &hint(Shortcut::NewWindow), true, Command::NewWindow);
+            item(ui, out, t("빠른 연결…", "Quick Connect…"), &hint(Shortcut::QuickConnect), true, Command::QuickConnect);
+            item(ui, out, t("사이트 관리…", "Site Manager…"), &hint(Shortcut::SiteManager), true, Command::SiteManager);
             item(ui, out, t("새 사이트…", "New site…"), "", true, Command::NewSite);
             submenu(ui, t("가져오기", "Import"), |ui| {
                 item(ui, out, t("PuTTY 세션…", "PuTTY sessions…"), "", true, Command::ImportPutty);
@@ -224,21 +225,28 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("복사", "Copy"), st.copy_hint, has_selection, Command::Copy);
             item(ui, out, t("붙여넣기", "Paste"), st.paste_hint, active.is_some(), Command::Paste);
             item(ui, out, t("모두 선택", "Select all"), "", active.is_some(), Command::SelectAll);
-            item(ui, out, t("찾기…", "Find…"), keys("Ctrl+Shift+F", "⌘F"), active.is_some(), Command::Find);
+            item(ui, out, t("찾기…", "Find…"), &hint(Shortcut::Find), active.is_some(), Command::Find);
             ui.separator();
             item(ui, out, t("스크롤백 지우기", "Clear scrollback"), "", active.is_some(), Command::ClearScrollback);
         });
 
         ui.menu_button(t("보기", "View"), |ui| {
-            check(ui, out, t("사이트 목록", "Site list"), "Ctrl+Shift+B", st.show_sidebar, Command::ToggleSidebar);
+            check(ui, out, t("사이트 목록", "Site list"), &hint(Shortcut::Sidebar), st.show_sidebar, Command::ToggleSidebar);
             check(ui, out, t("도구 모음", "Toolbar"), "", st.show_toolbar, Command::ToggleToolbar);
             check(ui, out, t("상태 표시줄", "Status bar"), "", st.show_status_bar, Command::ToggleStatusBar);
-            check(ui, out, t("명령 입력창", "Command input bar"), "Ctrl+Shift+M", st.show_compose_bar, Command::ToggleComposeBar);
-            check(ui, out, t("전체 화면", "Full screen"), "F11", fullscreen, Command::ToggleFullscreen);
+            check(
+                ui,
+                out,
+                t("명령 입력창", "Command input bar"),
+                &hint(Shortcut::ComposeBar),
+                st.show_compose_bar,
+                Command::ToggleComposeBar,
+            );
+            check(ui, out, t("전체 화면", "Full screen"), &hint(Shortcut::Fullscreen), fullscreen, Command::ToggleFullscreen);
             ui.separator();
-            item(ui, out, t("글꼴 크게", "Larger font"), keys("Ctrl+=", "⌘="), true, Command::ZoomIn);
-            item(ui, out, t("글꼴 작게", "Smaller font"), keys("Ctrl+-", "⌘-"), true, Command::ZoomOut);
-            item(ui, out, t("기본 크기", "Default size"), keys("Ctrl+0", "⌘0"), true, Command::ZoomReset);
+            item(ui, out, t("글꼴 크게", "Larger font"), &hint(Shortcut::ZoomIn), true, Command::ZoomIn);
+            item(ui, out, t("글꼴 작게", "Smaller font"), &hint(Shortcut::ZoomOut), true, Command::ZoomOut);
+            item(ui, out, t("기본 크기", "Default size"), &hint(Shortcut::ZoomReset), true, Command::ZoomReset);
         });
 
         ui.menu_button(t("도구", "Tools"), |ui| {
@@ -253,7 +261,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 ui,
                 out,
                 t("SFTP 탐색기 (옆 패널)", "SFTP explorer (side panel)"),
-                "Ctrl+Shift+X",
+                &hint(Shortcut::SftpPanel),
                 st.sftp_panel,
                 Command::ToggleSftpPanel,
             );
@@ -290,16 +298,16 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 );
             }
             ui.separator();
-            item(ui, out, t("설정…", "Settings…"), keys("", "⌘,"), true, Command::Settings);
+            item(ui, out, t("설정…", "Settings…"), &hint(Shortcut::Settings), true, Command::Settings);
         });
 
         ui.menu_button(t("탭", "Tab"), |ui| {
-            item(ui, out, t("새 탭", "New tab"), keys("Ctrl+Shift+N", "⌘T"), true, Command::NewTab);
+            item(ui, out, t("새 탭", "New tab"), &hint(Shortcut::NewTab), true, Command::NewTab);
             ui.separator();
-            item(ui, out, t("다음 탭", "Next tab"), keys("Ctrl+Tab", "⇧⌘]"), n > 1, Command::NextTab);
-            item(ui, out, t("이전 탭", "Previous tab"), keys("Ctrl+Shift+Tab", "⇧⌘["), n > 1, Command::PrevTab);
+            item(ui, out, t("다음 탭", "Next tab"), &hint(Shortcut::NextTab), n > 1, Command::NextTab);
+            item(ui, out, t("이전 탭", "Previous tab"), &hint(Shortcut::PrevTab), n > 1, Command::PrevTab);
             ui.separator();
-            item(ui, out, t("탭 복제", "Duplicate tab"), "Ctrl+Shift+D", active.is_some(), Command::Duplicate(i));
+            item(ui, out, t("탭 복제", "Duplicate tab"), &hint(Shortcut::DuplicateTab), active.is_some(), Command::Duplicate(i));
             item(ui, out, t("새 창으로 분리", "Move to new window"), "", active.is_some(), Command::OpenInNewWindow(i));
             if let Some(s) = active {
                 tab_color_menu(ui, out, i, s.tab_color);
@@ -309,12 +317,19 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             let can_disconnect = active.is_some_and(Session::can_disconnect);
             item(ui, out, t("연결 끊기", "Disconnect"), "", can_disconnect, Command::Disconnect(i));
             ui.separator();
-            item(ui, out, t("탭 닫기", "Close tab"), keys("Ctrl+Shift+W", "⌘W"), active.is_some(), Command::Close(i));
+            item(ui, out, t("탭 닫기", "Close tab"), &hint(Shortcut::CloseTab), active.is_some(), Command::Close(i));
             item(ui, out, t("다른 탭 모두 닫기", "Close other tabs"), "", n > 1, Command::CloseOthers(i));
             item(ui, out, t("모든 탭 닫기", "Close all tabs"), "", n > 0, Command::CloseAll);
-            item(ui, out, t("닫은 탭 다시 열기", "Reopen closed tab"), "", st.can_reopen, Command::ReopenClosed);
+            item(ui, out, t("닫은 탭 다시 열기", "Reopen closed tab"), &hint(Shortcut::ReopenClosed), st.can_reopen, Command::ReopenClosed);
             ui.separator();
-            check(ui, out, t("모든 탭에 동시 입력", "Type into all tabs"), "Ctrl+Shift+I", st.broadcast, Command::ToggleBroadcast);
+            check(
+                ui,
+                out,
+                t("모든 탭에 동시 입력", "Type into all tabs"),
+                &hint(Shortcut::Broadcast),
+                st.broadcast,
+                Command::ToggleBroadcast,
+            );
             if n > 0 {
                 ui.separator();
                 for (k, title) in Session::numbered_titles(st.sessions).into_iter().enumerate() {
@@ -330,7 +345,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             item(ui, out, t("최소화", "Minimize"), "", true, Command::Minimize);
             let label = if maximized { t("이전 크기로", "Restore") } else { t("최대화", "Maximize") };
             item(ui, out, label, "", !fullscreen, Command::ToggleMaximize);
-            check(ui, out, t("전체 화면", "Full screen"), "F11", fullscreen, Command::ToggleFullscreen);
+            check(ui, out, t("전체 화면", "Full screen"), &hint(Shortcut::Fullscreen), fullscreen, Command::ToggleFullscreen);
             check(ui, out, t("항상 위에 표시", "Always on top"), "", st.always_on_top, Command::ToggleAlwaysOnTop);
         });
 

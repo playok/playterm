@@ -126,7 +126,7 @@ playterm rdp://user@host                  # Windows 원격 데스크톱
 
 ## 로컬 명령 프롬프트
 
-연결되지 않은 탭(새 탭 Ctrl+Shift+N, 연결이 끊긴 탭, 탭이 하나도 없을 때)에는 `playterm>` 프롬프트가 뜹니다.
+연결되지 않은 탭(새 탭 Ctrl+Shift+T, 연결이 끊긴 탭, 탭이 하나도 없을 때)에는 `playterm>` 프롬프트가 뜹니다.
 접속 명령은 그 탭에서 바로 연결되고, 연결이 끝나면 다시 프롬프트로 돌아옵니다.
 
 | 명령 | 동작 |
@@ -191,7 +191,7 @@ playterm rdp://user@host                  # Windows 원격 데스크톱
     (SSH 핸드셰이크·인증, RDP 의 TLS·로그인 포함) 적용되고, 호스트 키 확인이나 비밀번호 입력을 기다리는 시간은 세지 않습니다. 새 연결부터 적용됩니다.
   - 복사 / 붙여넣기: 터미널에서 쓸 키를 고릅니다.
     - 복사: **선택하면 바로 복사**(PuTTY 방식, 기본 끔) · Ctrl+C(선택 영역이 있을 때만, 없으면 ^C) · Ctrl+Shift+C · Ctrl+Insert
-    - 붙여넣기: Ctrl+V · Ctrl+Shift+V · Shift+Insert · **오른쪽 클릭**(PuTTY 방식, 기본 끔 — 켜면 메뉴는 Ctrl+오른쪽 클릭) · **가운데 클릭**(기본 끔)
+    - 붙여넣기: Ctrl+Shift+V · Shift+Insert · Ctrl+V(기본 끔) · **오른쪽 클릭**(PuTTY 방식, 기본 끔 — 켜면 메뉴는 Ctrl+오른쪽 클릭) · **가운데 클릭**(기본 끔)
     - 끈 키는 원격으로 그대로 전달됩니다 (예: Ctrl+V 를 끄면 vim 등에서 ^V 로 쓸 수 있음). 메뉴와 단축키 목록에는 켜 둔 키가 표시됩니다.
     - 대화상자·입력칸에서는 설정과 관계없이 Ctrl+C/V/X, Ctrl/Shift+Insert, Shift+Delete 가 늘 동작합니다.
     - 원격 복사 (OSC 52, 기본 켬): tmux · vim 등 원격 프로그램이 이 PC 클립보드에 쓸 수 있습니다. 지금 보고 있는 탭에서만, 1MB 까지,
@@ -424,13 +424,15 @@ macOS 에서는 서명된 `playterm.app` 을 앱이 직접 바꾸지 않고, **�
 
 | 키 | 동작 |
 |---|---|
-| Ctrl+Shift+N | 새 탭 (로컬 명령 프롬프트) |
-| Ctrl+Shift+T | 빠른 연결 |
+| Ctrl+Shift+T (또는 Ctrl+Shift+N) | 새 탭 (로컬 명령 프롬프트) |
+| Ctrl+Shift+O | 빠른 연결 |
+| Ctrl+Shift+R | 닫은 탭 다시 열기 |
+| Ctrl+, | 설정 |
 | Ctrl+Shift+S | 사이트 관리 |
 | Ctrl+Shift+W / 휠 클릭 | 탭 닫기 |
 | Ctrl+Shift+D | 탭 복제 |
 | Ctrl+Tab / Ctrl+Shift+Tab | 다음 / 이전 탭 |
-| Alt+→ / Alt+← | 다음 / 이전 탭 |
+| Alt+→ / Alt+← | 다음 / 이전 탭 (기본 끔 — 도구 → 설정 → 키보드·클립보드에서 켬) |
 | Ctrl+Shift+B | 사이트 목록 표시/숨김 |
 | Ctrl+Shift+F | 찾기 (스크롤백 포함) |
 | Ctrl+Shift+E | SFTP 탐색기 (옆 패널) 열기/닫기 (Ctrl+Shift+X 와 같음) |
@@ -441,10 +443,10 @@ macOS 에서는 서명된 `playterm.app` 을 앱이 직접 바꾸지 않고, **�
 | Shift+드래그 | 마우스를 쓰는 프로그램(vim `mouse=a`, htop, mc, tmux) 안에서도 로컬 선택 |
 | Ctrl+C | 선택 영역이 있으면 복사, 없으면 ^C 전송 |
 | Ctrl+Shift+C, Ctrl+Insert | 복사 |
-| Ctrl+Shift+V, Ctrl+V, Shift+Insert | 붙여넣기 |
+| Ctrl+Shift+V, Shift+Insert (Ctrl+V 는 설정에서 켬) | 붙여넣기 |
 | (설정) 드래그 선택 / 오른쪽·가운데 클릭 | 선택하면 바로 복사 / 붙여넣기 — 도구 → 설정의 복사 / 붙여넣기 (기본 끔) |
 | F11 | 전체 화면 |
-| Ctrl+휠, Ctrl+= / Ctrl+- / Ctrl+0 | 글꼴 크게 / 작게 / 기본 크기 |
+| Ctrl+휠, Ctrl+= / Ctrl+- / Ctrl+0 | 글꼴 크게 / 작게 / 기본 크기 (Ctrl+= / - / 0 은 설정에서 끌 수 있음) |
 
 ## 개발
 

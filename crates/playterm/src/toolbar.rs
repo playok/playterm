@@ -5,7 +5,8 @@ use eframe::egui::{self, Role, WidgetInfo};
 use playterm_i18n::t;
 
 use crate::icon::{self, MaterialIcon};
-use crate::menu::{Command, keys};
+use crate::keys::{Shortcut, hint};
+use crate::menu::Command;
 use crate::session::{Session, SessionState};
 
 /// What the toolbar shows.
@@ -25,15 +26,15 @@ pub struct ToolbarState<'a> {
 struct Tool {
     icon: MaterialIcon,
     name: &'static str,
-    shortcut: &'static str,
+    shortcut: String,
     enabled: bool,
     /// The state of a switch, drawn as selected while on.
     on: Option<bool>,
     command: Command,
 }
 
-fn tool(icon: MaterialIcon, name: &'static str, shortcut: &'static str, enabled: bool, on: Option<bool>, command: Command) -> Tool {
-    Tool { icon, name, shortcut, enabled, on, command }
+fn tool(icon: MaterialIcon, name: &'static str, shortcut: impl Into<String>, enabled: bool, on: Option<bool>, command: Command) -> Tool {
+    Tool { icon, name, shortcut: shortcut.into(), enabled, on, command }
 }
 
 /// The toolbar's buttons, in groups (separated by a line).
@@ -42,28 +43,33 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
     let i = st.i;
     let fullscreen = ui.input(|inp| inp.viewport().fullscreen.unwrap_or(false));
     let sidebar = if st.sidebar {
-        tool(icon::SIDEBAR_HIDE, t("사이트 목록 숨기기", "Hide the site list"), "Ctrl+Shift+B", true, None, Command::ToggleSidebar)
+        tool(icon::SIDEBAR_HIDE, t("사이트 목록 숨기기", "Hide the site list"), hint(Shortcut::Sidebar), true, None, Command::ToggleSidebar)
     } else {
-        tool(icon::SIDEBAR_SHOW, t("사이트 목록 보이기", "Show the site list"), "Ctrl+Shift+B", true, None, Command::ToggleSidebar)
+        tool(icon::SIDEBAR_SHOW, t("사이트 목록 보이기", "Show the site list"), hint(Shortcut::Sidebar), true, None, Command::ToggleSidebar)
     };
     // One click on the toolbar must not end a working session: reconnecting is for a closed
     // tab here (the menus still offer it for a connected one).
     let can_reconnect = active.is_some_and(|s| s.has_target() && s.state == SessionState::Closed);
     let can_disconnect = active.is_some_and(Session::can_disconnect);
     let has_selection = active.is_some_and(|s| s.terminal.has_selection());
-    // Open, the SFTP explorer can always be closed from here.
-    let sftp = st.sftp_panel || active.is_some_and(|s| s.sftp.is_some() || s.can_sftp());
     let full = if fullscreen {
-        tool(icon::FULLSCREEN_EXIT, t("전체 화면 끝내기", "Exit full screen"), "F11", true, None, Command::ToggleFullscreen)
+        tool(
+            icon::FULLSCREEN_EXIT,
+            t("전체 화면 끝내기", "Exit full screen"),
+            hint(Shortcut::Fullscreen),
+            true,
+            None,
+            Command::ToggleFullscreen,
+        )
     } else {
-        tool(icon::FULLSCREEN, t("전체 화면", "Full screen"), "F11", true, None, Command::ToggleFullscreen)
+        tool(icon::FULLSCREEN, t("전체 화면", "Full screen"), hint(Shortcut::Fullscreen), true, None, Command::ToggleFullscreen)
     };
     vec![
         vec![sidebar],
         vec![
-            tool(icon::NEW_TAB, t("새 탭", "New tab"), keys("Ctrl+Shift+N", "⌘T"), true, None, Command::NewTab),
-            tool(icon::QUICK_CONNECT, t("빠른 연결", "Quick Connect"), "Ctrl+Shift+T", true, None, Command::QuickConnect),
-            tool(icon::SITE_MANAGER, t("사이트 관리", "Site Manager"), "Ctrl+Shift+S", true, None, Command::SiteManager),
+            tool(icon::NEW_TAB, t("새 탭", "New tab"), hint(Shortcut::NewTab), true, None, Command::NewTab),
+            tool(icon::QUICK_CONNECT, t("빠른 연결", "Quick Connect"), hint(Shortcut::QuickConnect), true, None, Command::QuickConnect),
+            tool(icon::SITE_MANAGER, t("사이트 관리", "Site Manager"), hint(Shortcut::SiteManager), true, None, Command::SiteManager),
         ],
         vec![
             tool(icon::RECONNECT, t("다시 연결", "Reconnect"), "", can_reconnect, None, Command::Reconnect(i)),
@@ -72,18 +78,27 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
         vec![
             tool(icon::COPY, t("복사", "Copy"), st.copy_hint, has_selection, None, Command::Copy),
             tool(icon::PASTE, t("붙여넣기", "Paste"), st.paste_hint, active.is_some(), None, Command::Paste),
-            tool(icon::FIND, t("찾기", "Find"), keys("Ctrl+Shift+F", "⌘F"), active.is_some(), None, Command::Find),
+            tool(icon::FIND, t("찾기", "Find"), hint(Shortcut::Find), active.is_some(), None, Command::Find),
         ],
         vec![
-            tool(icon::FONT_SMALLER, t("글꼴 작게", "Smaller font"), keys("Ctrl+-", "⌘-"), true, None, Command::ZoomOut),
-            tool(icon::FONT_LARGER, t("글꼴 크게", "Larger font"), keys("Ctrl+=", "⌘="), true, None, Command::ZoomIn),
+            tool(icon::FONT_SMALLER, t("글꼴 작게", "Smaller font"), hint(Shortcut::ZoomOut), true, None, Command::ZoomOut),
+            tool(icon::FONT_LARGER, t("글꼴 크게", "Larger font"), hint(Shortcut::ZoomIn), true, None, Command::ZoomIn),
         ],
         vec![
-            tool(icon::SFTP, t("SFTP 탐색기", "SFTP explorer"), "Ctrl+Shift+X", sftp, Some(st.sftp_panel), Command::ToggleSftpPanel),
+            // Always on, as the menu item is (#119): on a tab without SFTP the panel folds into a
+            // strip and opens on the next SSH tab.
+            tool(
+                icon::SFTP,
+                t("SFTP 탐색기", "SFTP explorer"),
+                hint(Shortcut::SftpPanel),
+                true,
+                Some(st.sftp_panel),
+                Command::ToggleSftpPanel,
+            ),
             tool(
                 icon::COMPOSE_BAR,
                 t("명령 입력창", "Command input bar"),
-                "Ctrl+Shift+M",
+                hint(Shortcut::ComposeBar),
                 true,
                 Some(st.compose_bar),
                 Command::ToggleComposeBar,
@@ -91,13 +106,13 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
             tool(
                 icon::BROADCAST,
                 t("모든 탭에 동시 입력", "Type into all tabs"),
-                "Ctrl+Shift+I",
+                hint(Shortcut::Broadcast),
                 true,
                 Some(st.broadcast),
                 Command::ToggleBroadcast,
             ),
         ],
-        vec![full, tool(icon::SETTINGS, t("설정", "Settings"), keys("", "⌘,"), true, None, Command::Settings)],
+        vec![full, tool(icon::SETTINGS, t("설정", "Settings"), hint(Shortcut::Settings), true, None, Command::Settings)],
     ]
 }
 
@@ -137,7 +152,7 @@ pub fn show(ui: &mut egui::Ui, st: &ToolbarState<'_>) -> Option<Command> {
         ui.separator();
         let more = ui.menu_button(egui::RichText::new("»").strong(), |ui| {
             for tool in &hidden {
-                let mut item = icon::button(tool.icon, tool.name).shortcut_text(tool.shortcut);
+                let mut item = icon::button(tool.icon, tool.name).shortcut_text(tool.shortcut.as_str());
                 if tool.on == Some(true) {
                     item = item.selected(true);
                 }

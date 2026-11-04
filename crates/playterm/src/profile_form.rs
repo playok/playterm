@@ -674,6 +674,9 @@ impl ProfileForm {
                 ui.label(t("탭 색상", "Tab color"));
                 ui.horizontal(|ui| {
                     tab_color_row(ui, &mut p.tab_color);
+                    // Named, so it reads as the label even when filled in (#151).
+                    ui.add_space(8.0);
+                    ui.label(t("라벨", "Label"));
                     ui.add(
                         egui::TextEdit::singleline(&mut p.tab_label)
                             .hint_text(t("라벨 (예: 운영)", "Label (e.g. PROD)"))

@@ -3,7 +3,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
+use eframe::egui::{self, Color32, RichText};
 use playterm_config::{AppSettings, Language, PreventSleep, ProfileStore, SessionProfile, TemplateLayout, UiTheme, Vault};
 use playterm_i18n::{t, tr};
 use playterm_net::{ConnectParams, NetRuntime, Protocol, Waker};
@@ -51,84 +51,8 @@ use self::theme::apply_ui;
 pub use self::windows::MAIN_WINDOW;
 use self::windows::Windows;
 
-const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
 /// Largest text a remote program may put on the clipboard (OSC 52).
 const MAX_REMOTE_COPY: usize = 1024 * 1024;
-/// App shortcuts, consumed before the terminal sees the key events. Ctrl+Shift+Tab must come
-/// before Ctrl+Tab, whose pattern also matches it.
-const SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::T), Shortcut::QuickConnect),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::N), Shortcut::NewTab),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::S), Shortcut::SiteManager),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::B), Shortcut::Sidebar),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::F), Shortcut::Find),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::I), Shortcut::Broadcast),
-    // Ctrl+Shift+E opened the SFTP window, which the side panel replaced.
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::E), Shortcut::SftpPanel),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::X), Shortcut::SftpPanel),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::M), Shortcut::ComposeBar),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::Tab), Shortcut::PrevTab),
-    (KeyboardShortcut::new(Modifiers::CTRL, Key::Tab), Shortcut::NextTab),
-    (KeyboardShortcut::new(Modifiers::ALT, Key::ArrowLeft), Shortcut::PrevTab),
-    (KeyboardShortcut::new(Modifiers::ALT, Key::ArrowRight), Shortcut::NextTab),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::W), Shortcut::CloseTab),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::D), Shortcut::DuplicateTab),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::C), Shortcut::Copy),
-    (KeyboardShortcut::new(CTRL_SHIFT, Key::V), Shortcut::Paste),
-    (KeyboardShortcut::new(Modifiers::NONE, Key::F11), Shortcut::Fullscreen),
-    (KeyboardShortcut::new(Modifiers::CTRL, Key::Equals), Shortcut::ZoomIn),
-    (KeyboardShortcut::new(Modifiers::CTRL, Key::Plus), Shortcut::ZoomIn),
-    (KeyboardShortcut::new(Modifiers::CTRL, Key::Minus), Shortcut::ZoomOut),
-    (KeyboardShortcut::new(Modifiers::CTRL, Key::Num0), Shortcut::ZoomReset),
-];
-
-#[derive(Clone, Copy)]
-enum Shortcut {
-    QuickConnect,
-    NewTab,
-    SiteManager,
-    Sidebar,
-    Find,
-    Broadcast,
-    SftpPanel,
-    ComposeBar,
-    PrevTab,
-    NextTab,
-    CloseTab,
-    DuplicateTab,
-    Copy,
-    Paste,
-    Fullscreen,
-    ZoomIn,
-    ZoomOut,
-    ZoomReset,
-    NewWindow,
-    Settings,
-    Quit,
-}
-
-/// macOS: the Cmd shortcuts Mac apps share, besides the ones above (Cmd never reaches the
-/// shell, so these take nothing from the terminal).
-const MAC_SHORTCUTS: &[(KeyboardShortcut, Shortcut)] = &[
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::T), Shortcut::NewTab),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::W), Shortcut::CloseTab),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::N), Shortcut::NewWindow),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::F), Shortcut::Find),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Comma), Shortcut::Settings),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Q), Shortcut::Quit),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD.plus(Modifiers::SHIFT), Key::OpenBracket), Shortcut::PrevTab),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD.plus(Modifiers::SHIFT), Key::CloseBracket), Shortcut::NextTab),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Equals), Shortcut::ZoomIn),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Plus), Shortcut::ZoomIn),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Minus), Shortcut::ZoomOut),
-    (KeyboardShortcut::new(Modifiers::MAC_CMD, Key::Num0), Shortcut::ZoomReset),
-];
-
-/// The app shortcuts of this platform.
-fn shortcut_table() -> impl Iterator<Item = &'static (KeyboardShortcut, Shortcut)> {
-    let mac: &[(KeyboardShortcut, Shortcut)] = if cfg!(target_os = "macos") { MAC_SHORTCUTS } else { &[] };
-    SHORTCUTS.iter().chain(mac)
-}
 
 /// What to do once the vault dialog succeeds (or is cancelled).
 enum Pending {
@@ -282,6 +206,8 @@ pub struct PlaytermApp {
     quit_confirmed: bool,
     /// The windows have the dark look (for the "auto" terminal colors).
     dark: bool,
+    /// A modal dialog was open last frame (see `ui`).
+    modal_was_open: bool,
     /// The terminal scheme the open tabs were last given.
     palette_theme: &'static str,
 }
@@ -357,6 +283,7 @@ impl PlaytermApp {
             closed_tabs: Vec::new(),
             quit_confirmed: false,
             dark: true,
+            modal_was_open: false,
             palette_theme: "",
         };
         // Development builds (cargo run) are not replaced by releases unless asked.

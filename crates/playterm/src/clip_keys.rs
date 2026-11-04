@@ -119,7 +119,9 @@ mod tests {
         assert_eq!(terminal_action(Key::C, CTRL, &all, true), Some(ClipAction::Copy));
         assert_eq!(terminal_action(Key::C, CTRL, &all, false), None, "^C without a selection");
         assert_eq!(terminal_action(Key::Insert, CTRL, &all, false), Some(ClipAction::Copy));
-        assert_eq!(terminal_action(Key::V, CTRL, &all, false), Some(ClipAction::Paste));
+        assert_eq!(terminal_action(Key::V, CTRL, &all, false), None, "Ctrl+V goes to the terminal by default (#152)");
+        let ctrl_v = ClipboardKeys { ctrl_v: true, ..ClipboardKeys::default() };
+        assert_eq!(terminal_action(Key::V, CTRL, &ctrl_v, false), Some(ClipAction::Paste), "when turned on");
         assert_eq!(terminal_action(Key::Insert, SHIFT, &all, false), Some(ClipAction::Paste));
         assert_eq!(terminal_action(Key::Insert, Modifiers::NONE, &all, false), None);
         assert_eq!(terminal_action(Key::V, CTRL.plus(SHIFT), &all, false), None, "an app shortcut");

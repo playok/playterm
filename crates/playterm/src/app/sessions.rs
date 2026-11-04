@@ -224,7 +224,7 @@ impl PlaytermApp {
             // Saved by an older version; bound to the site on this unlock.
             None => {
                 let r = self.vault.rebind(&profile.id, &now);
-                self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+                self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
                 Some(secret)
             }
         }
@@ -274,7 +274,7 @@ impl PlaytermApp {
     pub(super) fn forget_secret(&mut self, id: &str) {
         if self.vault.is_unlocked() {
             let r = self.vault.remove(id);
-            self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+            self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
         } else {
             self.vault_todo.push(VaultTodo::Forget(id.to_owned()));
         }
