@@ -431,11 +431,15 @@ pub fn shortcuts(ctx: &egui::Context, keys: &ClipboardKeys, shortcuts: &Shortcut
         ui.set_width(440.0);
         ui.heading(t("단축키", "Keyboard shortcuts"));
         ui.add_space(6.0);
-        // Scrolls in a short window, so Close stays on screen.
+        // Scrolls in a short window, so Close stays on screen. Its height is set from the rows,
+        // so the dialog has its size from the first frame (it does not grow into place).
+        let list = shortcut_list(keys, shortcuts);
+        let row = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
         let max = (ui.ctx().content_rect().height() - 160.0).max(200.0);
-        egui::ScrollArea::vertical().max_height(max).show(ui, |ui| {
+        let height = (list.len() as f32 * row).min(max);
+        egui::ScrollArea::vertical().min_scrolled_height(height).max_height(height).show(ui, |ui| {
             egui::Grid::new("shortcut-list").num_columns(2).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
-                for (combo, what) in shortcut_list(keys, shortcuts) {
+                for (combo, what) in list {
                     ui.monospace(combo);
                     ui.label(what);
                     ui.end_row();
