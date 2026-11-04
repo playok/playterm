@@ -2323,6 +2323,24 @@ mod contrast_tests {
     }
 
     #[test]
+    fn the_ui_follows_the_system_theme_by_default() {
+        let ctx = egui::Context::default();
+        apply_ui(&ctx, &AppSettings::default());
+        for system in [egui::Theme::Light, egui::Theme::Dark, egui::Theme::Light] {
+            let input = egui::RawInput { system_theme: Some(system), ..Default::default() };
+            let mut out = ctx.run_ui(input, |_| {});
+            out.textures_delta.clear();
+            assert_eq!(ctx.theme(), system, "follows the system as it changes");
+        }
+        // A theme chosen in the settings wins over the system's.
+        apply_ui(&ctx, &AppSettings { ui_theme: UiTheme::Dark, ..AppSettings::default() });
+        let input = egui::RawInput { system_theme: Some(egui::Theme::Light), ..Default::default() };
+        let mut out = ctx.run_ui(input, |_| {});
+        out.textures_delta.clear();
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+    }
+
+    #[test]
     fn broadcast_status_says_when_nothing_receives() {
         playterm_i18n::set_english(false);
         assert!(broadcast_status(0).0.contains("받을 탭 없음"));
