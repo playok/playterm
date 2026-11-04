@@ -229,6 +229,40 @@ fn rdp_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
     ui.label("");
     ui.checkbox(&mut rdp.sound, t("원격 컴퓨터의 소리를 이 PC 에서 재생", "Play the remote computer's sound on this PC"));
     ui.end_row();
+
+    // The device redirection backend is Windows-only.
+    if cfg!(windows) {
+        rdp_device_rows(ui, rdp);
+    }
+}
+
+/// The folder shown as a drive in the remote desktop, and the printer.
+fn rdp_device_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
+    ui.label(t("공유 폴더", "Shared folder"));
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut rdp.drive_folder).hint_text(t("공유 안 함", "Not shared")).desired_width(220.0))
+            .on_hover_text(t("원격 데스크톱의 \"내 PC\" 에 드라이브로 보입니다", "Shown as a drive in \"This PC\" of the remote desktop"));
+        if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
+            && let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t("공유 폴더", "Shared folder")).pick_one()
+        {
+            rdp.drive_folder = dir.display().to_string();
+        }
+    });
+    ui.end_row();
+
+    ui.label("");
+    ui.add_enabled(
+        rdp.shared_folder().is_some(),
+        egui::Checkbox::new(&mut rdp.drive_read_only, t("읽기 전용 (원격에서 바꿀 수 없음)", "Read-only (cannot be changed remotely)")),
+    );
+    ui.end_row();
+
+    ui.label("");
+    ui.checkbox(&mut rdp.printer, t("이 PC 의 기본 프린터로 인쇄", "Print on this PC's default printer")).on_hover_text(t(
+        "원격 컴퓨터에 같은 이름의 프린터 드라이버가 있어야 프린터가 보입니다",
+        "The printer appears only if the remote computer has a driver of the same name",
+    ));
+    ui.end_row();
 }
 
 /// Swatches to pick the site's tab color, "none" first.
