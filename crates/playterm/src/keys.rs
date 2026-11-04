@@ -194,7 +194,8 @@ pub fn describe(what: Shortcut) -> &'static str {
 /// table order. Copy and paste are left to the caller, which knows all their keys.
 pub fn list(keys: &ShortcutKeys) -> Vec<(String, &'static str)> {
     let mut out: Vec<(Shortcut, Vec<String>)> = Vec::new();
-    for b in bindings().filter(|b| enabled(b, keys, false, false)) {
+    // Ctrl+Plus is the same key as Ctrl+= on most keyboards: listed once.
+    for b in bindings().filter(|b| enabled(b, keys, false, false) && b.keys.logical_key != Key::Plus) {
         let text = format(&b.keys);
         match out.iter_mut().find(|(what, _)| *what == b.what) {
             Some((_, all)) => {

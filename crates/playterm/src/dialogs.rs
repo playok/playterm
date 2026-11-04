@@ -67,6 +67,9 @@ impl QuickConnect {
 // ---------------------------------------------------------------------------------------------
 // Vault
 
+/// Shortest master password a new vault accepts.
+pub const MIN_MASTER_LENGTH: usize = 8;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VaultMode {
     Unlock,
@@ -124,7 +127,7 @@ impl VaultDialog {
         let close = modal("vault", ctx, |ui| {
             ui.set_width(380.0);
             ui.heading(match self.mode {
-                VaultMode::Unlock => t("비밀번호 볼트 잠금 해제", "Unlock password vault"),
+                VaultMode::Unlock => t("저장된 비밀번호 잠금 해제", "Unlock saved passwords"),
                 VaultMode::Create => t("마스터 비밀번호 설정", "Set master password"),
             });
             if !self.reason.is_empty() {
@@ -147,11 +150,31 @@ impl VaultDialog {
                 first.request_focus();
                 self.focus_requested = true;
             }
+            // Making one: checked while typing (#139), as it cannot be recovered once forgotten.
+            let mut ready = true;
             if self.mode == VaultMode::Create {
+                let length = self.master.chars().count();
+                let short = length < MIN_MASTER_LENGTH;
+                let (color, text) = if short {
+                    (ui.visuals().warn_fg_color, tr!("{}자 이상 ({length}자)", "At least {} characters ({length})", MIN_MASTER_LENGTH))
+                } else {
+                    (ui.visuals().weak_text_color(), tr!("{length}자", "{length} characters"))
+                };
+                ui.label(egui::RichText::new(text).small().color(color));
                 ui.label(t("마스터 비밀번호 확인", "Confirm master password"));
                 let second = ui.add(egui::TextEdit::singleline(&mut *self.confirm).password(true));
                 secret_field(ui, &second);
                 enter |= second.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let matches = *self.master == *self.confirm;
+                if !self.confirm.is_empty() {
+                    let (color, text) = if matches {
+                        (ui.visuals().weak_text_color(), t("✓ 일치합니다", "✓ They match"))
+                    } else {
+                        (ui.visuals().error_fg_color, t("두 비밀번호가 다릅니다", "The passwords do not match"))
+                    };
+                    ui.label(egui::RichText::new(text).small().color(color));
+                }
+                ready = !short && matches;
             }
 
             if let Some(err) = &self.error {
@@ -161,7 +184,7 @@ impl VaultDialog {
             ui.horizontal(|ui| {
                 let label = if self.mode == VaultMode::Unlock { t("잠금 해제", "Unlock") } else { t("만들기", "Create") };
                 let icon = if self.mode == VaultMode::Unlock { icon::UNLOCK } else { icon::VAULT_SET_UP };
-                if ui.add(icon::primary(ui, icon, label)).clicked() || enter {
+                if ui.add_enabled(ready, icon::primary(ui, icon, label)).clicked() || (enter && ready) {
                     if self.master.is_empty() {
                         self.error = Some(t("마스터 비밀번호를 입력하세요", "Enter the master password").into());
                     } else if self.mode == VaultMode::Create && *self.master != *self.confirm {
@@ -185,8 +208,8 @@ impl VaultDialog {
                     ui.colored_label(
                         ui.visuals().warn_fg_color,
                         t(
-                            "볼트를 초기화하면 저장된 비밀번호 없이 새로 시작합니다. 세션 목록은 유지됩니다.\n기존 볼트 파일은 vault.toml.bak 으로 남겨 둡니다.",
-                            "Resetting the password vault starts over without the saved passwords. The site list is kept.\nThe old vault file is kept as vault.toml.bak.",
+                            "초기화하면 저장된 비밀번호 없이 새로 시작합니다. 사이트 목록은 유지됩니다.\n기존 파일은 vault.toml.bak 으로 남겨 둡니다.",
+                            "Resetting starts over without the saved passwords. The site list is kept.\nThe old file is kept as vault.toml.bak.",
                         ),
                     );
                     ui.horizontal(|ui| {
@@ -408,12 +431,16 @@ pub fn shortcuts(ctx: &egui::Context, keys: &ClipboardKeys, shortcuts: &Shortcut
         ui.set_width(440.0);
         ui.heading(t("단축키", "Keyboard shortcuts"));
         ui.add_space(6.0);
-        egui::Grid::new("shortcut-list").num_columns(2).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
-            for (combo, what) in shortcut_list(keys, shortcuts) {
-                ui.monospace(combo);
-                ui.label(what);
-                ui.end_row();
-            }
+        // Scrolls in a short window, so Close stays on screen.
+        let max = (ui.ctx().content_rect().height() - 160.0).max(200.0);
+        egui::ScrollArea::vertical().max_height(max).show(ui, |ui| {
+            egui::Grid::new("shortcut-list").num_columns(2).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
+                for (combo, what) in shortcut_list(keys, shortcuts) {
+                    ui.monospace(combo);
+                    ui.label(what);
+                    ui.end_row();
+                }
+            });
         });
         ui.add_space(8.0);
         done = ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked();
@@ -559,7 +586,7 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
         if saved_site && pending.is_password() {
             ui.add_space(4.0);
             ui.checkbox(&mut pending.save_password, t("비밀번호 저장", "Save password")).on_hover_text(t(
-                "로그인에 성공하면 마스터 비밀번호로 암호화한 볼트에 저장합니다. 다음부터는 묻지 않습니다.",
+                "로그인에 성공하면 마스터 비밀번호로 암호화해 저장합니다. 다음부터는 묻지 않습니다.",
                 "Once the login succeeds, it is saved in the vault (encrypted with the master password) and not asked again.",
             ));
         }

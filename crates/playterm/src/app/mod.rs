@@ -206,6 +206,8 @@ pub struct PlaytermApp {
     quit_confirmed: bool,
     /// The windows have the dark look (for the "auto" terminal colors).
     dark: bool,
+    /// A modal dialog was open last frame (see `ui`).
+    modal_was_open: bool,
     /// The terminal scheme the open tabs were last given.
     palette_theme: &'static str,
 }
@@ -281,6 +283,7 @@ impl PlaytermApp {
             closed_tabs: Vec::new(),
             quit_confirmed: false,
             dark: true,
+            modal_was_open: false,
             palette_theme: "",
         };
         // Development builds (cargo run) are not replaced by releases unless asked.

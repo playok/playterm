@@ -52,8 +52,6 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
     let can_reconnect = active.is_some_and(|s| s.has_target() && s.state == SessionState::Closed);
     let can_disconnect = active.is_some_and(Session::can_disconnect);
     let has_selection = active.is_some_and(|s| s.terminal.has_selection());
-    // Open, the SFTP explorer can always be closed from here.
-    let sftp = st.sftp_panel || active.is_some_and(|s| s.sftp.is_some() || s.can_sftp());
     let full = if fullscreen {
         tool(
             icon::FULLSCREEN_EXIT,
@@ -87,11 +85,13 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
             tool(icon::FONT_LARGER, t("글꼴 크게", "Larger font"), hint(Shortcut::ZoomIn), true, None, Command::ZoomIn),
         ],
         vec![
+            // Always on, as the menu item is (#119): on a tab without SFTP the panel folds into a
+            // strip and opens on the next SSH tab.
             tool(
                 icon::SFTP,
                 t("SFTP 탐색기", "SFTP explorer"),
                 hint(Shortcut::SftpPanel),
-                sftp,
+                true,
                 Some(st.sftp_panel),
                 Command::ToggleSftpPanel,
             ),

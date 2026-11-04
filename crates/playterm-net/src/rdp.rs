@@ -894,7 +894,7 @@ async fn connect(
         None => {
             let stream = TcpStream::connect((params.host.as_str(), params.port))
                 .await
-                .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))?;
+                .map_err(|e| crate::session::connect_error(&params.host, params.port, e))?;
             stream.set_nodelay(true)?;
             let client_addr = stream.local_addr()?;
             (Box::new(stream), client_addr)

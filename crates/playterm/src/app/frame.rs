@@ -73,6 +73,21 @@ impl eframe::App for PlaytermApp {
             }
         }
         let modal_open = prompt_open || self.modal.is_some() || self.updater.is_open();
+        if modal_open != self.modal_was_open {
+            self.modal_was_open = modal_open;
+            // One more frame: a tooltip drawn under the pointer before the dialog opened would
+            // otherwise stay on top of it until the pointer moves (#153).
+            ctx.request_repaint();
+            // Closed: the keyboard goes back to the terminal, not to whatever text field egui
+            // moves the focus to (#155).
+            if !modal_open {
+                ctx.memory_mut(|m| {
+                    if let Some(id) = m.focused() {
+                        m.surrender_focus(id);
+                    }
+                });
+            }
+        }
         // Beside the (non-modal) site manager a terminal takes the keyboard only when clicked,
         // so typing after opening the manager does not reach a shell.
         let autofocus = !modal_open && self.site_manager.is_none();

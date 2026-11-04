@@ -22,7 +22,7 @@ impl PlaytermApp {
             if self.vault.is_unlocked() {
                 let target = self.store.get(&id).map(vault_target).unwrap_or_default();
                 let r = self.vault.rebind(&id, &target);
-                self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+                self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
             } else {
                 self.vault_todo.push(VaultTodo::Rebind(id.clone()));
             }
@@ -52,7 +52,10 @@ impl PlaytermApp {
             return;
         }
         let (mode, reason) = if self.vault.exists() {
-            (VaultMode::Unlock, t("비밀번호를 저장하려면 볼트를 잠금 해제하세요.", "Unlock the password vault to save the password."))
+            (
+                VaultMode::Unlock,
+                t("비밀번호를 저장하려면 저장된 비밀번호를 잠금 해제하세요.", "Unlock the saved passwords to save the password."),
+            )
         } else {
             (VaultMode::Create, t("처음으로 비밀번호를 저장합니다.", "Saving a password for the first time."))
         };
@@ -84,7 +87,10 @@ impl PlaytermApp {
             return;
         }
         let (mode, reason) = if self.vault.exists() {
-            (VaultMode::Unlock, t("비밀번호를 저장하려면 볼트를 잠금 해제하세요.", "Unlock the password vault to save the password."))
+            (
+                VaultMode::Unlock,
+                t("비밀번호를 저장하려면 저장된 비밀번호를 잠금 해제하세요.", "Unlock the saved passwords to save the password."),
+            )
         } else {
             (VaultMode::Create, t("처음으로 비밀번호를 저장합니다.", "Saving a password for the first time."))
         };
@@ -105,12 +111,12 @@ impl PlaytermApp {
                     None => Ok(()),
                 },
             };
-            self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+            self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
         }
         // Passwords saved by older versions get the target of their site as it is now.
         let store = &self.store;
         let r = self.vault.bind_missing(|id| store.get(id).filter(|p| p.save_password).map(vault_target));
-        self.report(t("볼트 갱신 실패", "Could not update the password vault"), r);
+        self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
         match pending {
             Pending::Unlock => {}
             Pending::Connect(id, target) => self.connect_in(target, |app| app.connect_saved(&id)),

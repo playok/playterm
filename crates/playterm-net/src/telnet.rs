@@ -5,7 +5,7 @@
 //! that does not speak Telnet does not inject IAC bytes into its stream.
 
 use anyhow::Context as _;
-use playterm_i18n::{t, tr};
+use playterm_i18n::t;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -253,7 +253,7 @@ pub(crate) async fn run(
         .connecting(&params, async {
             TcpStream::connect((params.host.as_str(), params.port))
                 .await
-                .with_context(|| tr!("{}:{} 에 연결할 수 없습니다", "Cannot connect to {}:{}", params.host, params.port))
+                .map_err(|e| crate::session::connect_error(&params.host, params.port, e))
         })
         .await?;
     stream.set_nodelay(true)?;
