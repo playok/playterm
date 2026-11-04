@@ -7,6 +7,8 @@
 playterm은 Rust(egui + alacritty_terminal + russh + IronRDP)로 만든 Windows 터미널입니다.
 x64·ARM64용 실행 파일 하나로 동작하며, 설치나 런타임 설치가 필요 없습니다.
 
+![SSH에 접속한 playterm (다크 테마)](docs/screenshots/main-dark.png)
+
 ## 주요 기능
 
 - **SSH · Telnet · 시리얼 · RDP** 를 한 창에서 함께 사용
@@ -18,6 +20,12 @@ x64·ARM64용 실행 파일 하나로 동작하며, 설치나 런타임 설치�
 - **네트워크 장비 작업에 편리**: 자동 로그인, 여러 탭 동시 입력, 세션 로그, 접속 유지, CP949(EUC-KR) 및 인코딩 자동 감지, ZMODEM 받기·보내기(`sz`/`rz`)
 - **사이트 관리**: 폴더, 사이트별 탭 색상, PuTTY·Xshell 세션 가져오기, 연결 전 탭의 `playterm>` 명령 프롬프트
 - 한국어 / English UI, 다크 / 라이트 테마
+
+## 화면
+
+| 템플릿으로 두 서버를 좌우로 열기 | 연결 전 탭의 시작 화면 |
+| --- | --- |
+| ![템플릿으로 두 SSH 세션을 좌우로 연 화면 (라이트 테마)](docs/screenshots/split-light.png) | ![최근 연결과 빠른 연결 버튼이 있는 시작 화면 (라이트 테마)](docs/screenshots/start-light.png) |
 
 ## 구조
 
