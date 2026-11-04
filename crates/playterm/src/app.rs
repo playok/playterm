@@ -173,6 +173,19 @@ pub fn vault_target(p: &SessionProfile) -> String {
     format!("{scheme}://{}@{}:{}", p.username, p.host.to_lowercase(), p.port)
 }
 
+/// The saved password of `profile`, when it was saved for where the profile points now.
+/// `Err` holds the target it was saved for (empty when unknown, from an older version): the
+/// profile was changed since, for instance by editing its file, and the password must not
+/// follow it to another host.
+fn bound_secret(vault: &playterm_config::Vault, profile: &SessionProfile) -> Result<Option<Zeroizing<String>>, String> {
+    let Some(secret) = vault.get(&profile.id) else { return Ok(None) };
+    match vault.target(&profile.id) {
+        Some(saved) if saved == vault_target(profile) => Ok(Some(Zeroizing::new(secret.to_owned()))),
+        Some(saved) => Err(saved.to_owned()),
+        None => Err(String::new()),
+    }
+}
+
 /// A change to a saved password that waits for the vault to be unlocked.
 enum VaultTodo {
     /// The site was deleted or no longer saves its password.
@@ -823,8 +836,23 @@ impl PlaytermApp {
 
     /// Saves a copy of a site (with its stored password, if the vault is open). Returns the copy.
     fn duplicate_profile(&mut self, id: &str) -> Option<SessionProfile> {
-        let mut copy = self.store.get(id)?.duplicate();
-        let secret = self.vault.get(id).map(|s| Zeroizing::new(s.to_owned()));
+        let original = self.store.get(id)?.clone();
+        let mut copy = original.duplicate();
+        // Only a password saved for where the site points now goes with the copy: the copy is
+        // bound to its own target, so a changed target would otherwise launder the password.
+        let secret = match bound_secret(&self.vault, &original) {
+            Ok(secret) => secret,
+            Err(saved) => {
+                let now = vault_target(&original);
+                let saved = if saved.is_empty() { t("알 수 없음", "unknown").to_owned() } else { saved };
+                self.status = Some(tr!(
+                    "'{}' 의 접속 대상이 비밀번호를 저장할 때와 달라({saved} → {now}) 복제본에 비밀번호를 복사하지 않았습니다",
+                    "The target of '{}' differs from when its password was saved ({saved} → {now}), so the password was not copied",
+                    original.display_name()
+                ));
+                None
+            }
+        };
         copy.save_password &= secret.is_some();
         let r = self.store.upsert(copy.clone());
         self.report(t("사이트 저장 실패", "Could not save the site"), r);
@@ -2266,6 +2294,22 @@ impl eframe::App for PlaytermApp {
 #[cfg(test)]
 mod contrast_tests {
     use super::*;
+
+    #[test]
+    fn a_password_goes_only_where_it_was_saved_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = playterm_config::Vault::new(dir.path().join("vault.bin"));
+        vault.create("master").unwrap();
+        let site = SessionProfile { id: "a".into(), host: "db01".into(), port: 22, username: "ops".into(), ..Default::default() };
+        assert!(matches!(bound_secret(&vault, &site), Ok(None)), "no password saved");
+        vault.set("a", &vault_target(&site), "s3cret").unwrap();
+        assert_eq!(bound_secret(&vault, &site).unwrap().as_deref().map(String::as_str), Some("s3cret"));
+        // The file was changed to point elsewhere: the password is not handed out.
+        let moved = SessionProfile { host: "evil.example".into(), ..site.clone() };
+        assert_eq!(bound_secret(&vault, &moved).unwrap_err(), vault_target(&site));
+        let other_user = SessionProfile { username: "root".into(), ..site.clone() };
+        assert!(bound_secret(&vault, &other_user).is_err());
+    }
 
     /// WCAG relative luminance of a gray.
     fn luminance(gray: u8) -> f64 {
