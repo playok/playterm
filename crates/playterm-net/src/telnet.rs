@@ -278,7 +278,7 @@ pub(crate) async fn run(
                     writer.write_all(&received.reply).await?;
                 }
                 if !received.data.is_empty() {
-                    sink.send(SessionEvent::Data(received.data));
+                    sink.data(received.data).await;
                 }
             }
             cmd = commands.recv() => match cmd {
