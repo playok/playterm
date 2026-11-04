@@ -480,6 +480,10 @@ cargo run -p playterm-net --example dev_sshd -- --authorized-keys key.pub --sftp
 cargo run -p playterm -- ssh://tester@127.0.0.1:2222
 ```
 
+- Every pull request and push to `master` runs GitHub Actions (`.github/workflows/ci.yml`): clippy (`-D warnings`) and all tests on Windows and
+  macOS, the `playterm-net` tests on Linux.
+- The ZMODEM interop tests skip without lrzsz (`rz`/`sz`), but fail with `PLAYTERM_REQUIRE_LRZSZ=1` (CI installs lrzsz and sets it on macOS and Linux).
+
 ## License
 
 [MIT](LICENSE)
