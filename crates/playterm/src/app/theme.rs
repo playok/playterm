@@ -15,6 +15,26 @@ pub(super) fn apply_ui(ctx: &egui::Context, settings: &AppSettings) {
     ctx.all_styles_mut(readable_text);
 }
 
+/// WCAG contrast ratio of two colors (1 to 21), for the tests that keep the colors readable.
+#[cfg(test)]
+pub(crate) fn contrast(a: Color32, b: Color32) -> f32 {
+    let luminance = |c: Color32| {
+        let [r, g, b, _] = egui::Rgba::from(c).to_array();
+        0.2126 * r + 0.7152 * g + 0.0722 * b
+    };
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The color of simultaneous input (titles, frames, its notice): orange, darker on the light
+/// look so it reads there too (#159).
+pub(crate) fn broadcast_color(visuals: &egui::Visuals) -> Color32 {
+    if visuals.dark_mode { Color32::from_rgb(230, 140, 30) } else { Color32::from_rgb(158, 76, 0) }
+}
+
+/// Behind a modal dialog: the window dimmed enough that the dialog is where the eye goes (#154).
+pub(crate) const MODAL_BACKDROP: Color32 = Color32::from_black_alpha(150);
+
 /// Size of small UI text (hints, the status bar, the saved-passwords line). egui's 9 px is
 /// hard to read on 1× monitors.
 pub(super) const SMALL_TEXT: f32 = 12.0;
@@ -48,6 +68,8 @@ pub(super) fn soft_light() -> egui::Visuals {
     v.panel_fill = gray(234);
     v.window_fill = gray(240);
     v.extreme_bg_color = gray(246); // text fields
+    // Links dark enough to read on the light panels (#160).
+    v.hyperlink_color = Color32::from_rgb(0, 95, 184);
     v.code_bg_color = gray(222);
     let w = &mut v.widgets;
     w.noninteractive.weak_bg_fill = gray(234);
@@ -57,6 +79,9 @@ pub(super) fn soft_light() -> egui::Visuals {
         state.weak_bg_fill = gray(fill);
         state.bg_fill = gray(fill);
     }
+    // Text fields (and buttons) show their edge: the field is barely lighter than the dialog,
+    // and an edge needs 3:1 to be seen (#161).
+    w.inactive.bg_stroke = egui::Stroke::new(1.0, gray(130));
     v
 }
 
@@ -112,6 +137,34 @@ mod tests {
             }
             // Normal text stands out more than weak text.
             assert!(contrast(v.text_color(), v.panel_fill) > contrast(weak, v.panel_fill));
+        }
+    }
+
+    /// The colors fixed in #156, #158, #159, #160 and #161 read on both looks.
+    #[test]
+    fn themed_colors_keep_their_contrast() {
+        use playterm_config::TabColor;
+        for v in [readable_dark(), soft_light()] {
+            let look = if v.dark_mode { "dark" } else { "light" };
+            for c in TabColor::ALL.into_iter().map(crate::menu::color32).map(Some).chain([None]) {
+                let fill = crate::view::line_fill(&v, c);
+                let ratio = super::contrast(v.strong_text_color(), fill);
+                assert!(ratio >= 4.5, "{look}: connection line {c:?}: {ratio:.2}");
+            }
+            let orange = broadcast_color(&v);
+            for bg in [v.panel_fill, v.window_fill] {
+                let ratio = super::contrast(orange, bg);
+                assert!(ratio >= 4.5, "{look}: simultaneous input {ratio:.2}");
+            }
+            let ratio = super::contrast(v.hyperlink_color, v.window_fill);
+            assert!(ratio >= 4.5, "{look}: links {ratio:.2}");
+        }
+        let light = soft_light();
+        let ratio = super::contrast(light.widgets.inactive.bg_stroke.color, light.window_fill);
+        assert!(ratio >= 3.0, "light: text field edges {ratio:.2}");
+        for c in TabColor::ALL.into_iter().map(crate::menu::color32) {
+            let ratio = super::contrast(crate::dock::on_color(c), c);
+            assert!(ratio >= 4.5, "tab label chip on {c:?}: {ratio:.2}");
         }
     }
 }

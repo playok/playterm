@@ -237,7 +237,7 @@ impl Default for AppSettings {
         Self {
             font: Self::DEFAULT_FONT.into(),
             font_size: Self::DEFAULT_FONT_SIZE,
-            theme: "Campbell".into(),
+            theme: "auto".into(),
             scrollback: 10_000,
             toolbar: true,
             status_bar: true,

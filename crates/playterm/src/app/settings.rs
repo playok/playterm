@@ -4,11 +4,11 @@ use super::*;
 
 impl PlaytermApp {
     pub(super) fn term_setup(&self) -> TermSetup {
-        TermSetup { palette: Palette::from_theme(Theme::named(&self.settings.theme)), scrollback: self.settings.scrollback }
+        TermSetup { palette: Palette::from_theme(self.terminal_theme()), scrollback: self.settings.scrollback }
     }
 
     pub(super) fn view_style(&self) -> view::ViewStyle {
-        let selection = Theme::rgb(Theme::named(&self.settings.theme).selection);
+        let selection = Theme::rgb(self.terminal_theme().selection);
         let recent = self
             .settings
             .recent_sites
@@ -35,12 +35,6 @@ impl PlaytermApp {
             && let Err(e) = fonts::install(ctx, &new.font)
         {
             self.status = Some(e);
-        }
-        if new.theme != self.settings.theme {
-            let palette = Palette::from_theme(Theme::named(&new.theme));
-            for s in &mut self.sessions {
-                s.terminal.set_palette(palette.clone());
-            }
         }
         if new.scrollback != self.settings.scrollback {
             for s in &mut self.sessions {
@@ -79,6 +73,28 @@ impl PlaytermApp {
         while self.zoom_accum <= -1.0 {
             self.zoom_accum += 1.0;
             self.set_font_size(self.settings.font_size.ceil() - 1.0);
+        }
+    }
+}
+
+impl PlaytermApp {
+    /// The terminal color scheme in use: the setting's, or with "auto" the one that goes with
+    /// the windows' light or dark look (#162).
+    pub(super) fn terminal_theme(&self) -> &'static Theme {
+        Theme::effective(&self.settings.theme, self.dark)
+    }
+
+    /// Follows the windows' look (also when the system switches it) and gives the open tabs
+    /// the scheme that goes with it.
+    pub(super) fn sync_palettes(&mut self, ctx: &egui::Context) {
+        self.dark = ctx.theme() == egui::Theme::Dark;
+        let theme = self.terminal_theme();
+        if self.palette_theme != theme.name {
+            self.palette_theme = theme.name;
+            let palette = Palette::from_theme(theme);
+            for s in &mut self.sessions {
+                s.terminal.set_palette(palette.clone());
+            }
         }
     }
 }

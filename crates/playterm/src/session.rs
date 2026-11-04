@@ -648,6 +648,21 @@ impl Session {
         self.reconnect(net, waker);
     }
 
+    /// The tabs' titles as the tab bar shows them: a title several tabs have gets a number from
+    /// the second one on (`Local`, `Local 2`, `web01 2`), so they can be told apart (#150).
+    pub fn numbered_titles(sessions: &[Session]) -> Vec<String> {
+        let titles: Vec<String> = sessions.iter().map(Session::tab_title).collect();
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        titles
+            .iter()
+            .map(|title| {
+                let n = seen.entry(title.as_str()).or_insert(0);
+                *n += 1;
+                if *n == 1 { title.clone() } else { format!("{title} {n}") }
+            })
+            .collect()
+    }
+
     pub fn tab_title(&self) -> String {
         if let Some(name) = &self.name {
             return name.clone();
@@ -1431,7 +1446,8 @@ impl Session {
     pub fn prompt(&mut self) {
         self.console.set_width(self.terminal.cols());
         let folder = local_fs::display(&self.cwd);
-        self.console.set_prompt(format!("\x1b[1;36mplayterm\x1b[0m \x1b[34m{folder}\x1b[0m> "));
+        // Default colors (see `console::PROMPT`).
+        self.console.set_prompt(format!("\x1b[1mplayterm\x1b[0m {folder}> "));
         let mut out = String::new();
         self.console.prompt(&mut out);
         self.terminal.feed_local(&out);

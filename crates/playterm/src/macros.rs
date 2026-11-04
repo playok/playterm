@@ -296,7 +296,7 @@ impl MacroDialog {
     pub fn show(&mut self, ctx: &egui::Context) -> MacroDialogResult {
         let mut result = MacroDialogResult::Open;
         let problem = self.problem();
-        let modal = egui::Modal::new(egui::Id::unique("macro-dialog")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("macro-dialog")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
             ui.heading(t("매크로 관리", "Macros"));
             ui.add_space(6.0);
             // A modal has no height of its own: a body of a fixed size, or the separator between

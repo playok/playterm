@@ -14,6 +14,7 @@ impl eframe::App for PlaytermApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.guard_quit(&ctx);
+        self.sync_palettes(&ctx);
         let active_id = self.sessions.get(self.active).map(|s| s.id);
         let downloads = self.zmodem_dir.clone();
         let ask = self.settings.zmodem_ask;

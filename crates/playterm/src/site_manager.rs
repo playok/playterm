@@ -538,56 +538,57 @@ impl SiteManager {
         let prompt = self.folder_prompt.as_mut()?;
         let renaming = matches!(prompt, FolderPrompt::Rename { .. });
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::unique("site-folder-dialog")).show(ctx, |ui| {
-            ui.set_width(360.0);
-            match prompt {
-                FolderPrompt::New { parent, name, error } | FolderPrompt::Rename { parent, name, error, .. } => {
-                    ui.heading(if renaming { t("폴더 이름 바꾸기", "Rename folder") } else { t("새 폴더", "New folder") });
-                    if !parent.is_empty() {
-                        ui.weak(tr!("위치: {parent}", "In: {parent}"));
+        let modal =
+            egui::Modal::new(egui::Id::unique("site-folder-dialog")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
+                ui.set_width(360.0);
+                match prompt {
+                    FolderPrompt::New { parent, name, error } | FolderPrompt::Rename { parent, name, error, .. } => {
+                        ui.heading(if renaming { t("폴더 이름 바꾸기", "Rename folder") } else { t("새 폴더", "New folder") });
+                        if !parent.is_empty() {
+                            ui.weak(tr!("위치: {parent}", "In: {parent}"));
+                        }
+                        let field = ui.add(egui::TextEdit::singleline(name).hint_text(t("폴더 이름", "Folder name")));
+                        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        if !enter {
+                            field.request_focus();
+                        }
+                        if let Some(e) = error {
+                            ui.colored_label(ui.visuals().error_fg_color, e.as_str());
+                        }
+                        let ok = icon::primary(ui, icon::OK, t("확인", "OK"));
+                        let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
+                        if main.clicked() || enter {
+                            answer = Some(true);
+                        }
+                        if cancel.clicked() {
+                            answer = Some(false);
+                        }
                     }
-                    let field = ui.add(egui::TextEdit::singleline(name).hint_text(t("폴더 이름", "Folder name")));
-                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    if !enter {
-                        field.request_focus();
-                    }
-                    if let Some(e) = error {
-                        ui.colored_label(ui.visuals().error_fg_color, e.as_str());
-                    }
-                    let ok = icon::primary(ui, icon::OK, t("확인", "OK"));
-                    let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
-                    if main.clicked() || enter {
-                        answer = Some(true);
-                    }
-                    if cancel.clicked() {
-                        answer = Some(false);
+                    FolderPrompt::Delete { path } => {
+                        ui.heading(t("폴더 삭제", "Delete folder"));
+                        let parent = parent_folder(path);
+                        let up = if parent.is_empty() {
+                            t("최상위로", "the top level").to_owned()
+                        } else {
+                            tr!("'{}' 폴더로", "'{}'", parent)
+                        };
+                        ui.label(tr!("'{}' 폴더를 삭제할까요?", "Delete the folder '{}'?", folder_name(path)));
+                        ui.weak(tr!(
+                            "안의 사이트 {}개와 하위 폴더는 지워지지 않고 {up} 옮겨집니다.",
+                            "Its {} sites and the folders inside it are not deleted: they move to {up}.",
+                            store.sites_in_folder(path)
+                        ));
+                        let delete = icon::danger(ui, icon::DELETE, t("삭제", "Delete"));
+                        let (main, cancel) = icon::ok_cancel_row(ui, delete, true, icon::cancel());
+                        if main.clicked() {
+                            answer = Some(true);
+                        }
+                        if cancel.clicked() {
+                            answer = Some(false);
+                        }
                     }
                 }
-                FolderPrompt::Delete { path } => {
-                    ui.heading(t("폴더 삭제", "Delete folder"));
-                    let parent = parent_folder(path);
-                    let up = if parent.is_empty() {
-                        t("최상위로", "the top level").to_owned()
-                    } else {
-                        tr!("'{}' 폴더로", "'{}'", parent)
-                    };
-                    ui.label(tr!("'{}' 폴더를 삭제할까요?", "Delete the folder '{}'?", folder_name(path)));
-                    ui.weak(tr!(
-                        "안의 사이트 {}개와 하위 폴더는 지워지지 않고 {up} 옮겨집니다.",
-                        "Its {} sites and the folders inside it are not deleted: they move to {up}.",
-                        store.sites_in_folder(path)
-                    ));
-                    let delete = icon::danger(ui, icon::DELETE, t("삭제", "Delete"));
-                    let (main, cancel) = icon::ok_cancel_row(ui, delete, true, icon::cancel());
-                    if main.clicked() {
-                        answer = Some(true);
-                    }
-                    if cancel.clicked() {
-                        answer = Some(false);
-                    }
-                }
-            }
-        });
+            });
         if answer.is_none() && modal.should_close() {
             answer = Some(false);
         }
@@ -691,23 +692,24 @@ impl SiteManager {
             Cancel,
         }
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::unique("site-manager-unsaved")).show(ctx, |ui| {
-            ui.set_width(340.0);
-            ui.heading(t("저장하지 않은 변경 사항", "Unsaved changes"));
-            ui.label(tr!("'{name}' 의 변경 사항을 저장할까요?", "Save the changes to '{name}'?"));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.add(icon::primary(ui, icon::SAVE, t("저장", "Save"))).clicked() {
-                    answer = Some(Answer::Save);
-                }
-                if ui.add(icon::button(icon::DONT_SAVE, t("저장 안 함", "Don't save"))).clicked() {
-                    answer = Some(Answer::Discard);
-                }
-                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
-                    answer = Some(Answer::Cancel);
-                }
+        let modal =
+            egui::Modal::new(egui::Id::unique("site-manager-unsaved")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
+                ui.set_width(340.0);
+                ui.heading(t("저장하지 않은 변경 사항", "Unsaved changes"));
+                ui.label(tr!("'{name}' 의 변경 사항을 저장할까요?", "Save the changes to '{name}'?"));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.add(icon::primary(ui, icon::SAVE, t("저장", "Save"))).clicked() {
+                        answer = Some(Answer::Save);
+                    }
+                    if ui.add(icon::button(icon::DONT_SAVE, t("저장 안 함", "Don't save"))).clicked() {
+                        answer = Some(Answer::Discard);
+                    }
+                    if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
+                        answer = Some(Answer::Cancel);
+                    }
+                });
             });
-        });
         if answer.is_none() && modal.should_close() {
             answer = Some(Answer::Cancel);
         }

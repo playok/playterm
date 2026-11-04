@@ -730,7 +730,7 @@ fn start_screen(ui: &mut egui::Ui, rect: Rect, style: &ViewStyle) -> Option<crat
                     ui.add_space(8.0);
                 }
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add(crate::icon::primary(ui, crate::icon::ADD, t("빠른 연결", "Quick Connect"))).clicked() {
+                    if ui.add(crate::icon::primary(ui, crate::icon::QUICK_CONNECT, t("빠른 연결", "Quick Connect"))).clicked() {
                         command = Some(Command::QuickConnect);
                     }
                     if ui.add(crate::icon::button(crate::icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {

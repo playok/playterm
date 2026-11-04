@@ -22,9 +22,25 @@ impl Theme {
     /// The default scheme (close to Windows Terminal "Campbell").
     pub const DEFAULT: &'static Theme = &THEMES[0];
 
+    /// The setting that follows the app's light or dark look (see [`Theme::effective`]).
+    pub const AUTO: &'static str = "auto";
+    /// The schemes [`Theme::AUTO`] picks on a dark and a light look.
+    pub const AUTO_DARK: &'static str = "Campbell";
+    pub const AUTO_LIGHT: &'static str = "One Half Light";
+
     /// A built-in scheme by name, or the default one.
     pub fn named(name: &str) -> &'static Theme {
         THEMES.iter().find(|t| t.name.eq_ignore_ascii_case(name)).unwrap_or(Theme::DEFAULT)
+    }
+
+    /// The scheme the setting `name` means with the app's look `dark`: [`Theme::AUTO`] follows
+    /// it, any other name is that scheme.
+    pub fn effective(name: &str, dark: bool) -> &'static Theme {
+        if name.eq_ignore_ascii_case(Self::AUTO) {
+            Theme::named(if dark { Self::AUTO_DARK } else { Self::AUTO_LIGHT })
+        } else {
+            Theme::named(name)
+        }
     }
 
     pub fn rgb(hex: u32) -> Rgb {
@@ -249,6 +265,11 @@ mod tests {
         assert_eq!(Theme::named("no such theme").name, "Campbell");
         let names: std::collections::HashSet<_> = THEMES.iter().map(|t| t.name).collect();
         assert_eq!(names.len(), THEMES.len(), "theme names are unique");
+        // "auto" follows the app's look (#162); a named scheme stays put.
+        assert_eq!(Theme::effective("auto", true).name, Theme::AUTO_DARK);
+        assert_eq!(Theme::effective("auto", false).name, Theme::AUTO_LIGHT);
+        assert_eq!(Theme::effective("Dracula", false).name, "Dracula");
+        assert!(THEMES.iter().any(|t| t.name == Theme::AUTO_LIGHT), "the light pick exists");
     }
 
     #[test]

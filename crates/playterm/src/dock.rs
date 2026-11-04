@@ -18,10 +18,19 @@ use crate::rdp_view;
 use crate::session::{Session, SessionState};
 use crate::view::{self, ViewOutput, ViewStyle};
 
-/// Tab title color of sessions receiving simultaneous input.
-pub const BROADCAST_COLOR: Color32 = Color32::from_rgb(230, 140, 30);
 /// Width of the frame around the panes that take part in simultaneous input.
 const BROADCAST_FRAME: f32 = 2.0;
+/// Longest tab title; longer ones end in "…".
+const TAB_TITLE_MAX: f32 = 180.0;
+/// Size of a tab's ✕.
+const CLOSE_SIZE: f32 = 16.0;
+
+/// Black or white, whichever reads better on `background`.
+pub fn on_color(background: Color32) -> Color32 {
+    let [r, g, b, _] = egui::Rgba::from(background).to_array();
+    let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    if luminance > 0.179 { Color32::BLACK } else { Color32::WHITE }
+}
 
 /// How a tab shows its connection state: a shape as well as a color, so the states stay
 /// apart without telling red from green, and a word in the tooltip.
@@ -232,8 +241,10 @@ impl Dock {
                 }
             });
         }
+        let titles = Session::numbered_titles(sessions);
         let dragged = self.tree.dragged_id(ui.ctx()).and_then(|t| self.tree.tiles.get_pane(&t).copied());
         let mut behavior = DockView {
+            titles,
             sessions,
             detached: self.window != crate::app::MAIN_WINDOW,
             active: active_id,
@@ -265,6 +276,8 @@ impl Dock {
 /// Draws the tabs and panes for [`egui_tiles`].
 struct DockView<'a> {
     sessions: &'a mut [Session],
+    /// The sessions' titles, numbered where they repeat (in `sessions` order).
+    titles: Vec<String>,
     /// The dock of a window the tabs were moved out to (not the main window).
     detached: bool,
     active: Option<u64>,
@@ -308,9 +321,9 @@ impl Behavior<u64> for DockView<'_> {
         // gets a faint one, as its title stays plain (#164).
         if self.broadcast && session.in_broadcast {
             let stroke = if session.state == SessionState::Connected {
-                Stroke::new(BROADCAST_FRAME, BROADCAST_COLOR)
+                Stroke::new(BROADCAST_FRAME, crate::app::theme::broadcast_color(ui.visuals()))
             } else {
-                Stroke::new(1.0, BROADCAST_COLOR.gamma_multiply(0.35))
+                Stroke::new(1.0, crate::app::theme::broadcast_color(ui.visuals()).gamma_multiply(0.35))
             };
             ui.painter().rect_stroke(pane_rect, 0.0, stroke, StrokeKind::Inside);
         }
@@ -327,7 +340,7 @@ impl Behavior<u64> for DockView<'_> {
     }
 
     fn tab_title_for_pane(&mut self, pane: &u64) -> WidgetText {
-        self.index(*pane).map(|i| self.sessions[i].tab_title()).unwrap_or_default().into()
+        self.index(*pane).map(|i| self.titles[i].clone()).unwrap_or_default().into()
     }
 
     fn tab_ui(&mut self, tiles: &mut Tiles<u64>, ui: &mut Ui, id: Id, tile_id: TileId, state: &TabState) -> Response {
@@ -343,7 +356,7 @@ impl Behavior<u64> for DockView<'_> {
         let font = TextStyle::Button.resolve(ui.style());
         let mark = StateMark::of(&s.state);
         let text_color = if receiving {
-            BROADCAST_COLOR
+            crate::app::theme::broadcast_color(ui.visuals())
         } else if s.state == SessionState::Closed && !state.active {
             // A closed tab in the background takes no input: its title steps back. (The tab on
             // show keeps a readable title on its highlight; its icon says it is closed.)
@@ -353,25 +366,77 @@ impl Behavior<u64> for DockView<'_> {
         } else {
             ui.visuals().text_color()
         };
-        let mut parts = vec![(mark.icon.rich_text().color(mark.color), font.clone()), (RichText::new(" "), font.clone())];
-        if let Some(label) = s.site_label() {
-            let color = s.tab_color.map_or(ui.visuals().strong_text_color(), crate::menu::color32);
-            parts.push((RichText::new(format!("{label} ")).strong().color(color), font.clone()));
-        }
-        if s.is_logging() {
-            parts.push((RichText::new("REC ").color(Color32::from_rgb(220, 60, 60)), TextStyle::Small.resolve(ui.style())));
-        }
-        parts.push((RichText::new(s.tab_title()).color(text_color), font.clone()));
-        let galleys: Vec<_> = parts
-            .into_iter()
-            .map(|(text, font)| WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font))
-            .collect();
-        // No close button: it was easy to hit by mistake. Tabs close from their context menu,
-        // with a middle click or with Ctrl+Shift+W.
+        // Icon, label chip, REC, title: the title alone is cut short ("…") past
+        // [`TAB_TITLE_MAX`] (#130); the full one is in the tooltip.
+        let title_galley = WidgetText::from(RichText::new(&self.titles[i]).color(text_color)).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            TAB_TITLE_MAX,
+            font.clone(),
+        );
+        let truncated = title_galley.elided;
+        let mark_galley = WidgetText::from(mark.icon.rich_text().color(mark.color)).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            font.clone(),
+        );
+        // The site's label on a chip of its color, in black or white (whichever reads), so it
+        // stays readable on the tinted tab (#156).
+        let chip = s.site_label().zip(s.tab_color.map(menu::color32)).map(|(label, color)| {
+            let galley = WidgetText::from(RichText::new(label).strong().color(on_color(color))).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                font.clone(),
+            );
+            (galley, color)
+        });
+        let plain_label = if chip.is_none() {
+            s.site_label().map(|label| {
+                WidgetText::from(RichText::new(label).strong().color(ui.visuals().strong_text_color())).into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Extend),
+                    f32::INFINITY,
+                    font.clone(),
+                )
+            })
+        } else {
+            None
+        };
+        let rec = s.is_logging().then(|| {
+            WidgetText::from(RichText::new("REC").color(Color32::from_rgb(220, 60, 60))).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                TextStyle::Small.resolve(ui.style()),
+            )
+        });
+        let gap = 5.0;
+        let chip_pad = 4.0;
         let margin = 8.0;
-        let width = galleys.iter().map(|g| g.size().x).sum::<f32>() + 2.0 * margin;
+        let mut width = margin + mark_galley.size().x + gap;
+        if let Some((g, _)) = &chip {
+            width += g.size().x + 2.0 * chip_pad + gap;
+        }
+        if let Some(g) = &plain_label {
+            width += g.size().x + gap;
+        }
+        if let Some(g) = &rec {
+            width += g.size().x + gap;
+        }
+        // Room for the ✕ is always kept, so the tab does not change width when it shows.
+        width += title_galley.size().x + gap + CLOSE_SIZE + margin / 2.0;
         let (_, rect) = ui.allocate_space(egui::vec2(width, ui.available_height()));
         let response = ui.interact(rect, id, Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Grab);
+        // The ✕: only on the tab under the pointer and the active one, so it is found where
+        // expected but not hit by mistake on the others (#129).
+        let close_rect = Rect::from_center_size(
+            egui::pos2(rect.right() - margin / 2.0 - CLOSE_SIZE / 2.0, rect.center().y),
+            egui::vec2(CLOSE_SIZE, CLOSE_SIZE),
+        );
+        let show_close = (response.hovered() || focused || ui.rect_contains_pointer(close_rect)) && !state.is_being_dragged;
+        let close = show_close.then(|| ui.interact(close_rect, id.with("close"), Sense::click()));
 
         if ui.is_rect_visible(rect) && !state.is_being_dragged {
             let visuals = ui.visuals();
@@ -395,17 +460,39 @@ impl Behavior<u64> for DockView<'_> {
                 painter.rect_filled(bar, 1.5, color);
             }
             let mut x = rect.left() + margin;
-            for galley in galleys {
-                let pos = egui::pos2(x, rect.center().y - galley.size().y / 2.0);
-                x += galley.size().x;
+            let draw = |galley: std::sync::Arc<egui::Galley>, x: &mut f32| {
+                let pos = egui::pos2(*x, rect.center().y - galley.size().y / 2.0);
+                *x += galley.size().x + gap;
                 painter.galley(pos, galley, text_color);
+            };
+            draw(mark_galley, &mut x);
+            if let Some((galley, color)) = chip {
+                let size = galley.size() + egui::vec2(2.0 * chip_pad, 2.0);
+                let chip_rect = Rect::from_min_size(egui::pos2(x, rect.center().y - size.y / 2.0), size);
+                painter.rect_filled(chip_rect, 3.0, color);
+                x += chip_pad;
+                draw(galley, &mut x);
+                x += chip_pad;
+            }
+            if let Some(galley) = plain_label {
+                draw(galley, &mut x);
+            }
+            if let Some(galley) = rec {
+                draw(galley, &mut x);
+            }
+            draw(title_galley, &mut x);
+            if let Some(close) = &close {
+                let color = if close.hovered() { visuals.strong_text_color() } else { visuals.weak_text_color() };
+                if close.hovered() {
+                    painter.rect_filled(close_rect, 3.0, visuals.widgets.hovered.bg_fill);
+                }
+                painter.text(close_rect.center(), egui::Align2::CENTER_CENTER, "✕", TextStyle::Small.resolve(ui.style()), color);
             }
         }
 
-        if response.middle_clicked() {
+        if close.as_ref().is_some_and(Response::clicked) || response.middle_clicked() {
             self.out.command = Some(Command::Close(i));
-        }
-        if response.clicked() {
+        } else if response.clicked() {
             self.out.activate = Some(s.id);
         }
 
@@ -413,8 +500,8 @@ impl Behavior<u64> for DockView<'_> {
         response.context_menu(|ui| {
             menu::session_items(ui, command, i, s);
             ui.separator();
-            let mark = if s.in_broadcast { "✔" } else { "  " };
-            if ui.button(format!("{mark} {}", t("동시 입력에 포함", "Include in simultaneous input"))).clicked() {
+            let item = egui::Button::new((menu::lead(ui, s.in_broadcast), t("동시 입력에 포함", "Include in simultaneous input")));
+            if ui.add(item).clicked() {
                 *command = Some(Command::ToggleInBroadcast(i));
                 ui.close();
             }
@@ -429,12 +516,12 @@ impl Behavior<u64> for DockView<'_> {
             }
             entries.push((t("다시 연결", "Reconnect"), Command::Reconnect(i)));
             for (label, c) in entries {
-                if ui.button(label).clicked() {
+                if ui.add(egui::Button::new((menu::lead(ui, false), label))).clicked() {
                     *command = Some(c);
                     ui.close();
                 }
             }
-            if ui.add_enabled(s.can_disconnect(), egui::Button::new(t("연결 끊기", "Disconnect"))).clicked() {
+            if ui.add_enabled(s.can_disconnect(), egui::Button::new((menu::lead(ui, false), t("연결 끊기", "Disconnect")))).clicked() {
                 *command = Some(Command::Disconnect(i));
                 ui.close();
             }
@@ -442,24 +529,37 @@ impl Behavior<u64> for DockView<'_> {
             for (label, c) in
                 [(t("닫기", "Close"), Command::Close(i)), (t("다른 탭 모두 닫기", "Close other tabs"), Command::CloseOthers(i))]
             {
-                if ui.button(label).clicked() {
+                if ui.add(egui::Button::new((menu::lead(ui, false), label))).clicked() {
                     *command = Some(c);
                     ui.close();
                 }
             }
         });
-        response.on_hover_text(format!(
-            "{}\n{}",
-            mark.label,
-            if cfg!(windows) {
-                t(
-                    "끌어서 옆이나 위아래로 놓으면 화면을 나눠 봅니다. 창 밖에 놓으면 새 창으로, 다른 창에 놓으면 그 창으로 옮깁니다",
-                    "Drag beside, above or below another tab to split the view; drop outside the window for a new window, or on another window to move it there",
-                )
-            } else {
-                t("끌어서 옆이나 위아래로 놓으면 화면을 나눠 봅니다", "Drag beside, above or below another tab to split the view")
+        // What the tab is, not how to drag it (#131; that is in Help → Keyboard shortcuts): its
+        // state and where it connects, with the full title when the tab shows it cut short.
+        let what = if s.has_target() { format!("{} · {}", mark.label, s.target()) } else { mark.label.to_owned() };
+        response.on_hover_text(if truncated { format!("{}\n{what}", self.titles[i]) } else { what })
+    }
+
+    /// A "▾" at the right of a tab bar with several tabs: the list of them, to pick one when the
+    /// bar is too narrow to show them all (#130).
+    fn top_bar_right_ui(&mut self, tiles: &Tiles<u64>, ui: &mut Ui, _tile_id: TileId, tabs: &egui_tiles::Tabs, _scroll: &mut f32) {
+        let entries: Vec<(u64, usize)> =
+            tabs.children.iter().filter_map(|c| tiles.get_pane(c)).filter_map(|&p| self.index(p).map(|i| (p, i))).collect();
+        if entries.len() < 2 {
+            return;
+        }
+        let list = ui.menu_button("▾", |ui| {
+            for (id, i) in entries {
+                let mark = StateMark::of(&self.sessions[i].state);
+                let item = icon::button(mark.icon, self.titles[i].as_str()).selected(self.active == Some(id));
+                if ui.add(item).clicked() {
+                    self.out.activate = Some(id);
+                    ui.close();
+                }
             }
-        ))
+        });
+        list.response.on_hover_text(t("이 그룹의 탭 목록", "The tabs of this group"));
     }
 
     fn tab_bar_height(&self, style: &egui::Style) -> f32 {

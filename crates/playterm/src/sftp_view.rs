@@ -598,61 +598,62 @@ impl SftpBrowser {
     fn show_prompt(&mut self, ctx: &egui::Context, id: u64) {
         let Some(prompt) = &mut self.prompt else { return };
         let mut done: Option<bool> = None;
-        let modal = egui::Modal::new(egui::Id::unique(("sftp-prompt", id))).show(ctx, |ui| {
-            ui.set_width(340.0);
-            let enter = |ui: &egui::Ui, r: &egui::Response| r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            match prompt {
-                Prompt::NewFolder(name) => {
-                    ui.heading(t("새 폴더", "New folder"));
-                    let r = ui.text_edit_singleline(name);
-                    // Check Enter before re-focusing: Enter makes the field give up focus.
-                    if enter(ui, &r) { done = Some(true) } else { r.request_focus() }
-                }
-                Prompt::Rename { from, to } => {
-                    ui.heading(tr!("'{from}' 이름 바꾸기", "Rename '{from}'"));
-                    let r = ui.text_edit_singleline(to);
-                    if enter(ui, &r) { done = Some(true) } else { r.request_focus() }
-                }
-                Prompt::Delete(items) => {
-                    ui.heading(t("삭제", "Delete"));
-                    const SHOWN: usize = 8;
-                    let mut names: Vec<&str> = items.iter().take(SHOWN).map(|(n, _)| n.as_str()).collect();
-                    let more = items.len().saturating_sub(SHOWN);
-                    let more_text = tr!("외 {more}개", "and {more} more");
-                    if more > 0 {
-                        names.push(&more_text);
+        let modal =
+            egui::Modal::new(egui::Id::unique(("sftp-prompt", id))).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
+                ui.set_width(340.0);
+                let enter = |ui: &egui::Ui, r: &egui::Response| r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                match prompt {
+                    Prompt::NewFolder(name) => {
+                        ui.heading(t("새 폴더", "New folder"));
+                        let r = ui.text_edit_singleline(name);
+                        // Check Enter before re-focusing: Enter makes the field give up focus.
+                        if enter(ui, &r) { done = Some(true) } else { r.request_focus() }
                     }
-                    if items.len() > 1 {
-                        ui.label(tr!("{}개를 삭제할까요?", "Delete {} items?", items.len()));
-                        ui.weak(names.join(", "));
-                    } else {
-                        ui.label(tr!("{} 을(를) 삭제할까요?", "Delete {}?", names.join(", ")));
+                    Prompt::Rename { from, to } => {
+                        ui.heading(tr!("'{from}' 이름 바꾸기", "Rename '{from}'"));
+                        let r = ui.text_edit_singleline(to);
+                        if enter(ui, &r) { done = Some(true) } else { r.request_focus() }
                     }
-                    if items.iter().any(|(_, dir)| *dir) {
-                        ui.colored_label(
-                            ui.visuals().warn_fg_color,
-                            t("폴더는 안의 내용까지 모두 삭제됩니다.", "Folders are deleted with everything in them."),
-                        );
+                    Prompt::Delete(items) => {
+                        ui.heading(t("삭제", "Delete"));
+                        const SHOWN: usize = 8;
+                        let mut names: Vec<&str> = items.iter().take(SHOWN).map(|(n, _)| n.as_str()).collect();
+                        let more = items.len().saturating_sub(SHOWN);
+                        let more_text = tr!("외 {more}개", "and {more} more");
+                        if more > 0 {
+                            names.push(&more_text);
+                        }
+                        if items.len() > 1 {
+                            ui.label(tr!("{}개를 삭제할까요?", "Delete {} items?", items.len()));
+                            ui.weak(names.join(", "));
+                        } else {
+                            ui.label(tr!("{} 을(를) 삭제할까요?", "Delete {}?", names.join(", ")));
+                        }
+                        if items.iter().any(|(_, dir)| *dir) {
+                            ui.colored_label(
+                                ui.visuals().warn_fg_color,
+                                t("폴더는 안의 내용까지 모두 삭제됩니다.", "Folders are deleted with everything in them."),
+                            );
+                        }
                     }
                 }
-            }
-            ui.add_space(8.0);
-            let deleting = matches!(prompt, Prompt::Delete(_));
-            let ok = if deleting {
-                icon::danger(ui, icon::DELETE, t("삭제", "Delete"))
-            } else {
-                icon::primary(ui, icon::OK, t("확인", "OK"))
-            };
-            let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
-            {
-                if main.clicked() {
-                    done = Some(true);
+                ui.add_space(8.0);
+                let deleting = matches!(prompt, Prompt::Delete(_));
+                let ok = if deleting {
+                    icon::danger(ui, icon::DELETE, t("삭제", "Delete"))
+                } else {
+                    icon::primary(ui, icon::OK, t("확인", "OK"))
+                };
+                let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
+                {
+                    if main.clicked() {
+                        done = Some(true);
+                    }
+                    if cancel.clicked() {
+                        done = Some(false);
+                    }
                 }
-                if cancel.clicked() {
-                    done = Some(false);
-                }
-            }
-        });
+            });
         if modal.should_close() && done.is_none() {
             done = Some(false);
         }

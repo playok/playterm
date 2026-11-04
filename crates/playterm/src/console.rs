@@ -11,7 +11,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::local_fs::ListOptions;
 use crate::profile_form::parse_url;
 
-pub const PROMPT: &str = "\x1b[1;36mplayterm\x1b[0m> ";
+/// In the terminal's own foreground color (bold), which every color scheme keeps readable; a
+/// fixed ANSI color is faint on some (cyan on light schemes, blue on dark ones: #163).
+pub const PROMPT: &str = "\x1b[1mplayterm\x1b[0m> ";
 
 /// The `help` text in the current language.
 pub fn help() -> &'static str {
