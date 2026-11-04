@@ -36,6 +36,7 @@ mod site_tree;
 mod status_bar;
 mod template_dialog;
 mod toast;
+mod toolbar;
 #[cfg(test)]
 mod ui_tests;
 mod update;

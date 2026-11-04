@@ -256,6 +256,7 @@ impl PlaytermApp {
             sessions: &self.sessions,
             active: self.active,
             show_sidebar: self.show_sidebar,
+            show_toolbar: self.settings.toolbar,
             show_status_bar: self.settings.status_bar,
             show_compose_bar: self.settings.compose_bar,
             vault: self.vault_state(),
@@ -274,21 +275,22 @@ impl PlaytermApp {
         }
     }
 
+    /// The toolbar, and what the app has to say (simultaneous input, the last error or message).
     pub(super) fn tab_bar(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
         ui.horizontal_wrapped(|ui| {
-            // A plain icon: showing the list is a secondary switch, not the first thing to look
-            // at (the list has its own "Sites" heading).
-            let (glyph, tip) = if self.show_sidebar {
-                (icon::SIDEBAR_HIDE, t("사이트 목록 숨기기 (Ctrl+Shift+B)", "Hide the site list (Ctrl+Shift+B)"))
-            } else {
-                (icon::SIDEBAR_SHOW, t("사이트 목록 보이기 (Ctrl+Shift+B)", "Show the site list (Ctrl+Shift+B)"))
-            };
-            if ui.add(icon::icon_button(glyph).frame(false)).on_hover_text(tip).clicked() {
-                self.show_sidebar = !self.show_sidebar;
-            }
-            if ui.add(icon::button(icon::ADD, t("빠른 연결", "Quick Connect"))).on_hover_text("Ctrl+Shift+T").clicked() {
-                action = Some(Command::QuickConnect);
+            if self.settings.toolbar {
+                let state = crate::toolbar::ToolbarState {
+                    active: self.sessions.get(self.active),
+                    i: self.active,
+                    sidebar: self.show_sidebar,
+                    sftp_panel: self.sftp_panel,
+                    compose_bar: self.settings.compose_bar,
+                    broadcast: self.broadcast,
+                    copy_hint: clip_keys::copy_hint(&self.settings.clipboard),
+                    paste_hint: clip_keys::paste_hint(&self.settings.clipboard),
+                };
+                action = crate::toolbar::show(ui, &state);
             }
             if self.broadcast {
                 ui.separator();
@@ -297,20 +299,6 @@ impl PlaytermApp {
                 ui.label(RichText::new(text).strong().color(BROADCAST_COLOR)).on_hover_text(tip);
                 if ui.add(icon::button(icon::TURN_OFF, t("끄기", "Turn off"))).on_hover_text("Ctrl+Shift+I").clicked() {
                     action = Some(Command::ToggleBroadcast);
-                }
-            }
-            if self.sessions.get(self.active).is_some_and(|s| s.can_sftp())
-                && ui
-                    .add(icon::button(icon::SFTP, "SFTP"))
-                    .on_hover_text(t("SFTP 탐색기 (Ctrl+Shift+X)", "SFTP explorer (Ctrl+Shift+X)"))
-                    .clicked()
-            {
-                action = Some(Command::ToggleSftpPanel);
-            }
-            if self.sessions.get(self.active).is_some_and(|s| s.state == SessionState::Closed) {
-                ui.separator();
-                if ui.add(icon::button(icon::RECONNECT, t("다시 연결", "Reconnect"))).clicked() {
-                    action = Some(Command::Reconnect(self.active));
                 }
             }
             if let Some(status) = &self.status {

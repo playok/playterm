@@ -76,7 +76,10 @@ impl eframe::App for PlaytermApp {
         let autofocus = !modal_open && self.site_manager.is_none();
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
-        egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
+        // Hidden with the toolbar while there is nothing to say.
+        if self.settings.toolbar || self.broadcast || self.status.is_some() || self.info.is_some() {
+            egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
+        }
         // Added before the side panel so it spans the whole window width.
         if self.settings.status_bar {
             let session = self.sessions.get(self.active);
