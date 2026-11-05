@@ -2,7 +2,7 @@
 rem Checks, tests and packages playterm into dist\:
 rem   dist\playterm-<version>-windows-<arch>.zip and dist\SHA256SUMS.txt
 rem
-rem   release.cmd              ARM64 and x64, executables compressed with UPX
+rem   release.cmd              ARM64 and x64, standard and optional UPX executables
 rem   release.cmd x64          one architecture (arm64 or x64)
 rem   release.cmd noupx        without UPX compression (also: release.cmd x64 noupx)
 rem   release.cmd dirty        package even with uncommitted changes (not for a real release)
@@ -17,7 +17,7 @@ setlocal
 cd /d "%~dp0"
 
 set "ARCH="
-set "UPX_FLAG=-Upx"
+set "UPX_FLAG=-BothVariants"
 set "ALLOW_DIRTY="
 :args
 if "%~1"=="" goto :args_done

@@ -570,62 +570,80 @@ pub struct Relogin {
 /// whose password can be saved ("save password", stored once the login succeeds).
 pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Option<Relogin> {
     let mut submit = None;
-    egui::Modal::new(egui::Id::unique(("auth", session.id))).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
-        let pending = session.auth.as_mut().expect("checked by caller");
-        ui.set_width(380.0);
-        ui.heading(&pending.prompt.title);
-        if !pending.prompt.instructions.trim().is_empty() {
-            ui.label(pending.prompt.instructions.trim());
-        }
-        ui.add_space(6.0);
-        let mut enter = false;
-        let original_user = pending.prompt.user.clone();
-        if let Some(original) = &original_user {
-            ui.label(t("사용자", "User"));
-            let edit = ui.add(egui::TextEdit::singleline(&mut pending.user));
-            enter |= edit.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter));
-            if pending.user.trim() != original.as_str() {
-                ui.weak(t(
-                    "사용자를 바꾸면 새로 연결해서 그 사용자로 로그인합니다.",
-                    "Changing the user connects again and logs in as that user.",
-                ));
-                if saved_site {
-                    ui.checkbox(&mut pending.save_user, t("사이트 정보에도 저장", "Save it in the site too"));
+    let mut skip_key = false;
+    let modal =
+        egui::Modal::new(egui::Id::unique(("auth", session.id))).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
+            let pending = session.auth.as_mut().expect("checked by caller");
+            ui.set_width(380.0);
+            ui.heading(&pending.prompt.title);
+            if !pending.prompt.instructions.trim().is_empty() {
+                ui.label(pending.prompt.instructions.trim());
+            }
+            ui.add_space(6.0);
+            let mut enter = false;
+            let original_user = pending.prompt.user.clone();
+            if let Some(original) = &original_user {
+                ui.label(t("사용자", "User"));
+                let edit = ui.add(egui::TextEdit::singleline(&mut pending.user));
+                enter |= edit.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter));
+                if pending.user.trim() != original.as_str() {
+                    ui.weak(t(
+                        "사용자를 바꾸면 새로 연결해서 그 사용자로 로그인합니다.",
+                        "Changing the user connects again and logs in as that user.",
+                    ));
+                    if saved_site {
+                        ui.checkbox(&mut pending.save_user, t("사이트 정보에도 저장", "Save it in the site too"));
+                    }
+                }
+                ui.add_space(4.0);
+            }
+            for (i, field) in pending.prompt.fields.iter().enumerate() {
+                ui.label(&field.label);
+                let edit = ui.add(egui::TextEdit::singleline(&mut *pending.answers[i]).password(!field.echo));
+                if !field.echo {
+                    secret_field(ui, &edit);
+                }
+                // Check before (re)focusing: Enter makes the field surrender focus this frame.
+                enter |= edit.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter));
+                if i == 0 && !pending.focus_requested {
+                    edit.request_focus();
+                    pending.focus_requested = true;
                 }
             }
-            ui.add_space(4.0);
-        }
-        for (i, field) in pending.prompt.fields.iter().enumerate() {
-            ui.label(&field.label);
-            let edit = ui.add(egui::TextEdit::singleline(&mut *pending.answers[i]).password(!field.echo));
-            if !field.echo {
-                secret_field(ui, &edit);
+            if saved_site && pending.is_password() {
+                ui.add_space(4.0);
+                ui.checkbox(&mut pending.save_password, t("비밀번호 저장", "Save password")).on_hover_text(t(
+                    "로그인에 성공하면 마스터 비밀번호로 암호화해 저장합니다. 다음부터는 묻지 않습니다.",
+                    "Once the login succeeds, it is saved in the vault (encrypted with the master password) and not asked again.",
+                ));
             }
-            // Check before (re)focusing: Enter makes the field surrender focus this frame.
-            enter |= edit.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter));
-            if i == 0 && !pending.focus_requested {
-                edit.request_focus();
-                pending.focus_requested = true;
+            ui.add_space(10.0);
+            if pending.prompt.can_skip && ui.button(t("이 키 건너뛰기", "Skip this key")).clicked() {
+                skip_key = true;
             }
-        }
-        if saved_site && pending.is_password() {
-            ui.add_space(4.0);
-            ui.checkbox(&mut pending.save_password, t("비밀번호 저장", "Save password")).on_hover_text(t(
-                "로그인에 성공하면 마스터 비밀번호로 암호화해 저장합니다. 다음부터는 묻지 않습니다.",
-                "Once the login succeeds, it is saved in the vault (encrypted with the master password) and not asked again.",
-            ));
-        }
-        ui.add_space(10.0);
-        let user_ok = original_user.is_none() || !pending.user.trim().is_empty();
-        let ok = icon::primary(ui, icon::OK, t("확인", "OK"));
-        let (main, cancel) = icon::ok_cancel_row(ui, ok, user_ok, icon::cancel());
-        if main.clicked() || (enter && user_ok) {
-            submit = Some(true);
-        }
-        if cancel.clicked() {
-            submit = Some(false);
-        }
-    });
+            let user_ok = original_user.is_none() || !pending.user.trim().is_empty();
+            let ok = icon::primary(ui, icon::OK, t("확인", "OK"));
+            let (main, cancel) = icon::ok_cancel_row(ui, ok, user_ok, icon::cancel());
+            if main.clicked() || (enter && user_ok) {
+                submit = Some(true);
+            }
+            if cancel.clicked() {
+                submit = Some(false);
+            }
+        });
+    // Authentication may arrive while the reconnect button is still being released.
+    // Do not treat that opening click on the backdrop as a cancellation.
+    if modal.response.should_close()
+        || (modal.is_top_modal && !modal.any_popup_open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)))
+    {
+        submit = Some(false);
+        skip_key = false;
+    }
+    if skip_key {
+        session.save_password_on_login(None);
+        session.auth.take()?.prompt.skip();
+        return None;
+    }
     let ok = submit?;
     let pending = session.auth.take()?;
     // Saved only after a successful login; a later prompt (wrong password) replaces it.
@@ -639,10 +657,7 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
         && &user != original
     {
         // A password prompt's answer is that user's password; other questions start over.
-        let password = match pending.prompt.fields.as_slice() {
-            [only] if !only.echo => pending.answers.first().map(|p| p.to_string()).filter(|p| !p.is_empty()),
-            _ => None,
-        };
+        let password = pending.is_password().then(|| pending.answers.first().map(|p| p.to_string()).filter(|p| !p.is_empty())).flatten();
         pending.prompt.answer(None);
         return Some(Relogin { user, password, save: pending.save_user });
     }

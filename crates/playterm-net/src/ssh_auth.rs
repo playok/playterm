@@ -20,10 +20,15 @@ use russh::{MethodKind, MethodSet};
 use tokio::io::{AsyncRead, AsyncWrite};
 use zeroize::Zeroizing;
 
-use crate::session::{ConnectParams, EventSink, PromptField};
+use crate::session::{ConnectParams, EventSink, PromptField, PromptResponse};
 use crate::ssh::ClientHandler;
 
 type Session = client::Handle<ClientHandler>;
+
+struct AuthState {
+    methods: MethodSet,
+    second_factor: bool,
+}
 
 const MAX_AUTH_ROUNDS: usize = 3;
 const MAX_PASSPHRASE_TRIES: usize = 3;
@@ -41,15 +46,17 @@ pub(crate) async fn authenticate(session: &mut Session, params: &ConnectParams, 
         bail!(t("SSH 사용자 이름이 필요합니다", "An SSH user name is required"));
     }
 
-    let mut methods = match session.authenticate_none(user).await? {
+    let mut state = match session.authenticate_none(user).await? {
         AuthResult::Success => return Ok(()),
-        AuthResult::Failure { remaining_methods, .. } => remaining_methods,
+        AuthResult::Failure { remaining_methods, partial_success } => {
+            AuthState { methods: remaining_methods, second_factor: partial_success }
+        }
     };
 
-    if allows(&methods, MethodKind::PublicKey) && public_keys(session, params, sink, &mut methods).await? {
+    if allows(&state.methods, MethodKind::PublicKey) && public_keys(session, params, sink, &mut state).await? {
         return Ok(());
     }
-    passwords(session, params, sink, methods).await
+    passwords(session, params, sink, state).await
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -62,28 +69,28 @@ enum KeyAttempt {
     Rejected {
         keep_trying: bool,
     },
-    /// The key could not be used (missing file, cancelled passphrase, agent refused).
+    /// The key could not be used (missing file, explicit skip, agent refused).
     Unusable,
 }
 
-async fn public_keys(session: &mut Session, params: &ConnectParams, sink: &EventSink, methods: &mut MethodSet) -> anyhow::Result<bool> {
+async fn public_keys(session: &mut Session, params: &ConnectParams, sink: &EventSink, state: &mut AuthState) -> anyhow::Result<bool> {
     if let Some(path) = &params.identity_file {
-        match key_file(session, params, sink, path, true, methods).await? {
+        match key_file(session, params, sink, path, true, state).await? {
             KeyAttempt::Accepted => return Ok(true),
             KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
             _ => {}
         }
     }
 
-    if params.use_agent && agents(session, params, methods).await? {
+    if params.use_agent && agents(session, params, state).await? {
         return Ok(true);
     }
-    if !allows(methods, MethodKind::PublicKey) {
+    if state.second_factor || !allows(&state.methods, MethodKind::PublicKey) {
         return Ok(false);
     }
 
     for path in &params.default_identity_files {
-        match key_file(session, params, sink, path, false, methods).await? {
+        match key_file(session, params, sink, path, false, state).await? {
             KeyAttempt::Accepted => return Ok(true),
             KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
             _ => {}
@@ -100,12 +107,13 @@ async fn rsa_hash(session: &Session, algorithm: Algorithm) -> anyhow::Result<Opt
     Ok(session.best_supported_rsa_hash().await?.unwrap_or(Some(HashAlg::Sha256)))
 }
 
-fn record(result: AuthResult, methods: &mut MethodSet) -> KeyAttempt {
+fn record(result: AuthResult, state: &mut AuthState) -> KeyAttempt {
     match result {
         AuthResult::Success => KeyAttempt::Accepted,
-        AuthResult::Failure { remaining_methods, .. } => {
-            *methods = remaining_methods;
-            KeyAttempt::Rejected { keep_trying: allows(methods, MethodKind::PublicKey) }
+        AuthResult::Failure { remaining_methods, partial_success } => {
+            state.methods = remaining_methods;
+            state.second_factor |= partial_success;
+            KeyAttempt::Rejected { keep_trying: !state.second_factor && allows(&state.methods, MethodKind::PublicKey) }
         }
     }
 }
@@ -116,7 +124,7 @@ async fn key_file(
     sink: &EventSink,
     path: &Path,
     explicit: bool,
-    methods: &mut MethodSet,
+    state: &mut AuthState,
 ) -> anyhow::Result<KeyAttempt> {
     let text = match tokio::fs::read_to_string(path).await {
         Ok(text) => Zeroizing::new(text),
@@ -127,12 +135,12 @@ async fn key_file(
             return Ok(KeyAttempt::Unusable);
         }
     };
-    let Some(key) = decode_key(&text, path, sink).await else {
+    let Some(key) = decode_key(&text, path, sink).await? else {
         return Ok(KeyAttempt::Unusable);
     };
     let hash = rsa_hash(session, key.algorithm()).await?;
     let result = session.authenticate_publickey(params.username.as_str(), PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await?;
-    Ok(record(result, methods))
+    Ok(record(result, state))
 }
 
 /// Whether a key that failed to decode without a passphrase is simply encrypted.
@@ -147,40 +155,45 @@ fn looks_encrypted(text: &str, error: &keys::Error) -> bool {
             .is_some_and(|v| v.trim() != "none")
 }
 
-/// Decodes a private key, asking for its passphrase if needed. `None` = skip this key.
-async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> Option<PrivateKey> {
+/// `None` skips an unusable key; cancellation aborts the entire connection.
+async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> anyhow::Result<Option<PrivateKey>> {
     match keys::decode_secret_key(text, None) {
-        Ok(key) => return Some(key),
+        Ok(key) => return Ok(Some(key)),
         Err(e) if !looks_encrypted(text, &e) => {
             sink.notice(tr!("키 파일을 해석할 수 없습니다 ({}): {e}", "Cannot parse the key file ({}): {e}", path.display()));
-            return None;
+            return Ok(None);
         }
         Err(_) => {}
     }
 
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     for _ in 0..MAX_PASSPHRASE_TRIES {
-        // Cancelling skips this key; authentication continues with the next method.
-        let answers = sink
-            .prompt(
+        let response = sink
+            .prompt_response(
                 tr!("키 암호: {name}", "Key passphrase: {name}"),
                 path.display().to_string(),
                 vec![PromptField { label: t("암호 (passphrase)", "Passphrase").into(), echo: false }],
                 None,
                 false,
+                true,
             )
-            .await?;
+            .await;
+        let answers = match response {
+            PromptResponse::Answers(answers) => answers,
+            PromptResponse::Skipped => return Ok(None),
+            PromptResponse::Cancelled => bail!(t("인증이 취소되었습니다", "Authentication cancelled")),
+        };
         let passphrase = Zeroizing::new(answers.into_iter().next().unwrap_or_default());
         match keys::decode_secret_key(text, Some(&passphrase)) {
-            Ok(key) => return Some(key),
+            Ok(key) => return Ok(Some(key)),
             Err(_) => sink.notice(tr!("{name}: 암호가 틀렸습니다", "{name}: wrong passphrase")),
         }
     }
-    None
+    bail!(t("키 암호 시도 횟수를 초과했습니다", "Too many key passphrase attempts"))
 }
 
 /// Tries every key of the reachable agents. Returns `true` on success.
-async fn agents(session: &mut Session, params: &ConnectParams, methods: &mut MethodSet) -> anyhow::Result<bool> {
+async fn agents(session: &mut Session, params: &ConnectParams, state: &mut AuthState) -> anyhow::Result<bool> {
     #[cfg(windows)]
     {
         // An explicitly configured pipe (or SSH_AUTH_SOCK naming a pipe, as set by e.g.
@@ -194,17 +207,17 @@ async fn agents(session: &mut Session, params: &ConnectParams, methods: &mut Met
                     // destination-constrained keys, so the error is ignored.
                     let _ = agent.bind_session(binding, false).await;
                 }
-                if agent_keys(session, params, agent, methods).await? {
+                if agent_keys(session, params, agent, state).await? {
                     return Ok(true);
                 }
             }
             Err(e) => log::debug!("no SSH agent at {pipe}: {e}"),
         }
 
-        if params.agent_pipe.is_none() && allows(methods, MethodKind::PublicKey) {
+        if !state.second_factor && params.agent_pipe.is_none() && allows(&state.methods, MethodKind::PublicKey) {
             match AgentClient::connect_pageant().await {
                 Ok(agent) => {
-                    if agent_keys(session, params, agent, methods).await? {
+                    if agent_keys(session, params, agent, state).await? {
                         return Ok(true);
                     }
                 }
@@ -214,7 +227,7 @@ async fn agents(session: &mut Session, params: &ConnectParams, methods: &mut Met
     }
     #[cfg(unix)]
     for socket in unix_agent_sockets(params.agent_pipe.as_deref(), std::env::var("SSH_AUTH_SOCK").ok().as_deref()) {
-        if !allows(methods, MethodKind::PublicKey) {
+        if state.second_factor || !allows(&state.methods, MethodKind::PublicKey) {
             break;
         }
         match AgentClient::connect_uds(&socket).await {
@@ -222,7 +235,7 @@ async fn agents(session: &mut Session, params: &ConnectParams, methods: &mut Met
                 if let Some(binding) = session.agent_session_binding() {
                     let _ = agent.bind_session(binding, false).await;
                 }
-                if agent_keys(session, params, agent, methods).await? {
+                if agent_keys(session, params, agent, state).await? {
                     return Ok(true);
                 }
             }
@@ -230,7 +243,7 @@ async fn agents(session: &mut Session, params: &ConnectParams, methods: &mut Met
         }
     }
     #[cfg(not(any(windows, unix)))]
-    let _ = (session, params, methods);
+    let _ = (session, params, state);
     Ok(false)
 }
 
@@ -256,7 +269,7 @@ async fn agent_keys<S>(
     session: &mut Session,
     params: &ConnectParams,
     mut agent: AgentClient<S>,
-    methods: &mut MethodSet,
+    state: &mut AuthState,
 ) -> anyhow::Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -273,7 +286,7 @@ where
         let AgentIdentity::PublicKey { key, comment } = identity else { continue };
         let hash = rsa_hash(session, key.algorithm()).await?;
         match session.authenticate_publickey_with(params.username.as_str(), key, hash, &mut agent).await {
-            Ok(result) => match record(result, methods) {
+            Ok(result) => match record(result, state) {
                 KeyAttempt::Accepted => return Ok(true),
                 KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
                 _ => {}
@@ -287,13 +300,14 @@ where
 // -------------------------------------------------------------------------------------------------
 // Passwords and keyboard-interactive
 
-async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSink, mut methods: MethodSet) -> anyhow::Result<()> {
+async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSink, state: AuthState) -> anyhow::Result<()> {
+    let AuthState { mut methods, mut second_factor } = state;
     let user = params.username.as_str();
     // Once a method was accepted but the server wants more (`partial success`), what follows
     // is a second factor such as a one-time code: the stored password must not be spent on it,
     // and what the user types there must not replace the saved password.
-    let mut second_factor = false;
     if let Some(password) = &params.password
+        && !second_factor
         && allows(&methods, MethodKind::Password)
     {
         match session.authenticate_password(user, password).await? {
@@ -316,8 +330,12 @@ async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSi
     while attempts < MAX_AUTH_ROUNDS {
         let outcome = if keyboard_interactive_usable && allows(&methods, MethodKind::KeyboardInteractive) {
             match keyboard_interactive(session, user, &target, &mut autofill, second_factor, sink).await? {
-                Outcome::Unavailable(remaining) => {
+                Outcome::Unavailable(remaining, partial_success) => {
                     keyboard_interactive_usable = false;
+                    second_factor |= partial_success;
+                    if second_factor {
+                        autofill = None;
+                    }
                     methods = remaining;
                     continue;
                 }
@@ -330,7 +348,7 @@ async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSi
                     String::new(),
                     vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
                     Some(user),
-                    true,
+                    !second_factor,
                 )
                 .await
             else {
@@ -360,7 +378,7 @@ async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSi
                 autofill = None;
                 methods = remaining;
             }
-            Outcome::Unavailable(remaining) | Outcome::Failure(remaining, false) => {
+            Outcome::Unavailable(remaining, _) | Outcome::Failure(remaining, false) => {
                 sink.notice(t("인증 실패, 다시 시도하세요.", "Authentication failed, try again."));
                 methods = remaining;
             }
@@ -374,7 +392,7 @@ enum Outcome {
     /// Not (yet) logged in; `true` when the answer was accepted but more is required.
     Failure(MethodSet, bool),
     /// Rejected before any question was asked: the method is not really available.
-    Unavailable(MethodSet),
+    Unavailable(MethodSet, bool),
     Cancelled,
 }
 
@@ -395,7 +413,7 @@ async fn keyboard_interactive(
                 return Ok(if asked {
                     Outcome::Failure(remaining_methods, partial_success)
                 } else {
-                    Outcome::Unavailable(remaining_methods)
+                    Outcome::Unavailable(remaining_methods, partial_success)
                 });
             }
             KeyboardInteractiveAuthResponse::InfoRequest { name, instructions, prompts } => {
@@ -404,6 +422,7 @@ async fn keyboard_interactive(
                     Vec::new()
                 } else if let [only] = prompts.as_slice()
                     && !only.echo
+                    && password_question(&only.prompt)
                     && let Some(password) = autofill.take()
                 {
                     vec![password]
@@ -411,8 +430,9 @@ async fn keyboard_interactive(
                     let title = if name.is_empty() { tr!("{target} 인증", "Authentication for {target}") } else { name };
                     let fields: Vec<PromptField> =
                         prompts.into_iter().map(|p| PromptField { label: p.prompt.trim().to_owned(), echo: p.echo }).collect();
-                    // A lone hidden question is the password, unless a factor was accepted.
-                    let account_password = !second_factor && matches!(fields.as_slice(), [only] if !only.echo);
+                    // Ambiguous hidden prompts (OTP, PIN, etc.) must not save or autofill a password.
+                    let account_password =
+                        !second_factor && matches!(fields.as_slice(), [only] if !only.echo && password_question(&only.label));
                     match sink.prompt(title, instructions, fields, Some(user), account_password).await {
                         Some(answers) => answers,
                         None => return Ok(Outcome::Cancelled),
@@ -424,9 +444,34 @@ async fn keyboard_interactive(
     }
 }
 
+fn password_question(label: &str) -> bool {
+    matches!(label.trim().to_ascii_lowercase().trim_end_matches(':').trim(), "password" | "비밀번호")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ambiguous_hidden_questions_are_not_saved_passwords() {
+        assert!(password_question("Password: "));
+        assert!(password_question("비밀번호:"));
+        for label in ["Verification code:", "One-time password:", "OTP", "PIN:", "Challenge:"] {
+            assert!(!password_question(label), "{label}");
+        }
+    }
+
+    #[test]
+    fn key_partial_success_survives_later_failures() {
+        let mut state = AuthState { methods: MethodSet::from(&[MethodKind::PublicKey][..]), second_factor: false };
+        let result = record(
+            AuthResult::Failure { remaining_methods: MethodSet::from(&[MethodKind::KeyboardInteractive][..]), partial_success: true },
+            &mut state,
+        );
+        assert!(matches!(result, KeyAttempt::Rejected { keep_trying: false }));
+        record(AuthResult::Failure { remaining_methods: MethodSet::from(&[MethodKind::Password][..]), partial_success: false }, &mut state);
+        assert!(state.second_factor);
+    }
 
     #[test]
     fn detects_encrypted_key_formats() {

@@ -2,7 +2,8 @@
 #
 #   pwsh scripts\package.ps1                 # ARM64 + x64
 #   pwsh scripts\package.ps1 -Targets x64    # x64 only
-#   pwsh scripts\package.ps1 -Upx            # executables compressed with UPX
+#   pwsh scripts\package.ps1 -Upx            # optional -upx.zip packages only
+#   pwsh scripts\package.ps1 -BothVariants   # standard + UPX from the same build
 #   pwsh scripts\package.ps1 -Sign           # SHA256SUMS.txt must be signed (fails without a key)
 #   pwsh scripts\package.ps1 -CodeSign       # playterm.exe code-signed (fails without a certificate)
 #   pwsh scripts\package.ps1 -BuildOnly      # only build (playterm and playterm-sign), no packages
@@ -35,12 +36,14 @@ param(
     [ValidateSet("arm64", "x64")]
     [string[]]$Targets = @("arm64", "x64"),
     [switch]$Upx,
+    [switch]$BothVariants,
     [switch]$Sign,
     [switch]$CodeSign,
     [switch]$BuildOnly,
     [switch]$SkipBuild
 )
-if ($BuildOnly -and ($SkipBuild -or $Upx -or $Sign -or $CodeSign)) { throw "-BuildOnly only builds: no -SkipBuild, -Upx, -Sign or -CodeSign" }
+if ($BothVariants -and $Upx) { throw 'Choose -BothVariants or -Upx' }
+if ($BuildOnly -and ($SkipBuild -or $Upx -or $BothVariants -or $Sign -or $CodeSign)) { throw "-BuildOnly only builds: no packaging options" }
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
@@ -158,7 +161,7 @@ function Invoke-CodeSign([string]$SignTool, [hashtable]$Cert, [string]$Exe) {
     if ($env:WINDOWS_CERT_PASSWORD) { $arguments += @("/p", $env:WINDOWS_CERT_PASSWORD) }
     & $SignTool @arguments $Exe | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $Exe" }
-    & $SignTool verify /pa $Exe | Out-Host
+    & $SignTool verify /pa /all /v /tw $Exe | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "signtool verify failed for $Exe" }
 }
 
@@ -177,7 +180,7 @@ if ($BuildOnly) {
 }
 
 # Before any build, so a missing or bad UPX stops the run early.
-$upxExe = if ($Upx) { Get-Upx } else { $null }
+$upxExe = if ($Upx -or $BothVariants) { Get-Upx } else { $null }
 # UPX takes default options from $env:UPX (e.g. -k leaves a backup file that would be zipped).
 Remove-Item Env:UPX -ErrorAction SilentlyContinue
 # Likewise for code signing: no certificate or signtool stops the run before building.
@@ -195,35 +198,41 @@ foreach ($arch in $Targets) {
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed for $triple" }
     }
 
-    $stage = Join-Path $dist "playterm-$version-windows-$arch"
-    Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory $stage | Out-Null
-    $docs = @("README.md", "README.en.md", "LICENSE")
-    Copy-Item "target\$triple\release\playterm.exe" $stage
-    Copy-Item $docs $stage
+    # Both variants come from the same pristine build; compression and signing only touch copies.
+    $variants = if ($BothVariants) { @($false, $true) } else { @([bool]$Upx) }
+    foreach ($compressed in $variants) {
+        $suffix = if ($compressed) { '-upx' } else { '' }
+        $stage = Join-Path $dist "playterm-$version-windows-$arch$suffix"
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory $stage | Out-Null
+        $docs = @("README.md", "README.en.md", "LICENSE")
+        Copy-Item "target\$triple\release\playterm.exe" $stage
+        Copy-Item $docs $stage
 
-    if ($upxExe) {
-        $exe = Join-Path $stage "playterm.exe"
-        $before = (Get-Item $exe).Length
-        if ((Invoke-Upx $upxExe @("--best", "-q", $exe)) -ne 0) { throw "UPX failed for $arch" }
-        if ((Invoke-Upx $upxExe @("-t", "-q", $exe)) -ne 0) { throw "UPX test failed for $arch" }
-        Write-Host ("   UPX: {0:N1} MB -> {1:N1} MB" -f ($before / 1MB), ((Get-Item $exe).Length / 1MB))
+        if ($compressed) {
+            $exe = Join-Path $stage "playterm.exe"
+            $before = (Get-Item $exe).Length
+            if ((Invoke-Upx $upxExe @("--best", "-q", $exe)) -ne 0) { throw "UPX failed for $arch" }
+            if ((Invoke-Upx $upxExe @("-t", "-q", $exe)) -ne 0) { throw "UPX test failed for $arch" }
+            Write-Host ("   UPX: {0:N1} MB -> {1:N1} MB" -f ($before / 1MB), ((Get-Item $exe).Length / 1MB))
+        }
+        if ($signTool) {
+            Write-Host "   code signing"
+            Invoke-CodeSign $signTool $cert (Join-Path $stage "playterm.exe")
+        }
+        $extra = @(Get-ChildItem $stage | Where-Object { $_.Name -notin (@("playterm.exe") + $docs) })
+        if ($extra) { throw "unexpected files in the package: $($extra.Name -join ', ')" }
+
+        $zip = "$stage.zip"
+        Remove-Item -Force $zip -ErrorAction SilentlyContinue
+        Compress-Archive -Path "$stage\*" -DestinationPath $zip
+        Remove-Item -Recurse -Force $stage
+
+        $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+        & "$PSScriptRoot/verify-windows-package.ps1" -Path $zip -ExpectedSha256 $hash -RequireCodeSignature:$CodeSign -ReportPath "$zip.verification.json" | Out-Host
+        $sums += "$hash  $(Split-Path $zip -Leaf)"
+        Write-Host ("   {0} ({1:N1} MB)" -f (Split-Path $zip -Leaf), ((Get-Item $zip).Length / 1MB))
     }
-    if ($signTool) {
-        Write-Host "   code signing"
-        Invoke-CodeSign $signTool $cert (Join-Path $stage "playterm.exe")
-    }
-    $extra = @(Get-ChildItem $stage | Where-Object { $_.Name -notin (@("playterm.exe") + $docs) })
-    if ($extra) { throw "unexpected files in the package: $($extra.Name -join ', ')" }
-
-    $zip = "$stage.zip"
-    Remove-Item -Force $zip -ErrorAction SilentlyContinue
-    Compress-Archive -Path "$stage\*" -DestinationPath $zip
-    Remove-Item -Recurse -Force $stage
-
-    $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-    $sums += "$hash  $(Split-Path $zip -Leaf)"
-    Write-Host ("   {0} ({1:N1} MB)" -f (Split-Path $zip -Leaf), ((Get-Item $zip).Length / 1MB))
 }
 $sumsFile = Join-Path $dist "SHA256SUMS.txt"
 $sums | Set-Content $sumsFile -Encoding ascii

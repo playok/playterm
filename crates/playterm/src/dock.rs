@@ -111,7 +111,7 @@ impl Dock {
             self.tree.remove_recursively(tile);
         }
 
-        let group = self.group_of(self.shown_active).or_else(|| self.group_of(active)).or_else(|| self.any_group());
+        let mut group = self.group_of(self.shown_active).or_else(|| self.group_of(active)).or_else(|| self.any_group());
         for s in sessions.iter().filter(|s| s.window == window) {
             if self.tree.tiles.find_pane(&s.id).is_some() {
                 continue;
@@ -121,6 +121,7 @@ impl Dock {
                 Some(Tile::Container(Container::Tabs(tabs))) => tabs.add_child(tile),
                 _ => {
                     let tabs = self.tree.tiles.insert_tab_tile(vec![tile]);
+                    group = Some(tabs);
                     self.tree.root = Some(match self.tree.root {
                         Some(root) => self.tree.tiles.insert_horizontal_tile(vec![root, tabs]),
                         None => tabs,
@@ -641,6 +642,18 @@ mod tests {
             .collect();
         dock.tree.root = Some(if tabs.len() == 1 { tabs[0] } else { tiles.insert_horizontal_tile(tabs) });
         dock
+    }
+
+    #[test]
+    fn sessions_added_before_first_frame_share_one_tab_group() {
+        let setup = crate::session::TermSetup { palette: playterm_term::Palette::default(), scrollback: 100 };
+        let sessions: Vec<_> = (1..=30).map(|id| Session::local(id, 80, 24, &setup)).collect();
+        let mut dock = Dock::default();
+        dock.sync(&sessions, Some(30));
+        assert!(!dock.is_split(), "startup URLs must not create thirty narrow columns");
+        assert_eq!(dock.tree.tiles.iter().filter(|(_, tile)| matches!(tile, Tile::Pane(_))).count(), 30);
+        dock.sync(&sessions, Some(1));
+        assert!(!dock.is_split());
     }
 
     #[test]
