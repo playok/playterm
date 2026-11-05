@@ -16,10 +16,10 @@ encoding_rs = "0.8.44"
 env_logger = "0.11.11"
 log = "0.4.35"
 memmap2 = "0.9.12"
-playterm-config = { version = "0.5.0", path = "../playterm-config" }
-playterm-i18n = { version = "0.5.0", path = "../playterm-i18n" }
-playterm-net = { version = "0.5.0", path = "../playterm-net" }
-playterm-term = { version = "0.5.0", path = "../playterm-term" }
+playterm-config = { version = "0.6.0", path = "../playterm-config" }
+playterm-i18n = { version = "0.6.0", path = "../playterm-i18n" }
+playterm-net = { version = "0.6.0", path = "../playterm-net" }
+playterm-term = { version = "0.6.0", path = "../playterm-term" }
 rfd = "0.17.2"
 ring = "0.17.14"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -32,7 +32,7 @@ zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2
 
 [dev-dependencies]
 # The SSH test server, for the screen-flow tests.
-playterm-net = { version = "0.5.0", path = "../playterm-net", features = ["testing"] }
+playterm-net = { version = "0.6.0", path = "../playterm-net", features = ["testing"] }
 egui_kittest = { version = "0.37.0", features = ["eframe"] }
 tempfile = "3.27.0"
 winit = { version = "0.30.13", default-features = false }

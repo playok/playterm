@@ -2,8 +2,8 @@
 
 **English** | [한국어](README.md)
 
-This README describes development on master. See [release notes](https://github.com/playok/playterm/releases) for shipped features,
-and [the next release draft](docs/releases/next.md) for changes after v0.5.0 that have not shipped.
+This README describes development on master. See [the v0.6.0 changes](docs/releases/v0.6.0.md)
+and [release notes](https://github.com/playok/playterm/releases) for shipped features and update notes.
 
 **One window for every box you manage — SSH, Telnet, serial consoles and Windows Remote Desktop, in tabs.**
 
