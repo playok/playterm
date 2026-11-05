@@ -1,0 +1,20 @@
+{
+  "run": "20261105T143712Z",
+  "status": "passed",
+  "source_commit": "c6fd4b462f01aa64f83afae0fa9d2c2163c90c23",
+  "fixture_commit": "f694a1de63d06e39ee59774c6e904abfb41d0161",
+  "exe_sha256": "a94aba7137c0a507ceea8720d8376d625ae0555b44a832fd50d105c626241ec6",
+  "fixture_sha256": "25f1f5b476107f6899502ea87e0bb1782e813fe6fa83580eefe7a4b455c47694",
+  "requested_seconds": 28800,
+  "tabs": 30,
+  "started_utc": "2026-11-05T14:37:13.4301347Z",
+  "app_pid": 1556,
+  "worker_pid": 25120,
+  "elapsed_seconds": 28814.208,
+  "samples": 955,
+  "last_private_bytes": 765370368,
+  "exit_seconds": 0.2689396,
+  "server_active_after_exit": 0,
+  "private_growth_ratio": 1.0007478111659207,
+  "completed_utc": "2026-11-05T22:37:32.0713257Z"
+}
