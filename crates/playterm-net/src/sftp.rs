@@ -423,7 +423,7 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     let part = remote_temp_path(remote, "part")?;
     // A file being replaced keeps its permissions (an executable script, a private file): the
     // temporary file is created with them, so its data is never open to more than the old was.
-    let permissions = sftp.metadata(remote).await.ok().and_then(|old| old.permissions).map(|mode| mode & 0o7777);
+    let permissions = existing_remote_file(sftp, remote).await?.and_then(|old| old.permissions).map(|mode| mode & 0o7777);
     let attributes = russh_sftp::protocol::FileAttributes { permissions, ..russh_sftp::protocol::FileAttributes::empty() };
     // Exclusive: never an existing file, nor a link to one.
     let flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
@@ -456,6 +456,38 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     }
 }
 
+/// What is at `remote` before a file upload replaces it, without following a link: nothing
+/// (`None`), or a plain file. Anything else there (a folder, a link, a device) is refused before
+/// anything is created on the server, as is a name whose type cannot be told: the upload would
+/// otherwise move it aside under a hidden backup name.
+async fn existing_remote_file(sftp: &SftpSession, remote: &str) -> anyhow::Result<Option<russh_sftp::protocol::FileAttributes>> {
+    use russh_sftp::client::error::Error;
+    use russh_sftp::protocol::{FileType, StatusCode};
+    let attrs = match sftp.symlink_metadata(remote).await {
+        Ok(attrs) => attrs,
+        Err(Error::Status(status)) if status.status_code == StatusCode::NoSuchFile => return Ok(None),
+        Err(e) => anyhow::bail!(tr!(
+            "{remote} 에 이미 있는 항목을 확인할 수 없어 업로드하지 않았습니다 ({e})",
+            "Not uploaded: cannot tell what is already at {remote} ({e})"
+        )),
+    };
+    match attrs.permissions.map(|_| attrs.file_type()) {
+        Some(FileType::File) => Ok(Some(attrs)),
+        Some(FileType::Dir) => anyhow::bail!(tr!(
+            "같은 이름의 원격 폴더가 있어 업로드하지 않았습니다: {remote}",
+            "Not uploaded: there is a folder of that name: {remote}"
+        )),
+        Some(FileType::Symlink) => anyhow::bail!(tr!(
+            "같은 이름의 원격 링크가 있어 업로드하지 않았습니다: {remote}",
+            "Not uploaded: there is a link of that name: {remote}"
+        )),
+        _ => anyhow::bail!(tr!(
+            "같은 이름의 원격 항목이 일반 파일이 아니라 업로드하지 않았습니다: {remote}",
+            "Not uploaded: what is at {remote} is not a plain file"
+        )),
+    }
+}
+
 /// Renames the complete upload `part` onto `remote`, never deleting the file already there
 /// before the new one has taken its name.
 ///
@@ -468,13 +500,22 @@ async fn replace_remote(sftp: &SftpSession, part: &str, remote: &str) -> anyhow:
         Ok(()) => return Ok(()),
         Err(e) => e,
     };
-    if !sftp.try_exists(remote).await.unwrap_or(false) {
-        // Not an existing target that got in the way: the upload is of no use then.
-        let r = sftp.rename(part, remote).await;
-        if r.is_err() {
-            let _ = sftp.remove_file(part).await;
+    // Only a plain file is moved aside (checked again: it may have changed since the upload
+    // began); a folder or anything else there stays as it is.
+    match existing_remote_file(sftp, remote).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            // Not an existing target that got in the way: the upload is of no use then.
+            let r = sftp.rename(part, remote).await;
+            if r.is_err() {
+                let _ = sftp.remove_file(part).await;
+            }
+            return r.with_context(|| tr!("{remote} 을(를) 만들 수 없습니다 ({first})", "Cannot create {remote} ({first})"));
         }
-        return r.with_context(|| tr!("{remote} 을(를) 만들 수 없습니다 ({first})", "Cannot create {remote} ({first})"));
+        Err(e) => {
+            let _ = sftp.remove_file(part).await;
+            return Err(e);
+        }
     }
     let backup = remote_temp_path(remote, "old")?;
     if let Err(e) = sftp.rename(remote, backup.as_str()).await {

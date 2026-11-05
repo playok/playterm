@@ -1055,6 +1055,63 @@ fn sftp_upload_replaces_an_existing_file_only_when_complete() {
     }
 }
 
+/// Every path under `dir` with its contents (folders as `None`), sorted.
+fn tree(dir: &std::path::Path) -> Vec<(String, Option<Vec<u8>>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_owned()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            let rel = p.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/");
+            if p.is_dir() {
+                stack.push(p);
+                out.push((rel, None));
+            } else {
+                out.push((rel, Some(std::fs::read(&p).unwrap())));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn sftp_a_file_upload_never_moves_a_folder_of_that_name() {
+    let fx = Fixture::new("sftp-file-onto-dir", &[]);
+    fx.trust_host();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+    let root = fx.dir.join("sftp");
+    std::fs::create_dir_all(root.join("reports").join("2026")).unwrap();
+    std::fs::write(root.join("reports").join("2026").join("q3.txt"), "kept").unwrap();
+    std::fs::create_dir_all(root.join("empty")).unwrap();
+    let before = tree(&root);
+
+    let local = fx.dir.join("local");
+    std::fs::create_dir_all(&local).unwrap();
+    for name in ["reports", "empty"] {
+        std::fs::write(local.join(name), b"a plain file").unwrap();
+        let id = sftp.upload(&local.join(name), &format!("/{name}"));
+        match transfer_result(&sftp, id) {
+            TransferState::Failed(e) => assert!(e.contains(name), "{e}"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+    assert_eq!(tree(&root), before, "the folders, what is in them, and no .part or .old left");
+
+    // A plain file of that name next to them is still replaced, a new one created.
+    std::fs::write(root.join("notes.txt"), "old").unwrap();
+    std::fs::write(local.join("notes.txt"), "new").unwrap();
+    let id = sftp.upload(&local.join("notes.txt"), "/notes.txt");
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(root.join("notes.txt")).unwrap(), "new");
+    let id = sftp.upload(&local.join("notes.txt"), "/fresh.txt");
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(root.join("fresh.txt")).unwrap(), "new");
+    assert_eq!(upload_parts(&root), Vec::<String>::new());
+}
+
 /// Leftover hidden files of uploads (`.part`) and replacements (`.old`) of `name` in `dir`,
 /// with their contents.
 fn leftovers(dir: &std::path::Path, name: &str) -> Vec<(String, Vec<u8>)> {
