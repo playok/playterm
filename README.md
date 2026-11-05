@@ -2,8 +2,8 @@
 
 [English](README.en.md) | **한국어**
 
-이 README는 개발 중인 master 기준입니다. 배포 버전 기능은 [릴리스별 설명](https://github.com/playok/playterm/releases)을,
-v0.5.0 이후 미배포 변경은 [다음 릴리스 변경 내역](docs/releases/next.md)을 확인하세요.
+이 README는 개발 중인 master 기준입니다. [v0.6.0 변경 내역](docs/releases/v0.6.0.md)과
+[릴리스별 설명](https://github.com/playok/playterm/releases)에서 배포 버전의 기능과 주의사항을 확인하세요.
 
 **관리하는 모든 장비를 한 창에서 — SSH, Telnet, 시리얼 콘솔, Windows 원격 데스크톱을 탭으로.**
 
