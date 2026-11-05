@@ -63,6 +63,8 @@ Windows ARM64의 실제 개발 앱에서 8 MiB 전송을 시작하고 루프백 
 
 `scripts/test-openssh.sh`는 기존 공개 키·셸·SFTP·키+PAM 검사에 실제 OpenSSH의 `publickey,publickey` 및 `publickey,publickey,keyboard-interactive` 데몬을 추가한다. 독립 OpenSSH 클라이언트의 A+B 성공/A 단독 실패 대조 후 PlayTerm에서 파일·동일 에이전트·중복·잘못된 키·A 단독 실패와 두 키 뒤 PAM 오답/취소/새 연결을 실행한다. PAM은 고정 테스트 인자로 실제 OTP 제공자가 아니다. OpenSSH 버전과 결과는 이 변경 PR의 Ubuntu CI 로그에 기록된다. Unix에서는 별도 프로세스의 `SSH_AUTH_SOCK`으로 두 에이전트 간 fallback을 검사해 테스트 프로세스의 환경을 바꾸지 않는다. Windows Pageant fallback 중단 조건도 수정했지만 실제 Pageant 프로세스 간 fallback은 실행하지 않았으며, Windows named pipe와 Unix socket 실행 결과와 구분한다.
 
+[PR 203 첫 CI](https://github.com/playok/playterm/actions/runs/42130857959)의 Ubuntu에서 OpenSSH 9.6p1 Ubuntu-3ubuntu13.20의 위 세 통합 검사가 실제 실행되어 모두 통과했다. 첫 작업 자체는 마지막 root 소유 서버 로그를 일반 사용자로 출력하다 권한 오류가 나 실패했으므로, 로그 출력에 `sudo cat`을 사용하도록 보완했다. 같은 실행의 macOS 전체 검사는 성공했고 `two_public_keys_continue_between_unix_agents` 등 새 Unix 에이전트 회귀 검사도 통과했다. 최종 머지 판단은 보완 커밋의 모든 CI 작업 성공을 기준으로 한다.
+
 ## 공식 v0.5.0 검사
 
 공식 태그 커밋은 `3943e8073a091a0d6aad5a79b5f83541e3f41ba7`이다. 개발 트리의 새 기능을 이 버전의 출시 기능으로 표시하지 않는다.

@@ -44,7 +44,7 @@ sudo /usr/sbin/sshd -t -f "$fixture/sshd_config"
 sudo /usr/sbin/sshd -f "$fixture/sshd_config" -E "$fixture/sshd.log"
 export PLAYTERM_OPENSSH_PORT="$port" PLAYTERM_OPENSSH_USER=playterm-ci PLAYTERM_OPENSSH_KEY="$fixture/client"
 /usr/sbin/sshd -V 2>&1 || true
-cargo test --locked -p playterm-net --test openssh_interop openssh_key_shell_and_unicode_sftp -- --ignored --nocapture || { cat "$fixture/sshd.log"; exit 1; }
+cargo test --locked -p playterm-net --test openssh_interop openssh_key_shell_and_unicode_sftp -- --ignored --nocapture || { sudo cat "$fixture/sshd.log"; exit 1; }
 
 # A second real daemon requires key + PAM keyboard-interactive. Its PAM answer is deliberately
 # the stored password, so accidental autofill succeeds silently and is caught by the test.
@@ -57,7 +57,7 @@ printf '\nAuthenticationMethods publickey,keyboard-interactive\n' >> "$fixture/s
 sudo /usr/sbin/sshd -t -f "$fixture/sshd_mfa_config"
 sudo /usr/sbin/sshd -f "$fixture/sshd_mfa_config" -E "$fixture/sshd-mfa.log"
 export PLAYTERM_OPENSSH_MFA_PORT="$mfa_port"
-cargo test --locked -p playterm-net --test openssh_interop openssh_public_key_mfa_does_not_autofill_or_save_second_factor -- --ignored --nocapture || { cat "$fixture/sshd-mfa.log"; exit 1; }
+cargo test --locked -p playterm-net --test openssh_interop openssh_public_key_mfa_does_not_autofill_or_save_second_factor -- --ignored --nocapture || { sudo cat "$fixture/sshd-mfa.log"; exit 1; }
 
 # Two distinct keys, followed by an optional PAM factor. Keep all agents and credentials
 # confined to the disposable fixture; do not reuse the runner's agent.
@@ -90,6 +90,6 @@ fi
 export PLAYTERM_OPENSSH_TWO_KEY_PORT="$two_port" PLAYTERM_OPENSSH_TWO_KEY_MFA_PORT="$two_mfa_port"
 export PLAYTERM_OPENSSH_KEY_B="$fixture/client-b" PLAYTERM_OPENSSH_WRONG_KEY="$fixture/wrong"
 cargo test --locked -p playterm-net --test openssh_interop openssh_two_public_keys_and_two_keys_then_mfa -- --ignored --nocapture || {
-    cat "$fixture/sshd-two.log" "$fixture/sshd-two-mfa.log"; exit 1;
+    sudo cat "$fixture/sshd-two.log" "$fixture/sshd-two-mfa.log"; exit 1;
 }
-cat "$fixture/sshd-two.log" "$fixture/sshd-two-mfa.log"
+sudo cat "$fixture/sshd-two.log" "$fixture/sshd-two-mfa.log"
