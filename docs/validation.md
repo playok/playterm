@@ -9,12 +9,12 @@
 | 이슈 | 구현과 확인한 결과 | 남은 완료 조건 |
 |---|---|---|
 | [189](https://github.com/playok/playterm/issues/189) | 키 암호 취소를 전체 연결 종료로 전파. 별도 ‘이 키 건너뛰기’만 후속 인증 허용. 잘못된 암호 3회 뒤도 종료. 루프백에서 에이전트·기본 키·저장 비밀번호·점프호스트가 취소 뒤 사용되지 않는지 확인. 실제 창에서 취소·Esc·재시도·키 로그인·건너뛰기 후 비밀번호 로그인·재접속 버튼·`r` 명령을 검증 | 이번 환경은 Windows ARM64. 다른 플랫폼의 GUI 확인은 호환성 표에서 별도 관리 |
-| [190](https://github.com/playok/playterm/issues/190) | 공개 키 파일과 Windows·macOS 에이전트의 partial success 보존. 저장 비밀번호를 OTP로 보내지 않음, OTP는 account_password=false. 공개 키→OTP 오답·재시도·취소·새 연결과 기존 비밀번호→OTP 회귀 통과. 실제 Windows 창에서 OTP 재시도·취소·재접속·로그인 확인. 모호한 hidden 질문은 자동 채움/저장 대상에서 제외 | 실제 OpenSSH MFA 조합은 미검증. macOS 에이전트 루프백 시험은 아래 CI에서 통과 |
+| [190](https://github.com/playok/playterm/issues/190) | 공개 키 파일과 Windows·macOS 에이전트의 partial success 보존. 저장 비밀번호를 OTP로 보내지 않음, OTP는 account_password=false. 공개 키→OTP 오답·재시도·취소·새 연결과 기존 비밀번호→OTP 회귀 통과. 실제 Windows 창에서 OTP 재시도·취소·재접속·로그인 확인. 모호한 hidden 질문은 자동 채움/저장 대상에서 제외 | 실제 OpenSSH 키+PAM MFA 조합도 PR 198 CI에서 통과. 고정 테스트 인자를 사용했으며 실제 OTP 제공자는 별도 미검증 |
 | [191](https://github.com/playok/playterm/issues/191) | `vault.toml.lock` OS 잠금으로 create/reset/read-modify-write 직렬화. 대기 750 ms 제한, 실패 시 메모리 변경 미반영, reset 뒤 이전 창의 자격 증명 재생성 방지. 실제 별도 Windows·macOS 프로세스로 추가/추가·추가/삭제·초기화·동시 생성·비정상 종료 후 잠금 해제 통과. 실제 Windows UI에서 잠금 오류 표시→잠금 해제 후 볼트 생성 성공 | macOS 별도 프로세스 시험도 아래 CI에서 통과. macOS 네이티브 GUI는 별도 미검증 |
-| [192](https://github.com/playok/playterm/issues/192) | 공식 v0.5.0 Windows ZIP 두 개를 다운로드해 체크섬·Authenticode·Ed25519 검사. 최종 ZIP 추출 후 서명 검증 단계를 배포 스크립트에 추가. 서명 필수 모드에서 unsigned ZIP 거부 확인 | 정식 Windows 인증서와 Apple Developer ID/공증 시크릿 없음. macOS 앱·깨끗한 OS 첫 실행 검증 필요. 미완료 |
+| [192](https://github.com/playok/playterm/issues/192) | 공식 v0.5.0 Windows ZIP 두 개를 다운로드해 체크섬·Authenticode·Ed25519 검사. 최종 ZIP 추출 후 서명 검증 단계를 배포 스크립트에 추가. 서명 필수 모드에서 unsigned ZIP 거부 확인. 수동 배포 빌드에서 Windows 4개 ZIP과 macOS 2개 ZIP 검증 단계 성공 | Windows NotSigned, macOS ad-hoc. 정식 Windows 인증서와 Apple Developer ID/공증 시크릿 없음. 깨끗한 OS 첫 실행 검증 필요. 미완료 |
 | [193](https://github.com/playok/playterm/issues/193) | 같은 소스의 x64·ARM64 빌드에서 미압축 기본 ZIP과 `-upx.zip` 네 개 생성·체크섬 검사. 기존 업데이트 이름 유지, UPX 사용자도 다음 업데이트에서 기본 미압축판 선택. 최종 ZIP의 실행 파일을 실제 Windows ARM64에서 실행해 SSH 연결·종료 확인 | 공식 다운로드 제공은 다음 태그 릴리스에서 적용. x64 시험은 ARM64 에뮬레이션이며 네이티브 x64 실행은 별도 필요 |
 | [194](https://github.com/playok/playterm/issues/194) | [호환성 표](compatibility.md)에 필수 조합·절차·결과 필드·승인/보류 기준·미지원/미검증 구분 추가. 실제 OpenSSH 키 로그인·셸·한글 경로 SFTP용 하네스와 Ubuntu CI 단계 추가. OpenSSH 9.6p1과의 실제 상호운용 시험도 통과 | 배포 대상 클라이언트의 실서버 조합·네트워크 장비·RDP 대상 및 macOS 배포 앱 GUI 결과 필요. 미완료 |
-| [195](https://github.com/playok/playterm/issues/195) | [부하 시험 절차](stress-testing.md), 가짜 출력 서버·자원 샘플러 추가. 실제 1/10/30탭 출력·입력·종료 예비 시험 수행. 시작 시 여러 URL이 좁은 분할 화면으로 열리는 결함을 발견해 첫 그룹을 재사용하도록 수정, 30세션 회귀 테스트와 실제 30탭 창으로 확인 | 8~24시간, 100회 반복 후 휴지 기준선, UI p95 지연, 실서버 SFTP 장애·RDP·절전 복귀는 미검증. 미완료 |
+| [195](https://github.com/playok/playterm/issues/195) | [부하 시험 절차](stress-testing.md), 가짜 출력 서버·자원 샘플러 추가. 실제 1/10/30탭 및 30탭 8시간 시험 통과. 시작 시 좁은 분할 화면 결함 수정. 백엔드 연결·종료 100회와 포워딩 포트 해제 확인. SFTP 응답 정지 중 취소 결함을 수정하고 실제 Windows 화면에서 업로드·다운로드 취소와 기존 파일 보존 확인 | 전체 앱 100회 반복 후 휴지 기준선, UI p95 지연, 실서버 SFTP 장애·RDP·절전 복귀는 미검증. 미완료 |
 | [196](https://github.com/playok/playterm/issues/196) | [다음 릴리스 초안](releases/next.md), [릴리스 절차](release-process.md), 커밋 기반 초안 생성기 추가. 게시 설명은 태그에 들어 있는 검토 문서만 사용하며 실제 서명·패키지·체크섬 안내 보존. README 개발/배포 버전 구분. 실제 업데이트 UI에서 한글·링크 정리·스크롤·나중에 닫기 확인 | 다음 버전의 `docs/releases/vX.Y.Z.md`를 검토·태그에 포함하고 실제 게시 결과 확인 필요 |
 
 ## PR 197 CI 결과
@@ -34,6 +34,20 @@
 [PR 198](https://github.com/playok/playterm/pull/198)의 [CI 실행 42045321718](https://github.com/playok/playterm/actions/runs/42045321718)은 Windows·macOS·Ubuntu 모두 통과했다. Ubuntu의 별도 OpenSSH 9.6p1 데몬에서 `publickey,keyboard-interactive`와 PAM을 조합해 자동 채움 방지·저장 대상 분류·오답 재시도·취소·새 연결을 검증했다. PAM은 고정된 테스트 비밀번호를 사용하며 실제 OTP 제공자 시험과 구분한다. OTP 질문 경로는 기존 루프백·Windows GUI 증거로 확인한다.
 
 8시간 시험을 준비하는 예행 실행에서 Windows 측정 파일 독자가 원자적 교체를 잠시 막으면 가짜 출력 서버가 종료되는 시험 하네스 결함을 발견했다. 교체를 최대 1초 범위에서 재시도하고 스냅샷 갱신 시각을 기록하도록 수정했다. 일시적 충돌 후 성공·영구 충돌 시 기존 파일 보존과 제한 횟수 실패를 Python 회귀 검사로 확인했다. 보완된 하네스의 실제 Windows 30탭·20초 예행은 20개 샘플에서 출력 증가와 30개 연결을 유지했고, 앱은 약 0.25초에 종료하여 서버 연결 0개를 남겼다. 이 예행을 8시간 시험 통과로 기록하지 않는다.
+
+## 2026-11-06 후속 검증
+
+[PR 200](https://github.com/playok/playterm/pull/200)에 기록한 [30탭 8시간 결과](soak-results/20261105T143712Z/README.md)는 28,814초 동안 955개 샘플에서 30개 연결과 응답 상태를 유지했다. private 메모리 증가율은 약 0.075%, 최대 730.84 MiB였으며 종료는 약 0.269초, 종료 뒤 서버 연결은 0개였다. 이 결과는 해당 기록의 소스·실행 파일에 한정하며 아래 SFTP 수정판의 8시간 시험으로 간주하지 않는다.
+
+SFTP 루프백에서 READ/WRITE 및 OPEN 응답을 정지시키면 기존 취소는 원격 요청 완료까지 기다렸다. 취소 신호로 커밋 전 원격 대기를 중단하고, 정지한 업로드의 임시 파일 삭제 대기는 250 ms로 제한했다. 늦게 성공한 OPEN은 별도 소유권 확인으로 핸들을 닫고, 배타적 생성이 확인된 임시 파일만 제거한다. 실패한 OPEN에서 다른 파일을 지우지 않는다. 최종 대상 교체·롤백은 파일 보존을 위해 중단하지 않는다. 서버가 영구 단절되면 원격 임시 파일이 남을 수 있다.
+
+Windows ARM64의 실제 개발 앱에서 8 MiB 전송을 시작하고 루프백 서버의 데이터 응답 정지를 확인한 뒤 취소를 클릭했다. 서버가 계속 정지한 상태에서 [다운로드](screenshots/validation/sftp-download-cancelled.png)와 [업로드](screenshots/validation/sftp-upload-cancelled.png) 모두 `Cancelled`가 표시됐다. 로컬·원격 기존 대상의 sentinel 내용은 그대로였고 서버 재개 후 임시 파일은 남지 않았다. 첫 시도는 수동 조작 사이 30초 요청 제한 시간이 먼저 만료되어 `Failed: Timeout`이었고, 취소 검증은 시작·취소를 연속 조작해 다시 확인했다. 화면의 `/docs` 경로 오류는 가짜 셸이 돌려준 경로가 시험 서버에 없어서 발생한 별도 목록 오류다.
+
+회귀 검사는 업로드·다운로드별 데이터/OPEN 정지 중 1초 이내 취소, 늦은 OPEN 임시 파일 정리, 배타적 OPEN 실패 시 다른 파일 보존, 전송 중 서버 종료 시 기존 파일 보존을 포함한다. 별도로 백엔드 SSH/PTY 연결·종료를 100회 반복하고 각 회차의 로컬 포워딩 포트 해제를 확인했다. 이 검사는 전체 GUI 100회 반복의 메모리 회복 측정을 대신하지 않는다. 로컬 화면·서버 제어 산출물은 `target/gui-validation/sftp-stall/`에 있다.
+
+수정판의 로컬 `cargo clippy --locked --workspace --all-targets -- -D warnings`와 `cargo test --locked --workspace`는 모두 통과했다. SSH 루프백 34개가 통과했고 수동 서버 1개만 ignored였다. 전체 로그는 `target/workspace-tests-sftp.log`에 있다.
+
+[수동 배포 빌드 42044743525](https://github.com/playok/playterm/actions/runs/42044743525)는 소스 `8a139475`에서 Windows·macOS 빌드 작업이 성공했고 게시 단계는 건너뛰었다. [Windows 작업](https://github.com/playok/playterm/actions/runs/42044743525/job/127304543097)은 최종 기본/UPX × ARM64/x64 ZIP 4개 모두 `NotSigned`임을 기록했고 합산 SHA-256 목록의 Ed25519 검증은 `signature OK`였다. [macOS 작업](https://github.com/playok/playterm/actions/runs/42044743525/job/127304542346)은 ARM64/x64 최종 ZIP에서 추출한 앱 모두 `valid on disk`, designated requirement 충족을 확인했지만 `Signature=adhoc`였다. 이는 Developer ID 서명·공증 또는 깨끗한 OS 실행 성공을 의미하지 않는다. 공식 릴리스는 게시하지 않았다.
 
 ## 공식 v0.5.0 검사
 

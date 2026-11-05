@@ -13,6 +13,7 @@ UNRELEASED — v0.5.0 이후 개발 중인 변경이다. 게시 전 후보 태�
 - 공개 키 뒤 OTP를 요구하는 서버에서 저장 비밀번호를 OTP로 보내거나 OTP를 계정 비밀번호로 저장하지 않습니다. [#190](https://github.com/playok/playterm/issues/190)
 - 여러 앱 창에서 비밀번호를 동시에 저장할 때 볼트 갱신을 직렬화합니다. 다른 창에서 볼트를 초기화하면 이전 창은 다시 잠금을 풀어야 합니다. [#191](https://github.com/playok/playterm/issues/191)
 - SFTP 재접속 후 이전 연결의 탐색 상태를 버리고, 다운로드 대상 링크 및 업로드 대상 폴더를 보호합니다. [#182](https://github.com/playok/playterm/pull/182), [#183](https://github.com/playok/playterm/pull/183), [#186](https://github.com/playok/playterm/pull/186)
+- SFTP 서버 응답이 멈춘 전송도 취소할 수 있습니다. 업로드·다운로드의 기존 대상 파일을 보존하고, 서버가 다시 응답하면 생성한 임시 파일을 정리합니다. [#195](https://github.com/playok/playterm/issues/195)
 - RD Gateway를 바꾼 연결에는 이전 게이트웨이로 저장한 비밀번호를 재사용하지 않습니다. 재활성화 응답을 기다리는 RDP 연결도 취소할 수 있습니다. [#184](https://github.com/playok/playterm/pull/184), [#185](https://github.com/playok/playterm/pull/185), [#187](https://github.com/playok/playterm/pull/187)
 
 ## Compatibility and update notes
