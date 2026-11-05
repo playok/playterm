@@ -97,6 +97,10 @@ fn open_new_window() -> Result<(), String> {
 
 /// What a saved password of `p` is for. Stored with the password (encrypted), so a site that
 /// now points somewhere else (sessions.toml is plain text) does not get it.
+///
+/// An RDP site with an RD Gateway names the gateway too, and whether it logs on to it with the
+/// site's account (which sends this password to the gateway) or its own: adding or changing the
+/// gateway is a change of where the password goes. Without a gateway the target is as before.
 pub fn vault_target(p: &SessionProfile) -> String {
     let scheme = match p.protocol {
         Protocol::Ssh => "ssh",
@@ -104,7 +108,36 @@ pub fn vault_target(p: &SessionProfile) -> String {
         Protocol::Rdp => "rdp",
         Protocol::Serial => return format!("serial://{}", p.serial.port),
     };
-    format!("{scheme}://{}@{}:{}", p.username, p.host.to_lowercase(), p.port)
+    let target = format!("{scheme}://{}@{}:{}", p.username, p.host.to_lowercase(), p.port);
+    match (p.protocol, p.rdp.gateway()) {
+        (Protocol::Rdp, Some(gateway)) => {
+            let login = match p.rdp.gateway_user() {
+                Some(user) => format!("user {user:?}"),
+                None => "site account".to_owned(),
+            };
+            format!("{target} via gateway {} ({login})", gateway_endpoint(gateway))
+        }
+        _ => target,
+    }
+}
+
+/// An RD Gateway `host[:port]` as `host:port`, lowercase, with the default port 443 written out,
+/// so the same gateway written another way is the same target.
+fn gateway_endpoint(gateway: &str) -> String {
+    let gateway = gateway.trim().to_lowercase();
+    let has_port = match gateway.rsplit_once(':') {
+        // `[v6]:port` or `host:port`, not a bare IPv6 address.
+        Some((host, port)) => !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && (host.ends_with(']') || !host.contains(':')),
+        None => false,
+    };
+    if has_port { gateway } else { format!("{gateway}:443") }
+}
+
+/// Whether a password saved without a target (by a version before targets) may be bound to
+/// where `p` points now. Not for an RDP site with a gateway: gateways came after targets, so the
+/// gateway was added to the file since, and is not trusted with the password unseen.
+fn may_bind_unbound(p: &SessionProfile) -> bool {
+    !(p.protocol == Protocol::Rdp && p.rdp.gateway().is_some())
 }
 
 /// The saved password of `profile`, when it was saved for where the profile points now.
