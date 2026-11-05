@@ -65,6 +65,8 @@ const MAX_DESKTOP_SIDE: u16 = 8192;
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// How often answers the shared-folder backend finished on its own threads are sent.
 const DEVICE_REPLY_INTERVAL: Duration = Duration::from_millis(50);
+/// Longest a Deactivation-Reactivation Sequence (after a resize, say) may take.
+const REACTIVATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Per-site RDP options.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1140,40 +1142,51 @@ async fn session(
                 ActiveStageOutput::Terminate(reason) => break 'session Some(reason),
                 ActiveStageOutput::DeactivateAll => {
                     // Deactivation-Reactivation Sequence (e.g. after a resize): a fresh activation.
+                    // It waits on the server outside the command loop, so it also ends when the
+                    // tab disconnects, closes or reconnects, and at a time limit; a sequence cut
+                    // short ends the session (the stream is left mid-sequence).
                     let mut activation = activation_factory.create();
-                    let mut buf = WriteBuf::new();
-                    loop {
-                        let written = ironrdp_tokio::single_sequence_step_read(&mut reader, &mut activation, &mut buf)
-                            .await
-                            .map_err(|e| anyhow!("{e}"))?;
-                        if written.size().is_some() {
-                            writer.write_all(buf.filled()).await?;
+                    let reactivation = async {
+                        let mut buf = WriteBuf::new();
+                        loop {
+                            let written = ironrdp_tokio::single_sequence_step_read(&mut reader, &mut activation, &mut buf)
+                                .await
+                                .map_err(|e| anyhow!("{e}"))?;
+                            if written.size().is_some() {
+                                writer.write_all(buf.filled()).await?;
+                            }
+                            if matches!(activation.connection_activation_state(), ConnectionActivationState::Finalized { .. }) {
+                                return anyhow::Ok(());
+                            }
                         }
-                        if let ConnectionActivationState::Finalized {
-                            desktop_size,
-                            share_id,
-                            enable_server_pointer,
-                            pointer_software_rendering,
-                            ..
-                        } = activation.connection_activation_state()
-                        {
-                            check_desktop_size(desktop_size.width, desktop_size.height)?;
-                            lock(&screen).reset(desktop_size.width, desktop_size.height);
-                            changed = true;
-                            stage.set_fastpath_processor(
-                                fast_path::ProcessorBuilder {
-                                    io_channel_id: activation.io_channel_id(),
-                                    user_channel_id: activation.user_channel_id(),
-                                    share_id,
-                                    enable_server_pointer,
-                                    pointer_software_rendering,
-                                }
-                                .build(),
-                            );
-                            stage.set_share_id(share_id);
-                            stage.set_enable_server_pointer(enable_server_pointer);
-                            break;
-                        }
+                    };
+                    if interruptible(sink, closing, REACTIVATION_TIMEOUT, reactivation).await?.is_none() {
+                        // The tab ended it (or the goodbye's time ran out).
+                        break 'session None;
+                    }
+                    if let ConnectionActivationState::Finalized {
+                        desktop_size,
+                        share_id,
+                        enable_server_pointer,
+                        pointer_software_rendering,
+                        ..
+                    } = activation.connection_activation_state()
+                    {
+                        check_desktop_size(desktop_size.width, desktop_size.height)?;
+                        lock(&screen).reset(desktop_size.width, desktop_size.height);
+                        changed = true;
+                        stage.set_fastpath_processor(
+                            fast_path::ProcessorBuilder {
+                                io_channel_id: activation.io_channel_id(),
+                                user_channel_id: activation.user_channel_id(),
+                                share_id,
+                                enable_server_pointer,
+                                pointer_software_rendering,
+                            }
+                            .build(),
+                        );
+                        stage.set_share_id(share_id);
+                        stage.set_enable_server_pointer(enable_server_pointer);
                     }
                 }
                 _ => {}
@@ -1184,6 +1197,29 @@ async fn session(
         sink.notice(tr!("원격 데스크톱 종료: {}", "Remote desktop ended: {}", reason.description()));
     }
     Ok(Outcome::Ended)
+}
+
+/// Runs `step`, a wait on the server outside the command loop (the reactivation sequence), so
+/// that it still ends when the tab ends the session or `closing` (the goodbye's deadline)
+/// passes, both `Ok(None)`, and within `limit`, an error after it.
+async fn interruptible<T>(
+    sink: &EventSink,
+    closing: Option<tokio::time::Instant>,
+    limit: Duration,
+    step: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<Option<T>> {
+    tokio::select! {
+        result = tokio::time::timeout(limit, step) => match result {
+            Ok(result) => result.map(Some),
+            Err(_) => Err(anyhow!(tr!(
+                "원격 데스크톱이 {}초 안에 다시 활성화되지 않았습니다",
+                "The remote desktop did not reactivate within {} seconds",
+                limit.as_secs()
+            ))),
+        },
+        () = sink.cancelled() => Ok(None),
+        () = async { tokio::time::sleep_until(closing.unwrap_or_else(tokio::time::Instant::now)).await }, if closing.is_some() => Ok(None),
+    }
 }
 
 /// Keyboard and mouse into session output (frames to send).
@@ -1563,5 +1599,38 @@ mod tests {
         assert!(!prompt.account_password);
         prompt.answer(Some(vec!["gw-secret".into()]));
         assert_eq!(asking.await.unwrap().unwrap().as_str(), "gw-secret");
+    }
+
+    /// A reactivation the server never finishes (it went quiet after `DeactivateAll`) still ends
+    /// on disconnect, on a closed or reconnected tab (dropped handle), at the goodbye's deadline
+    /// and at its time limit; a finished one goes on.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_reactivation_still_ends() {
+        let stalled = || std::future::pending::<anyhow::Result<()>>();
+        let quick = Duration::from_secs(2);
+        let long = Duration::from_secs(60);
+
+        let (handle, _commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+        let waiting = tokio::spawn(async move { interruptible(&sink, None, long, stalled()).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        handle.close();
+        assert!(tokio::time::timeout(quick, waiting).await.expect("ends on disconnect").unwrap().unwrap().is_none());
+
+        let (handle, _commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+        let waiting = tokio::spawn(async move { interruptible(&sink, None, long, stalled()).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(handle);
+        assert!(tokio::time::timeout(quick, waiting).await.expect("ends when the tab goes").unwrap().unwrap().is_none());
+
+        let (_handle, _commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+        let closing = Some(tokio::time::Instant::now() + Duration::from_millis(100));
+        let r = tokio::time::timeout(quick, interruptible(&sink, closing, long, stalled())).await.expect("ends at the deadline");
+        assert!(r.unwrap().is_none());
+
+        let r = tokio::time::timeout(quick, interruptible(&sink, None, Duration::from_millis(100), stalled())).await.expect("time limit");
+        assert!(r.is_err(), "a stalled reactivation is an error");
+
+        let r = interruptible(&sink, None, long, async { anyhow::Ok(7) }).await.unwrap();
+        assert_eq!(r, Some(7));
     }
 }

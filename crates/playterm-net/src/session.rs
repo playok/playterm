@@ -396,6 +396,14 @@ impl EventSink {
         }
     }
 
+    /// Resolves once the tab asked the session to end ([`SessionHandle::close`], or the handle
+    /// was dropped: tab closed, reconnected). For waits outside the command loop, which only
+    /// sees the `Close` command when it gets back to it.
+    pub(crate) async fn cancelled(&self) {
+        let mut cancel = self.backlog.cancel.subscribe();
+        let _ = cancel.wait_for(|&cancelled| cancelled).await;
+    }
+
     pub fn send(&self, event: SessionEvent) {
         let _ = self.tx.send(event);
         (self.waker)();
