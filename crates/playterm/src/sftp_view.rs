@@ -223,45 +223,39 @@ impl SftpBrowser {
             return;
         }
         // One file: ask where to save it. Several items or folders: pick a target folder.
-        let targets: Vec<(RemoteEntry, PathBuf)> = if let [single] = items.as_slice()
+        if let [single] = items.as_slice()
             && !single.is_dir
         {
-            match crate::picker::Picker::new(crate::picker::Kind::Save, t("다운로드 위치", "Download to"))
-                .file_name(&single.name)
-                .pick_one()
-            {
-                Some(path) => vec![(single.clone(), path)],
-                None => return,
-            }
-        } else {
-            match crate::picker::Picker::new(crate::picker::Kind::Folder, t("다운로드할 폴더 선택", "Choose a folder to download to"))
-                .pick_one()
-            {
-                Some(dir) => {
-                    // The server names these: one that could reach outside the folder is refused.
-                    let (safe, unsafe_names): (Vec<_>, Vec<_>) = items.into_iter().partition(|e| is_safe_local_name(&e.name));
-                    if !unsafe_names.is_empty() {
-                        let names: Vec<String> = unsafe_names.iter().map(|e| format!("{:?}", e.name)).collect();
-                        let text = tr!(
-                            "이 PC 에 저장할 수 없는 이름이라 받지 않았습니다: {}",
-                            "Not downloaded, the names cannot be saved on this PC: {}",
-                            names.join(", ")
-                        );
-                        self.status = Some((text, true));
-                    }
-                    safe.into_iter()
-                        .map(|e| {
-                            let p = dir.join(&e.name);
-                            (e, p)
-                        })
-                        .collect()
-                }
-                None => return,
-            }
+            // The user names the file: it is saved exactly there.
+            let Some(local) =
+                crate::picker::Picker::new(crate::picker::Kind::Save, t("다운로드 위치", "Download to")).file_name(&single.name).pick_one()
+            else {
+                return;
+            };
+            let id = self.conn.download(&remote_join(&self.cwd, &single.name), &local, false);
+            self.track(id, format!("↓ {}", single.name), false, Some(local));
+            return;
+        }
+        let Some(dir) =
+            crate::picker::Picker::new(crate::picker::Kind::Folder, t("다운로드할 폴더 선택", "Choose a folder to download to")).pick_one()
+        else {
+            return;
         };
-        for (entry, local) in targets {
-            let id = self.conn.download(&remote_join(&self.cwd, &entry.name), &local, entry.is_dir);
-            self.track(id, format!("↓ {}", entry.name), false, Some(local));
+        // The server names these: one that could reach outside the folder is refused.
+        let (safe, unsafe_names): (Vec<_>, Vec<_>) = items.into_iter().partition(|e| is_safe_local_name(&e.name));
+        if !unsafe_names.is_empty() {
+            let names: Vec<String> = unsafe_names.iter().map(|e| format!("{:?}", e.name)).collect();
+            let text = tr!(
+                "이 PC 에 저장할 수 없는 이름이라 받지 않았습니다: {}",
+                "Not downloaded, the names cannot be saved on this PC: {}",
+                names.join(", ")
+            );
+            self.status = Some((text, true));
+        }
+        for entry in safe {
+            // `download_into` also refuses a name that already is a link in `dir`.
+            let id = self.conn.download_into(&remote_join(&self.cwd, &entry.name), &dir, &entry.name, entry.is_dir);
+            self.track(id, format!("↓ {}", entry.name), false, Some(dir.join(&entry.name)));
         }
     }
 

@@ -926,6 +926,81 @@ fn sftp_folder_download_does_not_follow_local_links() {
     assert_eq!(std::fs::read_to_string(real.join("b.txt")).unwrap(), "b");
 }
 
+/// A link at `link` to the folder `target`: a symbolic link, or on Windows a junction (which
+/// needs no special rights).
+fn dir_link(target: &std::path::Path, link: &std::path::Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
+        assert!(status.status.success(), "mklink /J: {status:?}");
+    }
+}
+
+#[test]
+fn sftp_download_into_refuses_a_link_named_like_the_item() {
+    let fx = Fixture::new("sftp-top-link", &[]);
+    fx.trust_host();
+    let root = fx.dir.join("sftp");
+    std::fs::create_dir_all(root.join("reports").join("deep")).unwrap();
+    std::fs::write(root.join("reports").join("a.txt"), "from the server").unwrap();
+    std::fs::write(root.join("reports").join("deep").join("b.txt"), "b").unwrap();
+    std::fs::create_dir_all(root.join("empty")).unwrap();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+
+    // The chosen folder holds a link named like the remote folder, to a folder elsewhere.
+    let outside = fx.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("a.txt"), "precious").unwrap();
+    let chosen = fx.dir.join("chosen");
+    std::fs::create_dir_all(&chosen).unwrap();
+    dir_link(&outside, &chosen.join("reports"));
+    dir_link(&outside, &chosen.join("empty"));
+    let listing = || {
+        let mut names: Vec<String> =
+            std::fs::read_dir(&outside).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    };
+
+    let id = sftp.download_into("/reports", &chosen, "reports", true);
+    match transfer_result(&sftp, id) {
+        TransferState::Failed(e) => assert!(e.contains("reports"), "{e}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    // An empty remote folder is refused all the same.
+    let id = sftp.download_into("/empty", &chosen, "empty", true);
+    assert!(matches!(transfer_result(&sftp, id), TransferState::Failed(_)));
+    assert_eq!(std::fs::read_to_string(outside.join("a.txt")).unwrap(), "precious");
+    assert_eq!(listing(), ["a.txt"], "nothing written through the link");
+
+    // A plain folder (new or already there) downloads as before.
+    let plain = fx.dir.join("plain");
+    std::fs::create_dir_all(plain.join("reports")).unwrap();
+    let id = sftp.download_into("/reports", &plain, "reports", true);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(plain.join("reports").join("deep").join("b.txt")).unwrap(), "b");
+    let id = sftp.download_into("/reports/a.txt", &plain, "a.txt", false);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(plain.join("a.txt")).unwrap(), "from the server");
+
+    // The folder the user chose may itself be a link.
+    let chosen_link = fx.dir.join("chosen-link");
+    let real = fx.dir.join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    dir_link(&real, &chosen_link);
+    let id = sftp.download_into("/reports", &chosen_link, "reports", true);
+    assert_eq!(transfer_result(&sftp, id), TransferState::Finished);
+    assert_eq!(std::fs::read_to_string(real.join("reports").join("a.txt")).unwrap(), "from the server");
+
+    // A server name that is not a plain name is refused.
+    let id = sftp.download_into("/reports", &plain, "..", true);
+    assert!(matches!(transfer_result(&sftp, id), TransferState::Failed(_)));
+}
+
 /// Files whose name marks them as an unfinished upload, under `dir`.
 fn upload_parts(dir: &std::path::Path) -> Vec<String> {
     std::fs::read_dir(dir)
