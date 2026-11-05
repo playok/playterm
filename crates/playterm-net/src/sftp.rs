@@ -169,16 +169,38 @@ impl SftpConnection {
         });
     }
 
-    /// Downloads a remote file or directory tree to `local` (the destination path itself).
+    /// Downloads a remote file or directory tree to `local`, the destination path itself as the
+    /// user chose it (a file to save as, or a folder to fill).
     pub fn download(&self, remote: &str, local: &Path, is_dir: bool) -> u64 {
-        let (remote, local) = (remote.to_owned(), local.to_owned());
+        self.download_at(remote, local, "", is_dir)
+    }
+
+    /// Downloads a remote file or directory tree into the folder `dir` the user chose, as
+    /// `dir/name`. `name` comes from the server: it must be a plain name, and if `dir/name`
+    /// already is a link (to a folder or file elsewhere) the download is refused, as for any
+    /// link further down.
+    pub fn download_into(&self, remote: &str, dir: &Path, name: &str, is_dir: bool) -> u64 {
+        self.download_at(remote, dir, name, is_dir)
+    }
+
+    fn download_at(&self, remote: &str, base: &Path, name: &str, is_dir: bool) -> u64 {
+        let (remote, base, name) = (remote.to_owned(), base.to_owned(), name.to_owned());
         self.transfer(move |sftp, progress| async move {
+            anyhow::ensure!(
+                name.is_empty() || is_safe_local_name(&name),
+                tr!(
+                    "이 PC 에 저장할 수 없는 이름이라 받지 않았습니다: {:?}",
+                    "Not downloaded, the name cannot be saved on this PC: {:?}",
+                    name
+                )
+            );
             if is_dir {
-                download_tree(&sftp, &remote, &local, progress).await
+                download_tree(&sftp, &remote, &base, &name, progress).await
             } else {
+                ensure_no_links(&base, &name)?;
                 let total = sftp.metadata(remote.clone()).await?.len();
                 progress.add_total(total);
-                download_file(&sftp, &remote, &local, progress).await
+                download_file(&sftp, &remote, &base.join(&name), progress).await
             }
         })
     }
@@ -542,12 +564,13 @@ fn is_link(meta: &std::fs::Metadata) -> bool {
     meta.file_type().is_symlink()
 }
 
-/// Refuses a download target under `base` (the folder the user chose) whose path goes through
-/// a link that already exists there: a link to a folder elsewhere would have the download
-/// write, or replace files, outside `base`. `base` itself may be a link (the user picked it).
+/// Refuses a download target `base/rel` whose path goes through a link that already exists
+/// below `base` (the folder the user chose): a link to a folder elsewhere would have the
+/// download write, or replace files, outside `base`. Every part of `rel` counts, the first one
+/// too; `base` itself may be a link (the user picked it). An empty `rel` is `base` itself.
 fn ensure_no_links(base: &Path, rel: &str) -> anyhow::Result<()> {
     let mut path = base.to_owned();
-    for part in rel.split('/') {
+    for part in rel.split('/').filter(|p| !p.is_empty()) {
         path.push(part);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) if is_link(&meta) => anyhow::bail!(tr!(
@@ -564,19 +587,34 @@ fn ensure_no_links(base: &Path, rel: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn download_tree(sftp: &SftpSession, remote: &str, local: &Path, progress: Progress) -> anyhow::Result<()> {
+/// `a/b` from two relative paths, either of which may be empty.
+fn rel_join(a: &str, b: &str) -> String {
+    match (a.is_empty(), b.is_empty()) {
+        (true, _) => b.to_owned(),
+        (_, true) => a.to_owned(),
+        _ => format!("{a}/{b}"),
+    }
+}
+
+/// Downloads the remote tree `remote` to `base/top` (`top` empty: `base` itself), where `base`
+/// is the folder the user chose and `top` a name from the server.
+async fn download_tree(sftp: &SftpSession, remote: &str, base: &Path, top: &str, progress: Progress) -> anyhow::Result<()> {
     let entries = walk_remote(sftp, remote, Some(&progress)).await?;
     progress.add_total(entries.iter().filter(|e| !e.1).map(|e| e.2).sum());
-    tokio::fs::create_dir_all(local).await?;
+    // The top folder too, before it is created or anything is written in it.
+    ensure_no_links(base, top)?;
+    let local = if top.is_empty() { base.to_owned() } else { base.join(top) };
+    tokio::fs::create_dir_all(&local).await?;
     for (rel, is_dir, _) in entries {
         // The parts were checked in `walk_remote`; this stays inside `local` either way.
-        let target: PathBuf = rel.split('/').fold(local.to_owned(), |p, part| p.join(part));
+        let target: PathBuf = rel.split('/').fold(local.clone(), |p, part| p.join(part));
         anyhow::ensure!(
-            target.starts_with(local) && target.components().count() == local.components().count() + rel.split('/').count(),
+            target.starts_with(&local) && target.components().count() == local.components().count() + rel.split('/').count(),
             "unsafe path {rel:?}"
         );
-        // Checked right before each use, so links made along the way count too.
-        ensure_no_links(local, &rel)?;
+        // Checked right before each use (from the top folder on), so links made along the way
+        // count too.
+        ensure_no_links(base, &rel_join(top, &rel))?;
         if is_dir {
             tokio::fs::create_dir_all(&target).await?;
         } else {
