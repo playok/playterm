@@ -200,7 +200,9 @@ impl SftpConnection {
                 ensure_no_links(&base, &name)?;
                 let total = sftp.metadata(remote.clone()).await?.len();
                 progress.add_total(total);
-                download_file(&sftp, &remote, &base.join(&name), progress).await
+                // `base.join("")` would end in a separator: the file itself is `base` then.
+                let local = if name.is_empty() { base.clone() } else { base.join(&name) };
+                download_file(&sftp, &remote, &local, progress).await
             }
         })
     }
