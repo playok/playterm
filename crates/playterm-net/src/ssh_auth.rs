@@ -7,6 +7,7 @@
 //! 5. the stored password
 //! 6. keyboard-interactive / password prompts
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ use playterm_i18n::{t, tr};
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
-use russh::keys::{self, Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg};
+use russh::keys::{self, Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use russh::{MethodKind, MethodSet};
 use tokio::io::{AsyncRead, AsyncWrite};
 use zeroize::Zeroizing;
@@ -28,6 +29,18 @@ type Session = client::Handle<ClientHandler>;
 struct AuthState {
     methods: MethodSet,
     second_factor: bool,
+    attempted_keys: HashSet<String>,
+}
+
+impl AuthState {
+    fn allows_keys(&self) -> bool {
+        allows(&self.methods, MethodKind::PublicKey)
+    }
+
+    /// One completed attempt per public key across files and every agent, per connection.
+    fn claim_key(&mut self, key: &PublicKey) -> bool {
+        self.attempted_keys.insert(key.fingerprint(HashAlg::Sha256).to_string())
+    }
 }
 
 const MAX_AUTH_ROUNDS: usize = 3;
@@ -49,7 +62,7 @@ pub(crate) async fn authenticate(session: &mut Session, params: &ConnectParams, 
     let mut state = match session.authenticate_none(user).await? {
         AuthResult::Success => return Ok(()),
         AuthResult::Failure { remaining_methods, partial_success } => {
-            AuthState { methods: remaining_methods, second_factor: partial_success }
+            AuthState { methods: remaining_methods, second_factor: partial_success, attempted_keys: HashSet::new() }
         }
     };
 
@@ -85,7 +98,7 @@ async fn public_keys(session: &mut Session, params: &ConnectParams, sink: &Event
     if params.use_agent && agents(session, params, state).await? {
         return Ok(true);
     }
-    if state.second_factor || !allows(&state.methods, MethodKind::PublicKey) {
+    if !state.allows_keys() {
         return Ok(false);
     }
 
@@ -113,7 +126,7 @@ fn record(result: AuthResult, state: &mut AuthState) -> KeyAttempt {
         AuthResult::Failure { remaining_methods, partial_success } => {
             state.methods = remaining_methods;
             state.second_factor |= partial_success;
-            KeyAttempt::Rejected { keep_trying: !state.second_factor && allows(&state.methods, MethodKind::PublicKey) }
+            KeyAttempt::Rejected { keep_trying: state.allows_keys() }
         }
     }
 }
@@ -138,6 +151,9 @@ async fn key_file(
     let Some(key) = decode_key(&text, path, sink).await? else {
         return Ok(KeyAttempt::Unusable);
     };
+    if !state.claim_key(key.public_key()) {
+        return Ok(KeyAttempt::Unusable);
+    }
     let hash = rsa_hash(session, key.algorithm()).await?;
     let result = session.authenticate_publickey(params.username.as_str(), PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await?;
     Ok(record(result, state))
@@ -214,7 +230,7 @@ async fn agents(session: &mut Session, params: &ConnectParams, state: &mut AuthS
             Err(e) => log::debug!("no SSH agent at {pipe}: {e}"),
         }
 
-        if !state.second_factor && params.agent_pipe.is_none() && allows(&state.methods, MethodKind::PublicKey) {
+        if params.agent_pipe.is_none() && state.allows_keys() {
             match AgentClient::connect_pageant().await {
                 Ok(agent) => {
                     if agent_keys(session, params, agent, state).await? {
@@ -227,7 +243,7 @@ async fn agents(session: &mut Session, params: &ConnectParams, state: &mut AuthS
     }
     #[cfg(unix)]
     for socket in unix_agent_sockets(params.agent_pipe.as_deref(), std::env::var("SSH_AUTH_SOCK").ok().as_deref()) {
-        if state.second_factor || !allows(&state.methods, MethodKind::PublicKey) {
+        if !state.allows_keys() {
             break;
         }
         match AgentClient::connect_uds(&socket).await {
@@ -284,6 +300,10 @@ where
     for identity in identities {
         // Certificates need a different auth request; plain keys cover the common case.
         let AgentIdentity::PublicKey { key, comment } = identity else { continue };
+        let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
+        if !state.claim_key(&key) {
+            continue;
+        }
         let hash = rsa_hash(session, key.algorithm()).await?;
         match session.authenticate_publickey_with(params.username.as_str(), key, hash, &mut agent).await {
             Ok(result) => match record(result, state) {
@@ -291,7 +311,12 @@ where
                 KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
                 _ => {}
             },
-            Err(e) => log::warn!("agent key {comment:?} could not sign: {e}"),
+            Err(e) => {
+                // A signer failure submitted no signed authentication: another source may
+                // still hold the usable private key. The finite source lists bound retries.
+                state.attempted_keys.remove(&fingerprint);
+                log::warn!("agent key {comment:?} could not sign: {e}");
+            }
         }
     }
     Ok(false)
@@ -301,7 +326,7 @@ where
 // Passwords and keyboard-interactive
 
 async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSink, state: AuthState) -> anyhow::Result<()> {
-    let AuthState { mut methods, mut second_factor } = state;
+    let AuthState { mut methods, mut second_factor, .. } = state;
     let user = params.username.as_str();
     // Once a method was accepted but the server wants more (`partial success`), what follows
     // is a second factor such as a one-time code: the stored password must not be spent on it,
@@ -463,13 +488,34 @@ mod tests {
 
     #[test]
     fn key_partial_success_survives_later_failures() {
-        let mut state = AuthState { methods: MethodSet::from(&[MethodKind::PublicKey][..]), second_factor: false };
+        let mut state =
+            AuthState { methods: MethodSet::from(&[MethodKind::PublicKey][..]), second_factor: false, attempted_keys: HashSet::new() };
         let result = record(
             AuthResult::Failure { remaining_methods: MethodSet::from(&[MethodKind::KeyboardInteractive][..]), partial_success: true },
             &mut state,
         );
         assert!(matches!(result, KeyAttempt::Rejected { keep_trying: false }));
         record(AuthResult::Failure { remaining_methods: MethodSet::from(&[MethodKind::Password][..]), partial_success: false }, &mut state);
+        assert!(state.second_factor);
+    }
+
+    #[test]
+    fn partial_success_allows_another_public_key_until_the_server_changes_methods() {
+        let mut state =
+            AuthState { methods: MethodSet::from(&[MethodKind::PublicKey][..]), second_factor: false, attempted_keys: HashSet::new() };
+        for partial_success in [true, false] {
+            let result = record(
+                AuthResult::Failure { remaining_methods: MethodSet::from(&[MethodKind::PublicKey][..]), partial_success },
+                &mut state,
+            );
+            assert!(matches!(result, KeyAttempt::Rejected { keep_trying: true }));
+            assert!(state.second_factor);
+        }
+        let result = record(
+            AuthResult::Failure { remaining_methods: MethodSet::from(&[MethodKind::KeyboardInteractive][..]), partial_success: true },
+            &mut state,
+        );
+        assert!(matches!(result, KeyAttempt::Rejected { keep_trying: false }));
         assert!(state.second_factor);
     }
 
