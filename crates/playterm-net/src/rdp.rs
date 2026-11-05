@@ -548,17 +548,7 @@ async fn run(params: ConnectParams, mut commands: mpsc::UnboundedReceiver<Sessio
             && gateway_password.is_none()
         {
             let gateway = params.rdp.gateway().unwrap_or_default();
-            let answers = sink
-                .prompt(
-                    tr!("RD 게이트웨이 {user}@{gateway} 비밀번호", "Password for RD Gateway {user}@{gateway}"),
-                    String::new(),
-                    vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
-                    Some(user),
-                    false,
-                )
-                .await
-                .ok_or_else(|| anyhow!(t("인증이 취소되었습니다", "Authentication cancelled")))?;
-            gateway_password = Some(Zeroizing::new(answers.into_iter().next().unwrap_or_default()));
+            gateway_password = Some(ask_gateway_password(&sink, user, gateway).await?);
         }
         let current = match password.take() {
             Some(p) => p,
@@ -831,6 +821,29 @@ fn apply_gateway_policy(rdp: &mut RdpSettings, flags: Option<u32>) -> Vec<&'stat
         off.push(t("프린터", "printer"));
     }
     off
+}
+
+/// Asks for the password of the gateway's own `user`.
+///
+/// Not a login prompt in the UI's sense (no [`AuthPrompt::user`](crate::AuthPrompt::user)): the
+/// user cannot be changed there, since that would log in to the remote desktop as them, nor
+/// the password saved for the site. The gateway user is changed in the site's settings.
+async fn ask_gateway_password(sink: &EventSink, user: &str, gateway: &str) -> anyhow::Result<Zeroizing<String>> {
+    let answers = sink
+        .prompt(
+            tr!("RD 게이트웨이 {user}@{gateway} 비밀번호", "Password for RD Gateway {user}@{gateway}"),
+            t(
+                "게이트웨이 사용자는 사이트 설정의 '게이트웨이 사용자' 에서 바꿀 수 있습니다.",
+                "The gateway user is changed in the site's settings ('Gateway user').",
+            )
+            .into(),
+            vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
+            None,
+            false,
+        )
+        .await
+        .ok_or_else(|| anyhow!(t("인증이 취소되었습니다", "Authentication cancelled")))?;
+    Ok(Zeroizing::new(answers.into_iter().next().unwrap_or_default()))
 }
 
 /// A tunnel to `params.host` through the gateway, with the gateway's policy applied to `rdp`.
@@ -1530,5 +1543,25 @@ mod tests {
         assert_eq!(check_known(&file, "srv:3389", &fp), Known::Match);
         assert_eq!(check_known(&file, "srv:3389", &fingerprint(b"cert two")), Known::Changed(1));
         assert_eq!(check_known(&file, "srv:3390", &fp), Known::Unknown, "the port is part of the name");
+    }
+
+    /// The gateway's password prompt is not a login the UI may redirect: no user to change
+    /// there (that would become the desktop's user), and nothing to save for the site.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_gateway_prompt_does_not_offer_to_change_the_desktop_user() {
+        let (handle, _commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+        let asking = tokio::spawn(async move { ask_gateway_password(&sink, "gwuser", "gw.example").await });
+        let prompt = loop {
+            match handle.try_recv() {
+                Some(crate::SessionEvent::AuthPrompt(p)) => break p,
+                Some(_) => {}
+                None => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        };
+        assert!(prompt.title.contains("gwuser@gw.example"), "{}", prompt.title);
+        assert_eq!(prompt.user, None);
+        assert!(!prompt.account_password);
+        prompt.answer(Some(vec!["gw-secret".into()]));
+        assert_eq!(asking.await.unwrap().unwrap().as_str(), "gw-secret");
     }
 }
