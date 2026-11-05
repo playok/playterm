@@ -4,7 +4,9 @@ set -eu
 [ "${CI:-}" = true ] || { echo 'Run only on a disposable CI runner' >&2; exit 1; }
 fixture=$(mktemp -d)
 cleanup() {
-    if [ -f "$fixture/sshd.pid" ]; then sudo kill "$(cat "$fixture/sshd.pid")" 2>/dev/null || true; fi
+    for pid_file in sshd.pid sshd-mfa.pid; do
+        if [ -f "$fixture/$pid_file" ]; then sudo kill "$(cat "$fixture/$pid_file")" 2>/dev/null || true; fi
+    done
     sudo userdel -r playterm-ci 2>/dev/null || true
     rm -rf "$fixture"
 }
@@ -38,4 +40,17 @@ sudo /usr/sbin/sshd -t -f "$fixture/sshd_config"
 sudo /usr/sbin/sshd -f "$fixture/sshd_config" -E "$fixture/sshd.log"
 export PLAYTERM_OPENSSH_PORT="$port" PLAYTERM_OPENSSH_USER=playterm-ci PLAYTERM_OPENSSH_KEY="$fixture/client"
 /usr/sbin/sshd -V 2>&1 || true
-cargo test --locked -p playterm-net --test openssh_interop -- --ignored --nocapture || { cat "$fixture/sshd.log"; exit 1; }
+cargo test --locked -p playterm-net --test openssh_interop openssh_key_shell_and_unicode_sftp -- --ignored --nocapture || { cat "$fixture/sshd.log"; exit 1; }
+
+# A second real daemon requires key + PAM keyboard-interactive. Its PAM answer is deliberately
+# the stored password, so accidental autofill succeeds silently and is caught by the test.
+mfa_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+sed -e "s/^Port .*/Port $mfa_port/" \
+    -e "s|^PidFile .*|PidFile $fixture/sshd-mfa.pid|" \
+    -e 's/^KbdInteractiveAuthentication no/KbdInteractiveAuthentication yes/' \
+    -e 's/^UsePAM no/UsePAM yes/' "$fixture/sshd_config" > "$fixture/sshd_mfa_config"
+printf '\nAuthenticationMethods publickey,keyboard-interactive\n' >> "$fixture/sshd_mfa_config"
+sudo /usr/sbin/sshd -t -f "$fixture/sshd_mfa_config"
+sudo /usr/sbin/sshd -f "$fixture/sshd_mfa_config" -E "$fixture/sshd-mfa.log"
+export PLAYTERM_OPENSSH_MFA_PORT="$mfa_port"
+cargo test --locked -p playterm-net --test openssh_interop openssh_public_key_mfa_does_not_autofill_or_save_second_factor -- --ignored --nocapture || { cat "$fixture/sshd-mfa.log"; exit 1; }
