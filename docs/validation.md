@@ -49,6 +49,22 @@ Windows ARM64의 실제 개발 앱에서 8 MiB 전송을 시작하고 루프백 
 
 [수동 배포 빌드 42044743525](https://github.com/playok/playterm/actions/runs/42044743525)는 소스 `8a139475`에서 Windows·macOS 빌드 작업이 성공했고 게시 단계는 건너뛰었다. [Windows 작업](https://github.com/playok/playterm/actions/runs/42044743525/job/127304543097)은 최종 기본/UPX × ARM64/x64 ZIP 4개 모두 `NotSigned`임을 기록했고 합산 SHA-256 목록의 Ed25519 검증은 `signature OK`였다. [macOS 작업](https://github.com/playok/playterm/actions/runs/42044743525/job/127304542346)은 ARM64/x64 최종 ZIP에서 추출한 앱 모두 `valid on disk`, designated requirement 충족을 확인했지만 `Signature=adhoc`였다. 이는 Developer ID 서명·공증 또는 깨끗한 OS 실행 성공을 의미하지 않는다. 공식 릴리스는 게시하지 않았다.
 
+## 이슈 202: 두 공개 키 연속 인증 회귀
+
+2026-11-06, Windows ARM64의 master `82b0d1b9a63291d2d7b1c92ee04e1a6bea40fc58`에 새 루프백 통합 검사 `two_public_keys_continue_across_files_and_skip_duplicates`를 먼저 추가했다. 수정 전에는 첫 키의 부분 성공 뒤 `expected Connected, got Closed(Some("인증 실패: 남은 인증 방식(publickey)을 사용할 수 없습니다"))`로 실패했다. 이후 같은 검사에서 명시적 키→기본 파일, 기본 파일→기본 파일, 앞/중간 잘못된 키와 중복 파일을 통과했다. 이는 실제 PlayTerm 네트워크 인증 함수의 수정 전 실패/수정 후 통과 증거이며 OpenSSH 대조 실험과 구분한다.
+
+인증 진행 상태는 누적 보존하고 다음 공개 키 탐색은 최신 서버 허용 방식으로 판단한다. 연결별 SHA-256 공개 키 지문으로 파일·에이전트 전체에서 이미 시도한 키를 제외한다. 에이전트가 서명을 거부했다면 같은 개인 키의 파일이나 다른 에이전트를 계속 사용할 수 있다. 새 연결과 점프호스트는 각각 독립된 탐색 상태를 갖는다. 키 암호 취소/건너뛰기와 후속 인증의 저장 비밀번호 보호는 그대로 검증한다.
+
+로컬 통합 검사에서는 Windows named pipe 에이전트 내 A+B, 명시적 A→에이전트 A/B, 에이전트 A→기본 파일 A/B, 명시적 A→B 서명 거부 에이전트→파일 B, A만 있는 경우의 실패, 재연결, 점프호스트, A+B→OTP 오답·취소·새 연결을 확인했다. 같은 A를 여러 소스에 넣어도 최종 성공으로 오인하지 않는다. 상태 단위 검사는 부분 성공 뒤 일반 거부에도 진행 상태를 보존하고, publickey가 남으면 계속 시도하며 keyboard-interactive만 남으면 멈추는지 확인한다.
+
+두 번째 키의 암호 창에서 취소하면 A 이후 어떤 자격 증명도 제출하지 않고 종료하며, 명시적으로 건너뛰면 다음 파일의 B로 연결되는 검사도 통과했다. 로컬 전체 워크스페이스 테스트와 warnings-denied clippy가 통과했고, 전체 로그는 `target/workspace-tests-202-final.log`에 있다. 이 로그 이후 추가한 두 번째 키 취소/건너뛰기 검사도 개별 실행에서 통과했다.
+
+실제 Windows 개발 앱에서도 [명시적 A→에이전트 B 뒤 OTP 창](screenshots/validation/ssh-two-keys-otp.png), [OTP 오답 후 로그인](screenshots/validation/ssh-two-keys-connected.png), [에이전트 단독 A+B 뒤 로그인](screenshots/validation/ssh-two-agent-keys-connected.png)을 확인했다. `r` 재접속과 OTP 취소 뒤 연결 종료도 확인했다. 각 연결에서 서버는 서로 다른 공개 키 지문 두 개만 받았으며 중복 A는 다시 제출되지 않았다. 로컬 화면과 서버 요청 기록은 `target/gui-validation/202-two-keys/`에 있다. 이 GUI 서버는 russh 루프백이며 실제 OpenSSH로 표시하지 않는다.
+
+`scripts/test-openssh.sh`는 기존 공개 키·셸·SFTP·키+PAM 검사에 실제 OpenSSH의 `publickey,publickey` 및 `publickey,publickey,keyboard-interactive` 데몬을 추가한다. 독립 OpenSSH 클라이언트의 A+B 성공/A 단독 실패 대조 후 PlayTerm에서 파일·동일 에이전트·중복·잘못된 키·A 단독 실패와 두 키 뒤 PAM 오답/취소/새 연결을 실행한다. PAM은 고정 테스트 인자로 실제 OTP 제공자가 아니다. OpenSSH 버전과 결과는 이 변경 PR의 Ubuntu CI 로그에 기록된다. Unix에서는 별도 프로세스의 `SSH_AUTH_SOCK`으로 두 에이전트 간 fallback을 검사해 테스트 프로세스의 환경을 바꾸지 않는다. Windows Pageant fallback 중단 조건도 수정했지만 실제 Pageant 프로세스 간 fallback은 실행하지 않았으며, Windows named pipe와 Unix socket 실행 결과와 구분한다.
+
+[PR 203 첫 CI](https://github.com/playok/playterm/actions/runs/42130857959)의 Ubuntu에서 OpenSSH 9.6p1 Ubuntu-3ubuntu13.20의 위 세 통합 검사가 실제 실행되어 모두 통과했다. 첫 작업 자체는 마지막 root 소유 서버 로그를 일반 사용자로 출력하다 권한 오류가 나 실패했으므로, 로그 출력에 `sudo cat`을 사용하도록 보완했다. 같은 실행의 macOS 전체 검사는 성공했고 `two_public_keys_continue_between_unix_agents` 등 새 Unix 에이전트 회귀 검사도 통과했다. 최종 머지 판단은 보완 커밋의 모든 CI 작업 성공을 기준으로 한다.
+
 ## 공식 v0.5.0 검사
 
 공식 태그 커밋은 `3943e8073a091a0d6aad5a79b5f83541e3f41ba7`이다. 개발 트리의 새 기능을 이 버전의 출시 기능으로 표시하지 않는다.

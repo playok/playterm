@@ -11,6 +11,7 @@ UNRELEASED — v0.5.0 이후 개발 중인 변경이다. 게시 전 후보 태�
 
 - 암호화된 SSH 키의 암호 창에서 취소하거나 Esc를 누르면 전체 연결을 중단합니다. 다른 키나 저장된 비밀번호로 계속하려면 ‘이 키 건너뛰기’를 선택하세요. 재접속과 점프호스트에도 적용합니다. [#189](https://github.com/playok/playterm/issues/189)
 - 공개 키 뒤 OTP를 요구하는 서버에서 저장 비밀번호를 OTP로 보내거나 OTP를 계정 비밀번호로 저장하지 않습니다. [#190](https://github.com/playok/playterm/issues/190)
+- 서로 다른 공개 키 두 개를 요구하는 SSH 서버에서 첫 키의 부분 성공 뒤 다음 고유 키를 계속 시도합니다. 파일·에이전트 간 중복 키를 제외하며 후속 OTP의 자동 제출·저장 방지는 유지합니다. [#202](https://github.com/playok/playterm/issues/202)
 - 여러 앱 창에서 비밀번호를 동시에 저장할 때 볼트 갱신을 직렬화합니다. 다른 창에서 볼트를 초기화하면 이전 창은 다시 잠금을 풀어야 합니다. [#191](https://github.com/playok/playterm/issues/191)
 - SFTP 재접속 후 이전 연결의 탐색 상태를 버리고, 다운로드 대상 링크 및 업로드 대상 폴더를 보호합니다. [#182](https://github.com/playok/playterm/pull/182), [#183](https://github.com/playok/playterm/pull/183), [#186](https://github.com/playok/playterm/pull/186)
 - SFTP 서버 응답이 멈춘 전송도 취소할 수 있습니다. 업로드·다운로드의 기존 대상 파일을 보존하고, 서버가 다시 응답하면 생성한 임시 파일을 정리합니다. [#195](https://github.com/playok/playterm/issues/195)

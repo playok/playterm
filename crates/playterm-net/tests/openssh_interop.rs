@@ -146,3 +146,53 @@ fn openssh_public_key_mfa_does_not_autofill_or_save_second_factor() {
     assert!(matches!(next_auth_event(&handle), SessionEvent::Connected));
     handle.close();
 }
+
+#[test]
+#[ignore = "requires isolated OpenSSH publickey,publickey servers; see scripts/test-openssh.sh"]
+fn openssh_two_public_keys_and_two_keys_then_mfa() {
+    let dir = tempfile::tempdir().unwrap();
+    let net = NetRuntime::new().unwrap();
+    let mut base = params(dir.path().join("known_hosts"), "PLAYTERM_OPENSSH_TWO_KEY_PORT");
+    let a = base.identity_file.clone().unwrap();
+    let b = PathBuf::from(std::env::var_os("PLAYTERM_OPENSSH_KEY_B").unwrap());
+    let wrong = PathBuf::from(std::env::var_os("PLAYTERM_OPENSSH_WRONG_KEY").unwrap());
+    for (identity_file, default_identity_files, use_agent) in [
+        (Some(a.clone()), vec![a.clone(), wrong.clone(), b.clone()], false),
+        (None, vec![wrong.clone(), a.clone(), wrong, b.clone()], false),
+        (None, vec![], true),
+        (Some(a.clone()), vec![a.clone()], true),
+    ] {
+        let handle = net.connect(
+            ConnectParams {
+                identity_file,
+                default_identity_files,
+                use_agent,
+                agent_pipe: use_agent.then(|| std::env::var("SSH_AUTH_SOCK").unwrap()),
+                ..base.clone()
+            },
+            Arc::new(|| {}),
+        );
+        assert!(matches!(next_auth_event(&handle), SessionEvent::Connected), "two unique keys must complete authentication");
+        handle.close();
+    }
+    // Neither a single key nor the same key supplied again is a second factor.
+    for duplicates in [vec![], vec![a.clone(), a.clone()]] {
+        let handle = net.connect(ConnectParams { default_identity_files: duplicates, ..base.clone() }, Arc::new(|| {}));
+        assert!(matches!(next_auth_event(&handle), SessionEvent::Closed(Some(_))));
+    }
+    base.port = std::env::var("PLAYTERM_OPENSSH_TWO_KEY_MFA_PORT").unwrap().parse().unwrap();
+    base.default_identity_files = vec![a, b];
+    base.password = Some("local-test-only".into());
+    let handle = net.connect(base.clone(), Arc::new(|| {}));
+    mfa_prompt(&handle).answer(Some(vec!["wrong-test-factor".into()]));
+    mfa_prompt(&handle).answer(Some(vec!["local-test-only".into()]));
+    assert!(matches!(next_auth_event(&handle), SessionEvent::Connected));
+    handle.close();
+    let handle = net.connect(base.clone(), Arc::new(|| {}));
+    mfa_prompt(&handle).answer(None);
+    assert!(matches!(next_auth_event(&handle), SessionEvent::Closed(Some(_))));
+    let handle = net.connect(base, Arc::new(|| {}));
+    mfa_prompt(&handle).answer(Some(vec!["local-test-only".into()]));
+    assert!(matches!(next_auth_event(&handle), SessionEvent::Connected));
+    handle.close();
+}

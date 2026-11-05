@@ -21,6 +21,7 @@ use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct TestServer {
+    accepted_keys: Vec<PublicKey>,
     sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>,
     auth_calls: Arc<Mutex<Vec<String>>>,
     /// Public keys accepted for user `tester`.
@@ -60,7 +61,7 @@ impl server::Server for TestServer {
     fn new_client(&mut self, _: Option<SocketAddr>) -> Self {
         // Channel ids are per connection: each connection keeps its own channel sets (a
         // connection through a jump host would otherwise see the bastion's ids as its own).
-        Self { channels: Arc::default(), shells: Arc::default(), scripts: Arc::default(), ..self.clone() }
+        Self { accepted_keys: Vec::new(), channels: Arc::default(), shells: Arc::default(), scripts: Arc::default(), ..self.clone() }
     }
 }
 
@@ -72,6 +73,14 @@ fn reject() -> Auth {
 
 impl server::Handler for TestServer {
     type Error = russh::Error;
+
+    async fn auth_none(&mut self, user: &str) -> Result<Auth, Self::Error> {
+        Ok(if user.starts_with("twokeys") {
+            Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::PublicKey][..])), partial_success: false }
+        } else {
+            reject()
+        })
+    }
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         self.auth_calls.lock().unwrap().push("password".into());
@@ -92,7 +101,7 @@ impl server::Handler for TestServer {
         response: Option<server::Response<'a>>,
     ) -> Result<Auth, Self::Error> {
         self.auth_calls.lock().unwrap().push("keyboard-interactive".into());
-        if user != "otp" && user != "keyotp" {
+        if user != "otp" && user != "keyotp" && !(user == "twokeysotp" && self.accepted_keys.len() == 2) {
             return Ok(reject());
         }
         Ok(match response {
@@ -111,6 +120,19 @@ impl server::Handler for TestServer {
     }
 
     async fn auth_publickey(&mut self, user: &str, key: VerifiedPublicKey<'_>) -> Result<Auth, Self::Error> {
+        if user.starts_with("twokeys") {
+            self.auth_calls.lock().unwrap().push(format!("publickey:{}", key.public_key.fingerprint(russh::keys::HashAlg::Sha256)));
+            let known = self.keys.iter().any(|k| k.key_data() == key.public_key.key_data());
+            if known && !self.accepted_keys.iter().any(|k| k.key_data() == key.public_key.key_data()) {
+                self.accepted_keys.push(key.public_key.clone());
+                if self.accepted_keys.len() == 2 && user == "twokeys" {
+                    return Ok(Auth::Accept);
+                }
+                let next = if self.accepted_keys.len() == 2 { MethodKind::KeyboardInteractive } else { MethodKind::PublicKey };
+                return Ok(Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[next][..])), partial_success: true });
+            }
+            return Ok(Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::PublicKey][..])), partial_success: false });
+        }
         self.auth_calls.lock().unwrap().push("publickey".into());
         let known = self.keys.iter().any(|k| k.key_data() == key.public_key.key_data());
         Ok(if user == "keyotp" && known {
@@ -292,6 +314,61 @@ fn rsa_key() -> PrivateKey {
     PrivateKey::from(key)
 }
 
+#[derive(Clone)]
+struct TestAgentPolicy {
+    sign: bool,
+}
+
+impl russh::keys::agent::server::Agent for TestAgentPolicy {
+    async fn confirm_request(&self, msg: russh::keys::agent::server::MessageType) -> bool {
+        !matches!(msg, russh::keys::agent::server::MessageType::Sign) || self.sign
+    }
+}
+
+#[cfg(windows)]
+fn start_test_agent(fx: &Fixture, keys: &[&PrivateKey], label: &str) -> String {
+    use futures::StreamExt as _;
+    use russh::keys::agent::client::AgentClient;
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let pipe = format!(r"\\.\pipe\playterm-two-keys-{}-{label}", std::process::id());
+    fx.server_rt.block_on(async {
+        let first = ServerOptions::new().first_pipe_instance(true).create(&pipe).unwrap();
+        let connections = futures::stream::unfold((first, pipe.clone()), |(server, name)| async move {
+            let accepted = server.connect().await.map(|()| server);
+            let next = ServerOptions::new().create(&name).unwrap();
+            Some((accepted, (next, name)))
+        });
+        tokio::spawn(russh::keys::agent::server::serve(connections.boxed(), TestAgentPolicy { sign: label != "refuse" }));
+        let mut client = AgentClient::connect_named_pipe(&pipe).await.unwrap();
+        for key in keys {
+            client.add_identity(key, &[]).await.unwrap();
+        }
+    });
+    pipe
+}
+
+#[cfg(unix)]
+fn start_test_agent(fx: &Fixture, keys: &[&PrivateKey], label: &str) -> String {
+    use russh::keys::agent::client::AgentClient;
+    use tokio::net::UnixListener;
+
+    let socket = fx.dir.join(format!("{label}.sock"));
+    fx.server_rt.block_on(async {
+        let listener = UnixListener::bind(&socket).unwrap();
+        let connections = futures::stream::unfold(listener, |listener| async move {
+            let accepted = listener.accept().await.map(|(stream, _)| stream);
+            Some((accepted, listener))
+        });
+        tokio::spawn(russh::keys::agent::server::serve(Box::pin(connections), TestAgentPolicy { sign: label != "refuse" }));
+        let mut client = AgentClient::connect_uds(&socket).await.unwrap();
+        for key in keys {
+            client.add_identity(key, &[]).await.unwrap();
+        }
+    });
+    socket.to_string_lossy().into_owned()
+}
+
 impl Fixture {
     /// Server accepting password `secret` and the given public keys for user `tester`.
     fn new(name: &str, client_keys: &[&PrivateKey]) -> Self {
@@ -316,6 +393,7 @@ impl Fixture {
 
         let auth_calls = Arc::new(Mutex::new(Vec::new()));
         let server = TestServer {
+            accepted_keys: Vec::new(),
             sftp_gate,
             auth_calls: auth_calls.clone(),
             keys: Arc::new(client_keys.iter().map(|k| k.public_key().clone()).collect()),
@@ -636,6 +714,206 @@ fn key_files_authenticate_without_prompts() {
 }
 
 #[test]
+fn two_public_keys_continue_across_files_and_skip_duplicates() {
+    let a = random_key(Algorithm::Ed25519);
+    let b = random_key(Algorithm::Ed25519);
+    let wrong = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("two-key-files", &[&a, &b]);
+    fx.trust_host();
+    let a_path = fx.write_key("a", &a);
+    let duplicate_a = fx.write_key("a-copy", &a);
+    let b_path = fx.write_key("b", &b);
+    let wrong_path = fx.write_key("wrong", &wrong);
+    for explicit in [true, false] {
+        fx.auth_calls.lock().unwrap().clear();
+        let h = fx.connect(ConnectParams {
+            username: "twokeys".into(),
+            identity_file: explicit.then(|| a_path.clone()),
+            default_identity_files: vec![wrong_path.clone(), a_path.clone(), duplicate_a.clone(), wrong_path.clone(), b_path.clone()],
+            ..fx.params()
+        });
+        expect_connected(&h);
+        h.close();
+        let calls = fx.auth_calls.lock().unwrap().clone();
+        let expected = if explicit { [&a, &wrong, &b] } else { [&wrong, &a, &b] };
+        assert_eq!(calls, expected.map(|k| format!("publickey:{}", k.public_key().fingerprint(russh::keys::HashAlg::Sha256))));
+    }
+}
+
+#[test]
+fn one_public_key_repeated_is_not_two_factors() {
+    let a = random_key(Algorithm::Ed25519);
+    let b = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("one-key-only", &[&a, &b]);
+    fx.trust_host();
+    let path = fx.write_key("a", &a);
+    let h = fx.connect(ConnectParams {
+        username: "twokeys".into(),
+        identity_file: Some(path.clone()),
+        default_identity_files: vec![path.clone(), fx.write_key("duplicate", &a), path],
+        ..fx.params()
+    });
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+    assert_eq!(fx.auth_calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn two_public_keys_then_otp_preserve_cancel_retry_and_saved_password_protection() {
+    let a = random_key(Algorithm::Ed25519);
+    let b = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("two-key-otp", &[&a, &b]);
+    fx.trust_host();
+    let params = ConnectParams {
+        username: "twokeysotp".into(),
+        identity_file: Some(fx.write_key("a", &a)),
+        default_identity_files: vec![fx.write_key("b", &b)],
+        password: Some("123456".into()), // Correct factor must still prompt.
+        ..fx.params()
+    };
+    let h = fx.connect(params.clone());
+    let prompt = expect_prompt(&h);
+    assert!(!prompt.account_password);
+    prompt.answer(Some(vec!["wrong".into()]));
+    answer_key_otp(&h);
+    let h = fx.connect(params.clone());
+    expect_prompt(&h).answer(None);
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+    answer_key_otp(&fx.connect(params));
+    assert!(!fx.auth_calls.lock().unwrap().iter().any(|s| s == "password"));
+}
+
+#[cfg(any(windows, unix))]
+#[test]
+fn two_public_keys_continue_within_agents_and_across_file_agent_sources() {
+    let a = random_key(Algorithm::Ed25519);
+    let b = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("two-key-agents", &[&a, &b]);
+    fx.trust_host();
+    let both = start_test_agent(&fx, &[&a, &b], "both");
+    let only_a = start_test_agent(&fx, &[&a], "only-a");
+    let refusing_b = start_test_agent(&fx, &[&b], "refuse");
+    let a_path = fx.write_key("a", &a);
+    let b_path = fx.write_key("b", &b);
+    for (identity_file, agent, defaults) in [
+        (None, &both, vec![]),
+        (Some(a_path.clone()), &both, vec![]),
+        (None, &only_a, vec![a_path.clone(), b_path.clone()]),
+        (Some(a_path.clone()), &refusing_b, vec![b_path]),
+    ] {
+        fx.auth_calls.lock().unwrap().clear();
+        let params = ConnectParams {
+            username: "twokeys".into(),
+            identity_file,
+            use_agent: true,
+            agent_pipe: Some(agent.clone()),
+            default_identity_files: defaults,
+            ..fx.params()
+        };
+        // A fresh connection must get a fresh deduplication set, including reconnects.
+        for _ in 0..2 {
+            let h = fx.connect(params.clone());
+            expect_connected(&h);
+            h.close();
+        }
+        assert_eq!(fx.auth_calls.lock().unwrap().len(), 4, "each connection submits two unique keys");
+    }
+    let h = fx.connect(ConnectParams {
+        username: "twokeys".into(),
+        identity_file: Some(a_path.clone()),
+        use_agent: true,
+        agent_pipe: Some(only_a),
+        default_identity_files: vec![a_path],
+        ..fx.params()
+    });
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+    answer_key_otp(&fx.connect(ConnectParams {
+        username: "twokeysotp".into(),
+        use_agent: true,
+        agent_pipe: Some(both),
+        password: Some("123456".into()),
+        ..fx.params()
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn two_public_keys_continue_between_unix_agents() {
+    if let Some(dir) = std::env::var_os("PLAYTERM_TWO_AGENT_CHILD") {
+        let dir = PathBuf::from(dir);
+        let a = russh::keys::load_secret_key(dir.join("a"), None).unwrap();
+        let b = russh::keys::load_secret_key(dir.join("b"), None).unwrap();
+        let fx = Fixture::new("two-agent-child", &[&a, &b]);
+        fx.trust_host();
+        expect_connected(&fx.connect(ConnectParams {
+            username: "twokeys".into(),
+            use_agent: true,
+            agent_pipe: Some(std::env::var("PLAYTERM_FIRST_AGENT").unwrap()),
+            ..fx.params()
+        }));
+        assert_eq!(fx.auth_calls.lock().unwrap().len(), 2);
+        return;
+    }
+    let a = random_key(Algorithm::Ed25519);
+    let b = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("two-agent-parent", &[&a, &b]);
+    fx.write_key("a", &a);
+    fx.write_key("b", &b);
+    let first = start_test_agent(&fx, &[&a], "first");
+    let second = start_test_agent(&fx, &[&a, &b], "second");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "two_public_keys_continue_between_unix_agents", "--nocapture"])
+        .env("PLAYTERM_TWO_AGENT_CHILD", &fx.dir)
+        .env("PLAYTERM_FIRST_AGENT", first)
+        .env("SSH_AUTH_SOCK", second)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn two_public_keys_are_independent_for_each_jump_and_new_connection() {
+    let a = random_key(Algorithm::Ed25519);
+    let b = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("two-key-jump", &[&a, &b]);
+    fx.trust_host();
+    let direct = ConnectParams {
+        username: "twokeys".into(),
+        identity_file: Some(fx.write_key("a", &a)),
+        default_identity_files: vec![fx.write_key("b", &b)],
+        ..fx.params()
+    };
+    expect_connected(&fx.connect(ConnectParams { jump: Some(Box::new(direct.clone())), ..direct }));
+    assert_eq!(fx.auth_calls.lock().unwrap().len(), 4);
+}
+
+#[test]
+fn second_key_passphrase_cancel_aborts_but_skip_allows_the_next_source() {
+    let a = random_key(Algorithm::Ed25519);
+    let b = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("two-key-cancel", &[&a, &b]);
+    fx.trust_host();
+    let encrypted = b.encrypt(&mut rand::rng(), "open sesame").unwrap();
+    let params = ConnectParams {
+        username: "twokeys".into(),
+        identity_file: Some(fx.write_key("a", &a)),
+        default_identity_files: vec![fx.write_key("encrypted-b", &encrypted), fx.write_key("plain-b", &b)],
+        password: Some("secret".into()),
+        ..fx.params()
+    };
+    let h = fx.connect(params.clone());
+    expect_prompt(&h).answer(None);
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+    assert_eq!(fx.auth_calls.lock().unwrap().len(), 1, "only A was submitted before cancellation");
+    fx.auth_calls.lock().unwrap().clear();
+    let h = fx.connect(params);
+    let prompt = expect_prompt(&h);
+    assert!(prompt.can_skip && !prompt.account_password);
+    prompt.skip();
+    expect_connected(&h);
+    assert_eq!(fx.auth_calls.lock().unwrap().len(), 2);
+}
+
+#[test]
 fn forwards_x11_to_the_display() {
     let key = random_key(Algorithm::Ed25519);
     let fx = Fixture::new("x11", &[&key]);
@@ -792,8 +1070,14 @@ fn native_auth_fixture() {
     let dir = PathBuf::from(std::env::var_os("PLAYTERM_GUI_FIXTURE_DIR").expect("set PLAYTERM_GUI_FIXTURE_DIR"));
     std::fs::create_dir_all(&dir).unwrap();
     let key = random_key(Algorithm::Ed25519);
+    let second_key = random_key(Algorithm::Ed25519);
+    let two_keys = std::env::var_os("PLAYTERM_GUI_TWO_KEYS").is_some();
     let gate = Arc::new(common::sftp_fs::TransferGate::default());
-    let fx = Fixture::with_gate("native-auth", &[&key], Some(gate.clone()));
+    let fx = Fixture::with_gate("native-auth", &[&key, &second_key], Some(gate.clone()));
+    if two_keys {
+        let agent = start_test_agent(&fx, &[&key, &second_key], "native-two-keys");
+        std::fs::write(dir.join("agent.txt"), agent).unwrap();
+    }
     std::fs::write(fx.dir.join("sftp").join("large.bin"), vec![7u8; 8 * 1024 * 1024]).unwrap();
     std::fs::write(dir.join("sftp-root.txt"), fx.dir.join("sftp").to_string_lossy().as_bytes()).unwrap();
     known_hosts::learn_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), dir.join("known_hosts")).unwrap();
@@ -801,7 +1085,8 @@ fn native_auth_fixture() {
     std::fs::write(dir.join("encrypted_key"), encrypted.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
     std::fs::write(dir.join("plain_key"), key.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
     std::fs::write(dir.join("settings.toml"), "check_updates = false\nlanguage = \"en\"\n").unwrap();
-    std::fs::write(dir.join("connection.txt"), format!("ssh://tester@127.0.0.1:{}", fx.port)).unwrap();
+    let user = if two_keys { "twokeysotp" } else { "tester" };
+    std::fs::write(dir.join("connection.txt"), format!("ssh://{user}@127.0.0.1:{}", fx.port)).unwrap();
     println!("Native GUI fixture: {} (passphrase: open sesame; password: secret)", dir.display());
     let deadline = Instant::now() + Duration::from_secs(1800);
     let mut was_stalled = false;
