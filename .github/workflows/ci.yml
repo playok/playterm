@@ -51,8 +51,10 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
-      - name: Release notes guards
-        run: python scripts/test-release-notes.py
+      - name: Python harness checks
+        run: |
+          python scripts/test-release-notes.py
+          python scripts/test-stress-server.py
 
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings

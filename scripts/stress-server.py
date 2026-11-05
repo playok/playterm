@@ -12,10 +12,6 @@ parser.add_argument("--directory", type=Path, required=True)
 parser.add_argument("--seconds", type=int, default=300)
 parser.add_argument("--bytes-per-second", type=int, default=65536)
 parser.add_argument("--disconnect-after", type=int, default=0)
-args = parser.parse_args()
-if args.seconds <= 0 or args.bytes_per_second < 256:
-    parser.error("positive duration and at least 256 bytes/second required")
-args.directory.mkdir(parents=True, exist_ok=True)
 stop = threading.Event()
 guard = threading.Lock()
 stats = {"accepted": 0, "active": 0, "bytes": 0, "inputs": 0}
@@ -57,16 +53,36 @@ class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
 
-with Server(("127.0.0.1", 0), Handler) as server:
-    (args.directory / "url.txt").write_text(f"telnet://127.0.0.1:{server.server_address[1]}", encoding="utf-8")
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    deadline = time.monotonic() + args.seconds
-    while time.monotonic() < deadline and not (args.directory / "stop").exists():
-        with guard:
-            snapshot = dict(stats)
-        temporary = args.directory / "server-stats.tmp"
-        temporary.write_text(json.dumps(snapshot), encoding="utf-8")
-        temporary.replace(args.directory / "server-stats.json")
-        time.sleep(0.25)
-    stop.set()
-    server.shutdown()
+def write_snapshot(directory, snapshot):
+    """Keep the previous complete snapshot while a Windows reader briefly holds it open."""
+    temporary = directory / "server-stats.tmp"
+    snapshot = dict(snapshot, updated_unix=time.time())
+    temporary.write_text(json.dumps(snapshot), encoding="utf-8")
+    for attempt in range(40):
+        try:
+            temporary.replace(directory / "server-stats.json")
+            return
+        except PermissionError:
+            if attempt == 39:
+                raise
+            time.sleep(0.025)
+
+
+if __name__ == "__main__":
+    args = parser.parse_args()
+    if args.seconds <= 0 or args.bytes_per_second < 256:
+        parser.error("positive duration and at least 256 bytes/second required")
+    args.directory.mkdir(parents=True, exist_ok=True)
+    with Server(("127.0.0.1", 0), Handler) as server:
+        (args.directory / "url.txt").write_text(f"telnet://127.0.0.1:{server.server_address[1]}", encoding="utf-8")
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            deadline = time.monotonic() + args.seconds
+            while time.monotonic() < deadline and not (args.directory / "stop").exists():
+                with guard:
+                    snapshot = dict(stats)
+                write_snapshot(args.directory, snapshot)
+                time.sleep(0.25)
+        finally:
+            stop.set()
+            server.shutdown()
