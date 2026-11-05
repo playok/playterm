@@ -19,6 +19,32 @@ use crate::session::Waker;
 
 const CHUNK: usize = 256 * 1024;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+const CLEANUP_TIMEOUT: Duration = Duration::from_millis(250);
+
+#[derive(Default)]
+struct CancelSignal {
+    flag: AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
+impl CancelSignal {
+    fn cancel(&self) {
+        self.flag.store(true, Ordering::Release);
+        self.wake.notify_waiters();
+    }
+
+    async fn wait(&self) {
+        loop {
+            let notified = self.wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.flag.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteEntry {
@@ -81,7 +107,7 @@ struct Inner {
     events: std_mpsc::Sender<SftpEvent>,
     waker: Waker,
     next_id: AtomicU64,
-    cancel: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    cancel: Mutex<HashMap<u64, Arc<CancelSignal>>>,
 }
 
 impl Inner {
@@ -198,11 +224,11 @@ impl SftpConnection {
                 download_tree(&sftp, &remote, &base, &name, progress).await
             } else {
                 ensure_no_links(&base, &name)?;
-                let total = sftp.metadata(remote.clone()).await?.len();
+                let total = progress.request(sftp.metadata(remote.clone())).await?.len();
                 progress.add_total(total);
                 // `base.join("")` would end in a separator: the file itself is `base` then.
                 let local = if name.is_empty() { base.clone() } else { base.join(&name) };
-                download_file(&sftp, &remote, &local, progress).await
+                download_file(&remote, &local, progress).await
             }
         })
     }
@@ -222,7 +248,7 @@ impl SftpConnection {
 
     pub fn cancel(&self, id: u64) {
         if let Some(flag) = self.inner.cancel.lock().expect("cancel map").get(&id) {
-            flag.store(true, Ordering::Relaxed);
+            flag.cancel();
         }
     }
 
@@ -231,14 +257,14 @@ impl SftpConnection {
         F: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(CancelSignal::default());
         self.inner.cancel.lock().expect("cancel map").insert(id, cancelled.clone());
         self.spawn(move |inner| async move {
             let progress = Progress::new(id, inner.clone(), cancelled.clone());
             let result = f(SftpRef(inner.clone()), progress.clone()).await;
             let state = match result {
                 Ok(()) => TransferState::Finished,
-                Err(_) if cancelled.load(Ordering::Relaxed) => TransferState::Cancelled,
+                Err(_) if cancelled.flag.load(Ordering::Acquire) => TransferState::Cancelled,
                 Err(e) => TransferState::Failed(format!("{e:#}")),
             };
             progress.finish(state);
@@ -263,14 +289,14 @@ impl std::ops::Deref for SftpRef {
 struct Progress {
     id: u64,
     inner: Arc<Inner>,
-    cancelled: Arc<AtomicBool>,
+    cancelled: Arc<CancelSignal>,
     done: Arc<AtomicU64>,
     total: Arc<AtomicU64>,
     last_emit: Arc<Mutex<Instant>>,
 }
 
 impl Progress {
-    fn new(id: u64, inner: Arc<Inner>, cancelled: Arc<AtomicBool>) -> Self {
+    fn new(id: u64, inner: Arc<Inner>, cancelled: Arc<CancelSignal>) -> Self {
         let p = Self { id, inner, cancelled, done: Arc::default(), total: Arc::default(), last_emit: Arc::new(Mutex::new(Instant::now())) };
         p.emit(TransferState::Running);
         p
@@ -282,7 +308,7 @@ impl Progress {
 
     /// Records progress; fails once the transfer was cancelled.
     fn advance(&self, bytes: usize) -> anyhow::Result<()> {
-        if self.cancelled.load(Ordering::Relaxed) {
+        if self.cancelled.flag.load(Ordering::Acquire) {
             anyhow::bail!(t("취소됨", "Cancelled"));
         }
         self.done.fetch_add(bytes as u64, Ordering::Relaxed);
@@ -297,6 +323,44 @@ impl Progress {
 
     fn finish(&self, state: TransferState) {
         self.emit(state);
+    }
+
+    /// Interrupt remote waits, but never interrupt replacement/rollback once commit starts.
+    async fn request<T, E>(&self, future: impl Future<Output = Result<T, E>>) -> anyhow::Result<T>
+    where
+        E: Into<anyhow::Error>,
+    {
+        tokio::select! {
+            biased;
+            _ = self.cancelled.wait() => anyhow::bail!(t("취소됨", "Cancelled")),
+            result = future => result.map_err(Into::into),
+        }
+    }
+
+    /// Acknowledgement retains ownership of OPEN results that arrive after cancellation.
+    /// Only a confirmed exclusive create authorizes removing an unclaimed upload path.
+    async fn open_file(
+        &self,
+        path: String,
+        flags: OpenFlags,
+        attributes: russh_sftp::protocol::FileAttributes,
+        remove_unclaimed: bool,
+    ) -> anyhow::Result<russh_sftp::client::fs::File> {
+        self.advance(0)?;
+        let inner = self.inner.clone();
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let (accept, accepted) = tokio::sync::oneshot::channel::<()>();
+        self.inner.rt.spawn(async move {
+            let result = inner.sftp.open_with_flags_and_attributes(path.clone(), flags, attributes).await;
+            let opened = result.is_ok();
+            let _ = send.send(result);
+            if opened && accepted.await.is_err() && remove_unclaimed {
+                let _ = inner.sftp.remove_file(path).await;
+            }
+        });
+        let file = self.request(receive).await??;
+        let _ = accept.send(());
+        Ok(file)
     }
 
     fn emit(&self, state: TransferState) {
@@ -366,10 +430,13 @@ fn part_path(local: &Path) -> PathBuf {
     local.with_file_name(format!(".{name}.{unique}.part"))
 }
 
-async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress: Progress) -> anyhow::Result<()> {
+async fn download_file(remote: &str, local: &Path, progress: Progress) -> anyhow::Result<()> {
     let part = part_path(local);
     let result = async {
-        let mut src = sftp.open(remote).await.with_context(|| tr!("{remote} 을(를) 열 수 없습니다", "Cannot open {remote}"))?;
+        let mut src = progress
+            .open_file(remote.to_owned(), OpenFlags::READ, Default::default(), false)
+            .await
+            .with_context(|| tr!("{remote} 을(를) 열 수 없습니다", "Cannot open {remote}"))?;
         let mut dst = tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -378,7 +445,7 @@ async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress:
             .with_context(|| tr!("{} 을(를) 만들 수 없습니다", "Cannot create {}", part.display()))?;
         let mut buf = vec![0u8; CHUNK];
         loop {
-            let n = src.read(&mut buf).await?;
+            let n = progress.request(src.read(&mut buf)).await?;
             if n == 0 {
                 break;
             }
@@ -386,6 +453,7 @@ async fn download_file(sftp: &SftpSession, remote: &str, local: &Path, progress:
             progress.advance(n)?;
         }
         dst.flush().await?;
+        progress.advance(0)?;
         drop(dst);
         // Complete: now it replaces the destination (the user chose it, or it is in the folder
         // they chose).
@@ -423,12 +491,12 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     let part = remote_temp_path(remote, "part")?;
     // A file being replaced keeps its permissions (an executable script, a private file): the
     // temporary file is created with them, so its data is never open to more than the old was.
-    let permissions = existing_remote_file(sftp, remote).await?.and_then(|old| old.permissions).map(|mode| mode & 0o7777);
+    let permissions = progress.request(existing_remote_file(sftp, remote)).await?.and_then(|old| old.permissions).map(|mode| mode & 0o7777);
     let attributes = russh_sftp::protocol::FileAttributes { permissions, ..russh_sftp::protocol::FileAttributes::empty() };
     // Exclusive: never an existing file, nor a link to one.
     let flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
-    let mut dst = sftp
-        .open_with_flags_and_attributes(part.as_str(), flags, attributes)
+    let mut dst = progress
+        .open_file(part.clone(), flags, attributes, true)
         .await
         .with_context(|| tr!("{remote} 을(를) 만들 수 없습니다", "Cannot create {remote}"))?;
     let result = async {
@@ -438,10 +506,10 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
             if n == 0 {
                 break;
             }
-            dst.write_all(&buf[..n]).await?;
+            progress.request(dst.write_all(&buf[..n])).await?;
             progress.advance(n)?;
         }
-        dst.shutdown().await?;
+        progress.request(dst.shutdown()).await?;
         progress.advance(0)?;
         anyhow::Ok(())
     }
@@ -450,7 +518,8 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
         Ok(()) => replace_remote(sftp, &part, remote).await,
         Err(e) => {
             // Only the temporary file is ours to remove.
-            let _ = sftp.remove_file(part.as_str()).await;
+            // The queued cleanup can complete when the server resumes, without holding up Cancel.
+            let _ = tokio::time::timeout(CLEANUP_TIMEOUT, sftp.remove_file(part.as_str())).await;
             Err(e)
         }
     }
@@ -566,7 +635,8 @@ async fn walk_remote(sftp: &SftpSession, root: &str, download: Option<&Progress>
             anyhow::bail!(tr!("폴더가 너무 깊습니다 ({}단계 넘음): {rel}", "Folders nested too deep (over {}): {rel}", MAX_TREE_DEPTH));
         }
         let dir = if rel.is_empty() { root.to_owned() } else { remote_join(root, &rel) };
-        for e in sftp.read_dir(dir).await? {
+        let entries = if let Some(progress) = download { progress.request(sftp.read_dir(dir)).await? } else { sftp.read_dir(dir).await? };
+        for e in entries {
             let name = e.file_name();
             if name == "." || name == ".." {
                 continue;
@@ -661,7 +731,7 @@ async fn download_tree(sftp: &SftpSession, remote: &str, base: &Path, top: &str,
         if is_dir {
             tokio::fs::create_dir_all(&target).await?;
         } else {
-            download_file(sftp, &remote_join(remote, &rel), &target, progress.clone()).await?;
+            download_file(&remote_join(remote, &rel), &target, progress.clone()).await?;
         }
     }
     Ok(())
@@ -690,8 +760,10 @@ async fn upload_tree(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     dirs.sort();
     for rel in dirs {
         let target = if rel.is_empty() { remote.to_owned() } else { remote_join(remote, &rel) };
-        if !sftp.try_exists(target.clone()).await.unwrap_or(false) {
-            sftp.create_dir(target.clone())
+        progress.advance(0)?;
+        if !progress.request(sftp.try_exists(target.clone())).await? {
+            progress
+                .request(sftp.create_dir(target.clone()))
                 .await
                 .with_context(|| tr!("{target} 폴더를 만들 수 없습니다", "Cannot create folder {target}"))?;
         }
@@ -789,7 +861,7 @@ mod tests {
         let stream = tokio::io::join(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         let sftp = SftpSession::new(stream).await.unwrap();
         let conn = SftpConnection::new(sftp, Arc::new(|| {}));
-        let progress = || Progress::new(1, conn.inner.clone(), Arc::new(AtomicBool::new(false)));
+        let progress = || Progress::new(1, conn.inner.clone(), Arc::new(CancelSignal::default()));
 
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("app.sh");
@@ -811,7 +883,9 @@ mod tests {
         assert!(upload_file(&conn.inner.sftp, &dir.path().join("missing"), &remote, progress()).await.is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"old");
 
-        let cancelled = Progress::new(2, conn.inner.clone(), Arc::new(AtomicBool::new(true)));
+        let signal = Arc::new(CancelSignal::default());
+        signal.cancel();
+        let cancelled = Progress::new(2, conn.inner.clone(), signal);
         let big = dir.path().join("big.local");
         std::fs::write(&big, vec![1u8; 3 * CHUNK]).unwrap();
         assert!(upload_file(&conn.inner.sftp, &big, &remote, cancelled).await.is_err());

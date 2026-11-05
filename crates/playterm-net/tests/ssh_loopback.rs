@@ -21,6 +21,7 @@ use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct TestServer {
+    sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>,
     auth_calls: Arc<Mutex<Vec<String>>>,
     /// Public keys accepted for user `tester`.
     keys: Arc<Vec<PublicKey>>,
@@ -137,7 +138,8 @@ impl server::Handler for TestServer {
         match channel {
             Some(channel) if name == "sftp" => {
                 session.channel_success(id)?;
-                russh_sftp::server::run(channel.into_stream(), common::sftp_fs::FsHandler::new(&self.sftp_root)).await;
+                let handler = common::sftp_fs::FsHandler::new(&self.sftp_root).with_transfer_gate(self.sftp_gate.clone());
+                russh_sftp::server::run(channel.into_stream(), handler).await;
             }
             _ => session.channel_failure(id)?,
         }
@@ -293,6 +295,10 @@ fn rsa_key() -> PrivateKey {
 impl Fixture {
     /// Server accepting password `secret` and the given public keys for user `tester`.
     fn new(name: &str, client_keys: &[&PrivateKey]) -> Self {
+        Self::with_gate(name, client_keys, None)
+    }
+
+    fn with_gate(name: &str, client_keys: &[&PrivateKey], sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>) -> Self {
         let host_key = random_key(Algorithm::Ed25519);
         let server_rt = tokio::runtime::Runtime::new().unwrap();
         let config = Arc::new(server::Config {
@@ -310,6 +316,7 @@ impl Fixture {
 
         let auth_calls = Arc::new(Mutex::new(Vec::new()));
         let server = TestServer {
+            sftp_gate,
             auth_calls: auth_calls.clone(),
             keys: Arc::new(client_keys.iter().map(|k| k.public_key().clone()).collect()),
             sftp_root: dir.join("sftp"),
@@ -785,7 +792,10 @@ fn native_auth_fixture() {
     let dir = PathBuf::from(std::env::var_os("PLAYTERM_GUI_FIXTURE_DIR").expect("set PLAYTERM_GUI_FIXTURE_DIR"));
     std::fs::create_dir_all(&dir).unwrap();
     let key = random_key(Algorithm::Ed25519);
-    let fx = Fixture::new("native-auth", &[&key]);
+    let gate = Arc::new(common::sftp_fs::TransferGate::default());
+    let fx = Fixture::with_gate("native-auth", &[&key], Some(gate.clone()));
+    std::fs::write(fx.dir.join("sftp").join("large.bin"), vec![7u8; 8 * 1024 * 1024]).unwrap();
+    std::fs::write(dir.join("sftp-root.txt"), fx.dir.join("sftp").to_string_lossy().as_bytes()).unwrap();
     known_hosts::learn_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), dir.join("known_hosts")).unwrap();
     let encrypted = key.encrypt(&mut rand::rng(), "open sesame").unwrap();
     std::fs::write(dir.join("encrypted_key"), encrypted.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
@@ -794,7 +804,19 @@ fn native_auth_fixture() {
     std::fs::write(dir.join("connection.txt"), format!("ssh://tester@127.0.0.1:{}", fx.port)).unwrap();
     println!("Native GUI fixture: {} (passphrase: open sesame; password: secret)", dir.display());
     let deadline = Instant::now() + Duration::from_secs(1800);
+    let mut was_stalled = false;
     while Instant::now() < deadline && !dir.join("stop").exists() {
+        let stalled = dir.join("stall").exists();
+        if stalled != was_stalled {
+            if stalled {
+                gate.pause();
+            } else {
+                gate.resume();
+            }
+            was_stalled = stalled;
+        }
+        std::fs::write(dir.join("sftp-waiting.txt"), (stalled && gate.waiting.load(std::sync::atomic::Ordering::SeqCst)).to_string())
+            .unwrap();
         std::fs::write(dir.join("auth-calls.txt"), fx.auth_calls.lock().unwrap().join("\n")).unwrap();
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -1316,8 +1338,156 @@ fn sftp_cancelled_download_keeps_the_existing_file() {
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
+fn wait_for_stalled_request(gate: &common::sftp_fs::TransferGate) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !gate.waiting.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "no SFTP request reached the unresponsive server");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn transfer_within(sftp: &SftpConnection, id: u64, timeout: Duration) -> Option<TransferState> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Some(SftpEvent::Transfer(update)) = sftp.try_recv()
+            && update.id == id
+            && update.state != TransferState::Running
+        {
+            return Some(update.state);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    None
+}
+
+fn stalled_sftp_cancellation(upload: bool, opening: bool) {
+    let gate = Arc::new(common::sftp_fs::TransferGate::default());
+    let fx = Fixture::with_gate(&format!("stalled-{upload}-{opening}"), &[], Some(gate.clone()));
+    fx.trust_host();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+    let original = b"existing bytes must survive cancellation";
+    let source = fx.dir.join("source.bin");
+    let target = fx.dir.join("sftp").join("target.bin");
+    let local = fx.dir.join("local.bin");
+    std::fs::write(&source, vec![7u8; 8 * 1024 * 1024]).unwrap();
+    std::fs::write(&target, if upload { original.as_slice() } else { &[7u8; 4096] }).unwrap();
+    std::fs::write(&local, original).unwrap();
+    gate.block_open.store(opening, std::sync::atomic::Ordering::SeqCst);
+    gate.pause();
+    let id = if upload { sftp.upload(&source, "/target.bin") } else { sftp.download("/target.bin", &local, false) };
+    wait_for_stalled_request(&gate);
+    sftp.cancel(id);
+    let outcome = transfer_within(&sftp, id, Duration::from_secs(1));
+    gate.resume();
+    if outcome.is_none() {
+        let _ = transfer_within(&sftp, id, Duration::from_secs(5));
+    }
+    assert_eq!(outcome, Some(TransferState::Cancelled), "cancellation must finish before the server resumes");
+    assert_eq!(std::fs::read(if upload { &target } else { &local }).unwrap(), original);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while gate.opened.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "late OPEN did not complete after the server resumed");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let part_dir = if upload { fx.dir.join("sftp") } else { fx.dir.clone() };
+    while !upload_parts(&part_dir).is_empty() {
+        assert!(Instant::now() < deadline, "partial file remained after the server resumed");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn stalled_upload_can_be_cancelled_without_losing_existing_file() {
+    stalled_sftp_cancellation(true, false);
+}
+
+#[test]
+fn stalled_download_can_be_cancelled_without_losing_existing_file() {
+    stalled_sftp_cancellation(false, false);
+}
+
+#[test]
+fn stalled_upload_open_can_be_cancelled_and_late_created_file_is_removed() {
+    stalled_sftp_cancellation(true, true);
+}
+
+#[test]
+fn stalled_download_open_can_be_cancelled_without_losing_existing_file() {
+    stalled_sftp_cancellation(false, true);
+}
+
+#[test]
+fn failed_exclusive_open_never_removes_an_unowned_partial_file() {
+    let gate = Arc::new(common::sftp_fs::TransferGate::default());
+    gate.refuse_create.store(true, std::sync::atomic::Ordering::SeqCst);
+    let fx = Fixture::with_gate("refused-open", &[], Some(gate));
+    fx.trust_host();
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    let sftp = open_sftp(&h);
+    let source = fx.dir.join("source");
+    std::fs::write(&source, b"new").unwrap();
+    std::fs::write(fx.dir.join("sftp/target"), b"existing").unwrap();
+    assert!(matches!(transfer_result(&sftp, sftp.upload(&source, "/target")), TransferState::Failed(_)));
+    assert_eq!(std::fs::read(fx.dir.join("sftp/target")).unwrap(), b"existing");
+    let parts = upload_parts(&fx.dir.join("sftp"));
+    assert_eq!(parts.len(), 1);
+    assert_eq!(std::fs::read(fx.dir.join("sftp").join(&parts[0])).unwrap(), b"foreign partial file");
+}
+
+#[test]
+fn server_disconnect_during_transfer_keeps_existing_files() {
+    for upload in [true, false] {
+        let gate = Arc::new(common::sftp_fs::TransferGate::default());
+        let fx = Fixture::with_gate(&format!("disconnect-{upload}"), &[], Some(gate.clone()));
+        fx.trust_host();
+        let h = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+        expect_connected(&h);
+        let sftp = open_sftp(&h);
+        let source = fx.dir.join("source");
+        let local = fx.dir.join("local");
+        let remote = fx.dir.join("sftp/target");
+        std::fs::write(&source, vec![7; 8 * 1024 * 1024]).unwrap();
+        std::fs::write(&local, b"old local").unwrap();
+        std::fs::write(&remote, b"old remote").unwrap();
+        gate.pause();
+        let id = if upload { sftp.upload(&source, "/target") } else { sftp.download("/target", &local, false) };
+        wait_for_stalled_request(&gate);
+        fx.server_rt.shutdown_background();
+        let outcome = transfer_within(&sftp, id, Duration::from_secs(5));
+        assert!(matches!(outcome, Some(TransferState::Failed(_))), "{outcome:?}");
+        assert_eq!(std::fs::read(&local).unwrap(), b"old local");
+        assert_eq!(std::fs::read(&remote).unwrap(), b"old remote");
+    }
+}
+
 // -------------------------------------------------------------------------------------------------
 // Port forwarding
+
+#[test]
+fn repeated_connect_close_releases_forwarding_listeners() {
+    let fx = Fixture::new("reconnect-stress", &[]);
+    fx.trust_host();
+    for round in 0..100 {
+        let port = free_port();
+        let h = fx.connect(ConnectParams {
+            password: Some("secret".into()),
+            forwards: vec![rule(ForwardKind::Local, port, fx.port)],
+            ..fx.params()
+        });
+        expect_connected(&h);
+        h.close();
+        assert!(matches!(skip_notices(&h), SessionEvent::Closed(None)), "round {round}");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        while std::net::TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok() {
+            assert!(Instant::now() < deadline, "listener survived round {round}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
 
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()

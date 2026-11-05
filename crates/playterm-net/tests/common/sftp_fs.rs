@@ -5,9 +5,46 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 
 use russh_sftp::protocol::{Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Status, StatusCode, Version};
+
+/// A deterministic unresponsive read/write request, without stopping the SSH runtime.
+#[derive(Default)]
+pub struct TransferGate {
+    paused: AtomicBool,
+    pub block_open: AtomicBool,
+    pub refuse_create: AtomicBool,
+    pub opened: AtomicUsize,
+    pub waiting: AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
+#[allow(dead_code)]
+impl TransferGate {
+    pub fn pause(&self) {
+        self.waiting.store(false, Ordering::SeqCst);
+        self.paused.store(true, Ordering::SeqCst);
+    }
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+        self.wake.notify_waiters();
+    }
+    async fn wait(&self) {
+        loop {
+            let notified = self.wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.paused.load(Ordering::SeqCst) {
+                return;
+            }
+            self.waiting.store(true, Ordering::SeqCst);
+            notified.await;
+        }
+    }
+}
 
 enum Open {
     File(fs::File),
@@ -19,11 +56,18 @@ pub struct FsHandler {
     root: PathBuf,
     handles: HashMap<String, Open>,
     next: u64,
+    gate: Option<Arc<TransferGate>>,
 }
 
 impl FsHandler {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into(), handles: HashMap::new(), next: 0 }
+        Self { root: root.into(), handles: HashMap::new(), next: 0, gate: None }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_transfer_gate(mut self, gate: Option<Arc<TransferGate>>) -> Self {
+        self.gate = gate;
+        self
     }
 
     /// The local path for an SFTP path, always inside the root: on Windows a part like
@@ -158,6 +202,18 @@ impl russh_sftp::server::Handler for FsHandler {
     }
 
     async fn open(&mut self, id: u32, filename: String, flags: OpenFlags, attrs: FileAttributes) -> Result<Handle, Self::Error> {
+        if let Some(gate) = &self.gate
+            && gate.block_open.load(Ordering::SeqCst)
+        {
+            gate.wait().await;
+        }
+        if let Some(gate) = &self.gate
+            && gate.refuse_create.load(Ordering::SeqCst)
+            && flags.contains(OpenFlags::EXCLUDE)
+        {
+            fs::write(self.real(&filename), b"foreign partial file").map_err(io_code)?;
+            return Err(StatusCode::Failure);
+        }
         let mut options = fs::OpenOptions::new();
         options
             .read(flags.contains(OpenFlags::READ))
@@ -178,10 +234,16 @@ impl russh_sftp::server::Handler for FsHandler {
         #[cfg(not(unix))]
         let _ = attrs;
         let file = options.open(self.real(&filename)).map_err(io_code)?;
+        if let Some(gate) = &self.gate {
+            gate.opened.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(Handle { id, handle: self.insert(Open::File(file)) })
     }
 
     async fn read(&mut self, id: u32, handle: String, offset: u64, len: u32) -> Result<Data, Self::Error> {
+        if let Some(gate) = &self.gate {
+            gate.wait().await;
+        }
         let Some(Open::File(f)) = self.handles.get_mut(&handle) else { return Err(StatusCode::Failure) };
         f.seek(SeekFrom::Start(offset)).map_err(io_code)?;
         let mut data = vec![0u8; len as usize];
@@ -194,6 +256,9 @@ impl russh_sftp::server::Handler for FsHandler {
     }
 
     async fn write(&mut self, id: u32, handle: String, offset: u64, data: Vec<u8>) -> Result<Status, Self::Error> {
+        if let Some(gate) = &self.gate {
+            gate.wait().await;
+        }
         let Some(Open::File(f)) = self.handles.get_mut(&handle) else { return Err(StatusCode::Failure) };
         f.seek(SeekFrom::Start(offset)).map_err(io_code)?;
         f.write_all(&data).map_err(io_code)?;
