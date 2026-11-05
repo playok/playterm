@@ -19,6 +19,9 @@ impl PlaytermApp {
             Command::ImportXshell => {
                 self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::Xshell))));
             }
+            Command::ImportSecureCrt => {
+                self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::SecureCrt))));
+            }
             Command::Quit => self.request_close(ctx, CloseRequest::Quit),
 
             Command::Copy => {

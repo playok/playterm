@@ -771,6 +771,9 @@ fn start_card(ui: &mut egui::Ui, style: &ViewStyle, command: &mut Option<crate::
         if ui.add(crate::icon::button(crate::icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
             *command = Some(Command::ImportXshell);
         }
+        if ui.add(crate::icon::button(crate::icon::IMPORT, t("SecureCRT 가져오기", "Import SecureCRT"))).clicked() {
+            *command = Some(Command::ImportSecureCrt);
+        }
     });
     ui.add_space(8.0);
     ui.weak(t(

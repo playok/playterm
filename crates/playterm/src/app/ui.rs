@@ -26,6 +26,11 @@ impl PlaytermApp {
                     self.modal = Some(Modal::Shortcuts);
                 }
             }
+            Modal::Notice(title, text) => {
+                if !dialogs::notice(ctx, &title, &text) {
+                    self.modal = Some(Modal::Notice(title, text));
+                }
+            }
             Modal::About => {
                 if !dialogs::about(ctx) {
                     self.modal = Some(Modal::About);
@@ -61,13 +66,21 @@ impl PlaytermApp {
                 ImportResult::Cancel => {}
                 ImportResult::Import { source, folder, profiles } => {
                     let count = profiles.len();
-                    let source = source.name();
                     for p in profiles {
                         let r = self.store.upsert(p);
                         self.report(t("사이트 저장 실패", "Could not save the site"), r);
                     }
                     let place = if folder.is_empty() { String::new() } else { tr!(" ('{folder}' 폴더)", " (folder '{folder}')") };
-                    self.info = Some(tr!("{source} 세션 {count}개를 가져왔습니다{place}", "Imported {count} {source} sessions{place}"));
+                    let imported = tr!("{} 세션 {count}개를 가져왔습니다{place}", "Imported {count} {} sessions{place}", source.name());
+                    // SecureCRT keeps passwords for its sessions; they stay behind, which the user
+                    // acknowledges rather than finds out at the first connection. The notice says
+                    // what was imported too.
+                    if source == ImportSource::SecureCrt && count > 0 {
+                        let text = format!("{imported}.\n\n{}", crate::import_dialog::password_notice_text());
+                        self.modal = Some(Modal::Notice(crate::import_dialog::password_notice_title().to_owned(), text));
+                    } else {
+                        self.info = Some(imported);
+                    }
                     self.show_sidebar = true;
                 }
             },

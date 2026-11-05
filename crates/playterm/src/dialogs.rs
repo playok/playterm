@@ -255,6 +255,24 @@ pub fn confirm(ctx: &egui::Context, title: &str, text: &str, ok_label: &str) -> 
     if close && answer.is_none() { Some(false) } else { answer }
 }
 
+/// A notice with an OK button (`title`, `text`). True once it is dismissed.
+pub fn notice(ctx: &egui::Context, title: &str, text: &str) -> bool {
+    let mut done = false;
+    let close = modal(("notice", title), ctx, |ui| {
+        ui.set_width(380.0);
+        ui.heading(title);
+        ui.add_space(4.0);
+        ui.label(text);
+        ui.add_space(8.0);
+        let ok = ui.add(icon::primary(ui, icon::OK, t("확인", "OK")));
+        if !ui.memory(|m| m.focused().is_some()) {
+            ok.request_focus();
+        }
+        done = ok.clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+    });
+    done || close
+}
+
 /// What closing would end, for [`confirm_close`].
 pub struct CloseQuestion<'a> {
     pub title: &'a str,

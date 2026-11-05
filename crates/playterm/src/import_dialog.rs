@@ -1,4 +1,4 @@
-//! "세션 가져오기" dialog: lists the sessions saved by PuTTY or Xshell to pick from.
+//! "세션 가져오기" dialog: lists the sessions saved by PuTTY, Xshell or SecureCRT to pick from.
 
 use std::path::PathBuf;
 
@@ -7,13 +7,14 @@ use playterm_config::{ProfileStore, SessionProfile, normalize_folder};
 use playterm_i18n::{t, tr};
 
 use crate::icon;
-use crate::{putty, sidebar, xshell};
+use crate::{putty, securecrt, sidebar, xshell};
 
 /// Where sessions are imported from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportSource {
     Putty,
     Xshell,
+    SecureCrt,
 }
 
 impl ImportSource {
@@ -21,6 +22,7 @@ impl ImportSource {
         match self {
             Self::Putty => "PuTTY",
             Self::Xshell => "Xshell",
+            Self::SecureCrt => "SecureCRT",
         }
     }
 }
@@ -58,11 +60,11 @@ struct Item {
 
 pub struct ImportDialog {
     source: ImportSource,
-    /// The Xshell Sessions folder read (none found: `None`).
+    /// The Xshell or SecureCRT sessions folder read (none found: `None`).
     dir: Option<PathBuf>,
     items: Vec<Item>,
     folder: String,
-    /// Only part of the Xshell folder was read (it is too big).
+    /// Only part of the sessions folder was read (it is too big).
     truncated: bool,
     error: Option<String>,
 }
@@ -86,6 +88,7 @@ impl ImportDialog {
         let dir = match source {
             ImportSource::Putty => None,
             ImportSource::Xshell => xshell::default_dir(),
+            ImportSource::SecureCrt => securecrt::default_dir(),
         };
         let mut dialog = Self { source, dir, items: Vec::new(), folder: source.name().to_owned(), truncated: false, error: None };
         dialog.load(store);
@@ -97,7 +100,8 @@ impl ImportDialog {
         let loaded = match (self.source, &self.dir) {
             (ImportSource::Putty, _) => putty::load(&putty::sessions_key()).map(|s| (s, false)),
             (ImportSource::Xshell, Some(dir)) => xshell::load(dir).map(|l| (l.sessions, l.truncated)),
-            (ImportSource::Xshell, None) => Ok((Vec::new(), false)),
+            (ImportSource::SecureCrt, Some(dir)) => securecrt::load(dir).map(|l| (l.sessions, l.truncated)),
+            (_, None) => Ok((Vec::new(), false)),
         };
         let (sessions, truncated, error) = match loaded {
             Ok((s, truncated)) => (s, truncated, None),
@@ -124,18 +128,20 @@ impl ImportDialog {
         }
     }
 
-    /// The Xshell folder line, with a button to read another folder.
+    /// The sessions folder line (Xshell, SecureCRT), with a button to read another folder.
     fn location(&mut self, ui: &mut egui::Ui, store: &ProfileStore) {
-        if self.source != ImportSource::Xshell {
+        if self.source == ImportSource::Putty {
             return;
         }
+        let source = self.source.name();
         ui.horizontal(|ui| {
             match &self.dir {
                 Some(dir) => ui.weak(tr!("폴더: {}", "Folder: {}", dir.display())),
-                None => ui.label(t("Xshell 세션 폴더를 찾지 못했습니다.", "The Xshell sessions folder was not found.")),
+                None => ui.label(tr!("{source} 세션 폴더를 찾지 못했습니다.", "The {source} sessions folder was not found.")),
             };
             if ui.add(icon::button(icon::BROWSE, t("다른 폴더…", "Other folder…")).small()).clicked() {
-                let mut picker = crate::picker::Picker::new(crate::picker::Kind::Folder, t("Xshell 세션 폴더", "Xshell sessions folder"));
+                let mut picker =
+                    crate::picker::Picker::new(crate::picker::Kind::Folder, tr!("{source} 세션 폴더", "{source} sessions folder"));
                 if let Some(dir) = &self.dir {
                     picker = picker.directory(dir);
                 }
@@ -154,13 +160,17 @@ impl ImportDialog {
             ui.set_width(600.0);
             ui.heading(tr!("{source} 세션 가져오기", "Import {source} sessions"));
             ui.add_space(4.0);
+            if self.source == ImportSource::SecureCrt {
+                password_alert(ui);
+                ui.add_space(4.0);
+            }
             self.location(ui, store);
             if self.truncated {
                 ui.colored_label(
                     ui.visuals().warn_fg_color,
-                    t(
-                        "폴더가 너무 커서 일부만 읽었습니다. Xshell 세션 폴더를 직접 고르세요.",
-                        "The folder is too big, so only part of it was read. Pick the Xshell sessions folder itself.",
+                    tr!(
+                        "폴더가 너무 커서 일부만 읽었습니다. {source} 세션 폴더를 직접 고르세요.",
+                        "The folder is too big, so only part of it was read. Pick the {source} sessions folder itself.",
                     ),
                 );
             }
@@ -184,6 +194,10 @@ impl ImportDialog {
                     ImportSource::Xshell => t(
                         "Xshell 의 하위 폴더는 아래 폴더 안에 그대로 만듭니다. 비밀번호는 가져오지 않으며, 이미 있는 사이트는 기본으로 선택 해제됩니다.",
                         "Xshell's subfolders are kept inside the folder below. Passwords are not imported, and sites that already exist are unchecked by default.",
+                    ),
+                    ImportSource::SecureCrt => t(
+                        "SecureCRT 의 하위 폴더는 아래 폴더 안에 그대로 만듭니다. 이미 있는 사이트는 기본으로 선택 해제됩니다.",
+                        "SecureCRT's subfolders are kept inside the folder below. Sites that already exist are unchecked by default.",
                     ),
                 });
                 ui.add_space(4.0);
@@ -241,6 +255,32 @@ impl ImportDialog {
         }
         result
     }
+}
+
+/// The notice that saved passwords stay behind, shown at the top of the SecureCRT import.
+fn password_alert(ui: &mut egui::Ui) {
+    let warn = ui.visuals().warn_fg_color;
+    egui::Frame::new().stroke(egui::Stroke::new(1.0, warn)).corner_radius(4.0).inner_margin(egui::Margin::symmetric(10, 8)).show(
+        ui,
+        |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(format!("⚠ {}", password_notice_title())).color(warn).strong());
+            ui.label(password_notice_text());
+        },
+    );
+}
+
+/// Title of the notice that SecureCRT's saved passwords are not imported.
+pub fn password_notice_title() -> &'static str {
+    t("비밀번호는 가져오지 않습니다", "Passwords are not imported")
+}
+
+/// The notice that SecureCRT's saved passwords are not imported, and what to do instead.
+pub fn password_notice_text() -> &'static str {
+    t(
+        "SecureCRT 에 저장된 비밀번호는 암호화되어 있어 가져오지 않습니다. 가져온 사이트에 처음 연결할 때 비밀번호를 입력하고 '비밀번호 저장' 을 선택하면 playterm 볼트(마스터 비밀번호로 암호화)에 저장됩니다.",
+        "The passwords SecureCRT saved are encrypted and are not imported. Type the password the first time you connect to an imported site and choose 'Save password': it is kept in playterm's vault (encrypted with the master password).",
+    )
 }
 
 fn row(ui: &mut egui::Ui, item: &mut Item) {
