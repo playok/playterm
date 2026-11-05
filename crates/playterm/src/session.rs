@@ -379,11 +379,7 @@ impl Session {
         self.remote_title = None;
         self.host_key = None;
         self.auth = None;
-        self.sftp = None;
-        self.sftp_start = None;
-        self.shell_dir_request = None;
-        self.sftp_pending = false;
-        self.sftp_error = None;
+        self.forget_sftp();
         self.requests.clear();
         self.log_plan = log.clone();
         self.login = login.clone().map(LoginRunner::new);
@@ -553,6 +549,12 @@ impl Session {
         self.ping = None;
         self.leave_prompt();
         self.end_zmodem();
+        // SFTP ran over the old connection (its `Closed` is never read now that the handle is
+        // replaced): the panel opens a new channel on the new one.
+        if self.sftp.as_ref().is_some_and(|b| b.has_running_transfers()) {
+            self.notice(t("다시 연결해 진행 중이던 SFTP 전송을 중단했습니다", "Reconnected; the SFTP transfers in progress stopped"), "31");
+        }
+        self.forget_sftp();
         let target = self.target();
         self.terminal.feed_local(&tr!("\x1b[90m{target} 에 다시 연결 중...\x1b[0m\r\n", "\x1b[90mReconnecting to {target}...\x1b[0m\r\n"));
         self.state = SessionState::Connecting;
@@ -793,11 +795,7 @@ impl Session {
                     self.save_on_login = None;
                     self.host_key = None;
                     self.auth = None;
-                    self.sftp = None;
-                    self.sftp_start = None;
-                    self.shell_dir_request = None;
-                    self.sftp_pending = false;
-                    self.sftp_error = None;
+                    self.forget_sftp();
                     self.terminal.reset_modes();
                     match reason {
                         Some(reason) => self.notice(&tr!("연결 종료: {reason}", "Disconnected: {reason}"), "31"),
@@ -1640,6 +1638,17 @@ impl Session {
         }
     }
 
+    /// Drops the SFTP state of the connection that is going away: the browser (and its channel),
+    /// a request still waiting for its answer, and a failure to open it. The next connection
+    /// opens its own when the panel asks.
+    fn forget_sftp(&mut self) {
+        self.sftp = None;
+        self.sftp_start = None;
+        self.shell_dir_request = None;
+        self.sftp_pending = false;
+        self.sftp_error = None;
+    }
+
     /// Starts SFTP for the side panel. Does nothing after a failure on this connection until
     /// [`Self::retry_sftp`].
     pub fn ensure_sftp(&mut self) {
@@ -1734,6 +1743,26 @@ mod tests {
         session.poll(Path::new(""), false);
         assert!(!session.in_zmodem());
         assert!(shows(&mut session, "back$"));
+    }
+
+    /// Reconnecting before the old connection's `Closed` was read: the SFTP state of the old
+    /// connection (a request still waiting, a failure) does not keep the new one from opening its
+    /// own channel.
+    #[test]
+    fn reconnecting_forgets_the_old_connections_sftp() {
+        let (mut session, net, _lines) = device_tab(Duration::ZERO, None, None);
+        session.sftp_pending = true;
+        session.sftp_start = Some("/old".into());
+        session.shell_dir_request = Some(true);
+        session.reconnect(&net, std::sync::Arc::new(|| {}));
+        assert!(!session.sftp_pending, "a new request can be made");
+        assert_eq!(session.sftp_start, None);
+        assert_eq!(session.shell_dir_request, None);
+        assert!(session.sftp.is_none());
+
+        session.sftp_error = Some("SFTP subsystem refused".into());
+        session.reconnect(&net, std::sync::Arc::new(|| {}));
+        assert_eq!(session.sftp_error(), None, "the new connection may try again");
     }
 
     /// A tab connected over Telnet to a fake device on this PC: it shows `router#` and answers
