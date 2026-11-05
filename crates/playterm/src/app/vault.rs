@@ -115,7 +115,7 @@ impl PlaytermApp {
         }
         // Passwords saved by older versions get the target of their site as it is now.
         let store = &self.store;
-        let r = self.vault.bind_missing(|id| store.get(id).filter(|p| p.save_password).map(vault_target));
+        let r = self.vault.bind_missing(|id| store.get(id).filter(|p| p.save_password && may_bind_unbound(p)).map(vault_target));
         self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
         match pending {
             Pending::Unlock => {}
@@ -359,5 +359,60 @@ mod tests {
         assert_eq!(bound_secret(&vault, &moved).unwrap_err(), vault_target(&site));
         let other_user = SessionProfile { username: "root".into(), ..site.clone() };
         assert!(bound_secret(&vault, &other_user).is_err());
+    }
+
+    fn rdp_site(gateway: &str, gateway_user: &str) -> SessionProfile {
+        let rdp = playterm_net::RdpSettings { gateway: gateway.into(), gateway_user: gateway_user.into(), ..Default::default() };
+        SessionProfile {
+            id: "r".into(),
+            protocol: Protocol::Rdp,
+            host: "desk01".into(),
+            port: 3389,
+            username: "ops".into(),
+            rdp,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_new_or_changed_rd_gateway_does_not_get_the_saved_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = playterm_config::Vault::new(dir.path().join("vault.bin"));
+        vault.create("master").unwrap();
+        let direct = rdp_site("", "");
+        assert_eq!(vault_target(&direct), "rdp://ops@desk01:3389", "direct sites keep their target");
+        vault.set("r", &vault_target(&direct), "s3cret").unwrap();
+        assert!(bound_secret(&vault, &direct).is_ok());
+        // A gateway added to the file afterwards, or a gateway user cleared to fall back on the
+        // site's account: the password would go to the gateway.
+        assert!(bound_secret(&vault, &rdp_site("gw.example", "")).is_err());
+
+        let approved = rdp_site("gw.example", "");
+        vault.set("r", &vault_target(&approved), "s3cret").unwrap();
+        assert!(bound_secret(&vault, &approved).is_ok());
+        // The same gateway written another way.
+        for same in ["GW.example", " gw.example:443 ", "gw.example:443"] {
+            assert!(bound_secret(&vault, &rdp_site(same, "")).is_ok(), "{same:?}");
+        }
+        for changed in [rdp_site("other.example", ""), rdp_site("gw.example:8443", ""), rdp_site("", "")] {
+            assert!(bound_secret(&vault, &changed).is_err(), "{:?}", changed.rdp);
+        }
+
+        // Its own gateway account, then back to the site's: the password would go to the gateway.
+        let own = rdp_site("gw.example", "gwuser");
+        vault.set("r", &vault_target(&own), "s3cret").unwrap();
+        assert!(bound_secret(&vault, &own).is_ok());
+        assert!(bound_secret(&vault, &rdp_site("gw.example", "")).is_err());
+        assert!(bound_secret(&vault, &rdp_site("gw.example", "other")).is_err());
+    }
+
+    #[test]
+    fn gateway_endpoints_compare_with_their_port() {
+        assert_eq!(super::super::gateway_endpoint("GW.Example"), "gw.example:443");
+        assert_eq!(super::super::gateway_endpoint("gw.example:8443"), "gw.example:8443");
+        assert_eq!(super::super::gateway_endpoint("[::1]:8443"), "[::1]:8443");
+        assert_eq!(super::super::gateway_endpoint("[::1]"), "[::1]:443");
+        assert!(!may_bind_unbound(&rdp_site("gw.example", "")));
+        assert!(may_bind_unbound(&rdp_site("", "")));
     }
 }

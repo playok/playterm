@@ -221,6 +221,17 @@ impl PlaytermApp {
                 ));
                 None
             }
+            // Saved by an older version, before gateways: not sent through one added since.
+            None if !super::may_bind_unbound(profile) => {
+                self.status = Some(tr!(
+                    "'{}' 의 저장된 비밀번호는 RD 게이트웨이를 쓰기 전에 저장되어 게이트웨이로 보내지 않았습니다. \
+                     로그인할 때 '비밀번호 저장' 을 다시 선택하세요.",
+                    "The saved password of '{}' was saved before the site used an RD Gateway, so it was not sent through it. \
+                     Choose 'Save password' again when logging in.",
+                    profile.display_name()
+                ));
+                None
+            }
             // Saved by an older version; bound to the site on this unlock.
             None => {
                 let r = self.vault.rebind(&profile.id, &now);
