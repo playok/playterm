@@ -81,7 +81,7 @@ jobs:
           WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
-          $options = @{ Upx = $true; SkipBuild = $true }
+          $options = @{ BothVariants = $true; SkipBuild = $true }
           if ($env:GITHUB_REF -like "refs/tags/*") { $options.Sign = $true }
           if ($env:WINDOWS_CERT_PFX) { $options.CodeSign = $true }
           ./scripts/package.ps1 @options
@@ -94,6 +94,7 @@ jobs:
           path: |
             dist/*.zip
             dist/SHA256SUMS.txt*
+            dist/*.verification.json
           if-no-files-found: error
 
   macos:
@@ -194,6 +195,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download the packages
         uses: actions/download-artifact@v4
         with:
@@ -210,12 +215,11 @@ jobs:
           NOTARIZED: ${{ needs.macos.outputs.notarized }}
         run: |
           set -eu
-          cd dist
-          ls -l
+          ls -l dist
           if [ "$CODESIGNED" = true ]; then
-            windows_note="The Windows executables are code-signed. They are compressed with UPX, which some antivirus products flag by mistake."
+            windows_note="The Windows executables are code-signed. The standard ZIPs are uncompressed; optional -upx ZIPs contain UPX-compressed executables."
           else
-            windows_note="The Windows executables are not code-signed, so Windows SmartScreen may warn on the first run (More info -> Run anyway). They are compressed with UPX, which some antivirus products flag by mistake."
+            windows_note="The Windows executables are not code-signed, so Windows SmartScreen may warn on the first run. The standard ZIPs are uncompressed; optional -upx ZIPs contain UPX-compressed executables."
           fi
           if [ "$NOTARIZED" = true ]; then
             macos_note="The macOS apps are signed with a Developer ID and notarized by Apple."
@@ -224,21 +228,25 @@ jobs:
           else
             macos_note="The macOS apps are signed ad hoc and not notarized, so macOS stops the first run of a downloaded app: right-click playterm.app -> Open, or System Settings -> Privacy & Security -> Open Anyway."
           fi
-          windows_sums=$(tr -d '\r' < SHA256SUMS.txt)
-          macos_sums=$(cat SHA256SUMS-macos.txt)
+          windows_sums=$(tr -d '\r' < dist/SHA256SUMS.txt)
+          macos_sums=$(cat dist/SHA256SUMS-macos.txt)
           tick='`'
           fence='```'
-          cat > notes.md <<EOF
+          cat > dist/packages.md <<EOF
           Packages of playterm $TAG.
 
           | File | For |
           |---|---|
           | ${tick}playterm-*-windows-x64.zip${tick} | Intel / AMD 64-bit Windows (portable: unzip and run ${tick}playterm.exe${tick}) |
           | ${tick}playterm-*-windows-arm64.zip${tick} | ARM64 Windows (Snapdragon, ...) |
+          | ${tick}playterm-*-windows-x64-upx.zip${tick} | Optional smaller UPX executable for x64 Windows |
+          | ${tick}playterm-*-windows-arm64-upx.zip${tick} | Optional smaller UPX executable for ARM64 Windows |
           | ${tick}playterm-*-macos-arm64.zip${tick} | Apple silicon Macs, macOS 11 or later (unzip and move ${tick}playterm.app${tick} to Applications) |
           | ${tick}playterm-*-macos-x64.zip${tick} | Intel Macs, macOS 11 or later |
 
           $windows_note
+
+          UPX can trigger antivirus false positives. The uncompressed variant does not guarantee their absence. Automatic updates select the standard, uncompressed package for both variants, including existing UPX installations.
 
           $macos_note
 
@@ -252,5 +260,8 @@ jobs:
           $macos_sums
           ${fence}
           EOF
+          python3 scripts/release-notes.py --tag "$TAG" --repository "$GH_REPO" \
+            --package-notes dist/packages.md --output dist/notes.md
+          cd dist
           gh release create "$TAG" *.zip SHA256SUMS.txt SHA256SUMS.txt.sig SHA256SUMS-macos.txt \
             --verify-tag --title "playterm $TAG" --notes-file notes.md

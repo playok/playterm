@@ -95,6 +95,7 @@ fn arch() -> &'static str {
 }
 
 fn package_name(version: Version) -> Option<String> {
+    // The standard ZIP is uncompressed. Every installation (including -upx) updates to it.
     os().map(|os| format!("playterm-{version}-{os}-{}.zip", arch()))
 }
 
@@ -465,7 +466,7 @@ impl Updater {
                     if !release.notes.trim().is_empty() {
                         ui.add_space(4.0);
                         egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                            ui.add(egui::Label::new(egui::RichText::new(release.notes.trim()).weak()).wrap());
+                            ui.add(egui::Label::new(notes_preview(&release.notes)).wrap());
                         });
                     }
                     ui.hyperlink_to(t("릴리스 페이지", "Release page"), &release.page);
@@ -549,10 +550,86 @@ impl Updater {
     }
 }
 
+/// Package tables, hashes and signing details remain available on the release page.
+fn notes_preview(notes: &str) -> String {
+    notes
+        .split("\n## Downloads")
+        .next()
+        .unwrap_or(notes)
+        .lines()
+        .map(|line| plain_note_links(line.trim_start_matches('#').trim_start()))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned()
+}
+
+fn plain_note_links(line: &str) -> String {
+    let mut rest = line;
+    let mut text = String::new();
+    while let Some(start) = rest.find('[') {
+        text.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let Some(label_end) = rest.find("](") else { break };
+        let Some(url_end) = rest[label_end + 2..].find(')') else { break };
+        text.push_str(&rest[1..label_end]);
+        rest = &rest[label_end + 3 + url_end..];
+    }
+    text.push_str(rest);
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ring::signature::{Ed25519KeyPair, KeyPair as _};
+
+    #[test]
+    fn preview_keeps_user_changes_before_download_details() {
+        let notes = "## Fixes\n\n- Key cancellation stops login.\n\n## Downloads\n\n| Package |\nsecret-checksum";
+        assert_eq!(notes_preview(notes), "Fixes\n\n- Key cancellation stops login.");
+        assert_eq!(notes_preview("old release notes"), "old release notes");
+        assert_eq!(notes_preview("- 취소 수정 [#189](https://github.com/playok/playterm/issues/189)."), "- 취소 수정 #189.");
+    }
+
+    /// Native-window check of the real updater UI. It never checks for or installs releases.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "interactive Windows release notes preview"]
+    fn native_release_notes_preview() {
+        use winit::platform::windows::EventLoopBuilderExtWindows as _;
+        playterm_i18n::set_english(true);
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size([720.0, 640.0]),
+            event_loop_builder: Some(Box::new(|builder| {
+                builder.with_any_thread(true);
+            })),
+            ..Default::default()
+        };
+        let release = Release {
+            version: Version(99, 0, 0),
+            notes: include_str!("../../../docs/releases/next.md").to_owned() + "\n## Downloads\nTest package table and checksums.",
+            page: RELEASES_PAGE.into(),
+            package: "preview-only".into(),
+            package_url: String::new(),
+            sums_url: String::new(),
+            sig_url: String::new(),
+        };
+        let mut updater = Updater { dialog: Some(Dialog::Available(release)), ..Default::default() };
+        let mut initialized = false;
+        eframe::run_ui_native("playterm release notes preview (test)", options, move |ui, _frame| {
+            let ctx = ui.ctx().clone();
+            if !initialized {
+                crate::fonts::install(&ctx, &playterm_config::AppSettings::default().font).unwrap();
+                initialized = true;
+            }
+            ui.label("Release notes preview. Use Later to finish; no real release is installed.");
+            if updater.show(&ctx, 0).is_some() || !updater.is_open() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        })
+        .unwrap();
+    }
 
     #[test]
     fn versions() {
@@ -589,6 +666,11 @@ mod tests {
         assert_eq!(release.package, package);
         assert_eq!(release.package_url, format!("https://example.com/{package}"));
         assert_eq!(release.notes, "notes\nline");
+        // Asset order and the optional UPX download never change the updater's selection.
+        let compressed = package.replace(".zip", "-upx.zip");
+        let both = latest_json("v0.3.0", &[&compressed, &package, SUMS, SUMS_SIG]);
+        assert_eq!(parse_latest(&both, current).unwrap().unwrap().package, package);
+        assert!(parse_latest(&latest_json("v0.3.0", &[&compressed, SUMS, SUMS_SIG]), current).is_err());
         // Not newer.
         assert_eq!(parse_latest(&latest_json("v0.2.0", &[&package, SUMS, SUMS_SIG]), current).unwrap(), None);
         // A package for another system is not one for this PC.

@@ -187,13 +187,29 @@ pub struct AuthPrompt {
     /// The (single, hidden) answer is the account password: it may be saved for the site. Not
     /// for passphrases or for a second factor (a one-time code after the password).
     pub account_password: bool,
-    reply: oneshot::Sender<Option<Vec<String>>>,
+    /// Only private-key prompts offer an explicit fallback to other credentials.
+    pub can_skip: bool,
+    reply: oneshot::Sender<PromptResponse>,
+}
+
+#[derive(Debug)]
+pub(crate) enum PromptResponse {
+    Answers(Vec<String>),
+    Skipped,
+    Cancelled,
 }
 
 impl AuthPrompt {
     /// `None` cancels authentication.
     pub fn answer(self, answers: Option<Vec<String>>) {
-        let _ = self.reply.send(answers);
+        let response = answers.map(PromptResponse::Answers).unwrap_or(PromptResponse::Cancelled);
+        let _ = self.reply.send(response);
+    }
+
+    /// Continue with other credentials only when this prompt explicitly allows it.
+    pub fn skip(self) {
+        let response = if self.can_skip { PromptResponse::Skipped } else { PromptResponse::Cancelled };
+        let _ = self.reply.send(response);
     }
 }
 
@@ -487,11 +503,26 @@ impl EventSink {
         user: Option<&str>,
         account_password: bool,
     ) -> Option<Vec<String>> {
+        match self.prompt_response(title, instructions, fields, user, account_password, false).await {
+            PromptResponse::Answers(answers) => Some(answers),
+            _ => None,
+        }
+    }
+
+    pub(crate) async fn prompt_response(
+        &self,
+        title: String,
+        instructions: String,
+        fields: Vec<PromptField>,
+        user: Option<&str>,
+        account_password: bool,
+        can_skip: bool,
+    ) -> PromptResponse {
         let (reply, rx) = oneshot::channel();
         let user = user.map(str::to_owned);
-        self.send(SessionEvent::AuthPrompt(AuthPrompt { title, instructions, fields, user, account_password, reply }));
+        self.send(SessionEvent::AuthPrompt(AuthPrompt { title, instructions, fields, user, account_password, can_skip, reply }));
         let _waiting_on_user = self.deadline.pause();
-        rx.await.ok().flatten()
+        rx.await.unwrap_or(PromptResponse::Cancelled)
     }
 }
 

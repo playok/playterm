@@ -21,6 +21,7 @@ use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct TestServer {
+    auth_calls: Arc<Mutex<Vec<String>>>,
     /// Public keys accepted for user `tester`.
     keys: Arc<Vec<PublicKey>>,
     /// Directory served over SFTP.
@@ -72,6 +73,7 @@ impl server::Handler for TestServer {
     type Error = russh::Error;
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        self.auth_calls.lock().unwrap().push("password".into());
         Ok(match (user, password) {
             ("tester", "secret") => Auth::Accept,
             // Password, then a one-time code (keyboard-interactive).
@@ -88,7 +90,8 @@ impl server::Handler for TestServer {
         _submethods: &str,
         response: Option<server::Response<'a>>,
     ) -> Result<Auth, Self::Error> {
-        if user != "otp" {
+        self.auth_calls.lock().unwrap().push("keyboard-interactive".into());
+        if user != "otp" && user != "keyotp" {
             return Ok(reject());
         }
         Ok(match response {
@@ -97,15 +100,25 @@ impl server::Handler for TestServer {
                 if answers.next().as_deref() == Some(b"123456".as_slice()) {
                     Auth::Accept
                 } else {
-                    reject()
+                    Auth::Reject {
+                        proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])),
+                        partial_success: false,
+                    }
                 }
             }
         })
     }
 
     async fn auth_publickey(&mut self, user: &str, key: VerifiedPublicKey<'_>) -> Result<Auth, Self::Error> {
+        self.auth_calls.lock().unwrap().push("publickey".into());
         let known = self.keys.iter().any(|k| k.key_data() == key.public_key.key_data());
-        Ok(if user == "tester" && known { Auth::Accept } else { reject() })
+        Ok(if user == "keyotp" && known {
+            Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])), partial_success: true }
+        } else if user == "tester" && known {
+            Auth::Accept
+        } else {
+            reject()
+        })
     }
 
     async fn channel_open_session(
@@ -259,6 +272,7 @@ impl server::Handler for TestServer {
 }
 
 struct Fixture {
+    auth_calls: Arc<Mutex<Vec<String>>>,
     server_rt: tokio::runtime::Runtime,
     port: u16,
     host_key: PrivateKey,
@@ -294,7 +308,9 @@ impl Fixture {
         std::fs::create_dir_all(dir.join("sftp")).unwrap();
         let known_hosts = dir.join("known_hosts");
 
+        let auth_calls = Arc::new(Mutex::new(Vec::new()));
         let server = TestServer {
+            auth_calls: auth_calls.clone(),
             keys: Arc::new(client_keys.iter().map(|k| k.public_key().clone()).collect()),
             sftp_root: dir.join("sftp"),
             channels: Arc::default(),
@@ -305,7 +321,7 @@ impl Fixture {
             let _ = { server }.run_on_socket(config, &listener).await;
         });
 
-        Self { server_rt, port, host_key, dir, known_hosts, net: NetRuntime::new().unwrap() }
+        Self { auth_calls, server_rt, port, host_key, dir, known_hosts, net: NetRuntime::new().unwrap() }
     }
 
     fn trust_host(&self) {
@@ -514,6 +530,34 @@ fn second_factor_is_not_the_password() {
     expect_connected(&h);
 }
 
+fn answer_key_otp(h: &SessionHandle) {
+    let prompt = expect_prompt(h);
+    assert!(!prompt.account_password);
+    assert!(prompt.fields[0].label.contains("Verification code"));
+    prompt.answer(Some(vec!["123456".into()]));
+    expect_connected(h);
+}
+
+#[test]
+fn public_key_second_factor_retries_and_cancels_without_using_saved_password() {
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("key-otp", &[&key]);
+    fx.trust_host();
+    let path = fx.write_key("identity", &key);
+    let params = ConnectParams { username: "keyotp".into(), identity_file: Some(path), password: Some("secret".into()), ..fx.params() };
+    let h = fx.connect(params.clone());
+    let prompt = expect_prompt(&h);
+    assert!(!prompt.account_password);
+    assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["publickey", "keyboard-interactive"]);
+    prompt.answer(Some(vec!["wrong-code".into()]));
+    answer_key_otp(&h);
+    let h = fx.connect(params.clone());
+    expect_prompt(&h).answer(None);
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+    answer_key_otp(&fx.connect(params));
+    assert!(!fx.auth_calls.lock().unwrap().iter().any(|m| m == "password"));
+}
+
 #[test]
 fn wrong_password_falls_back_to_prompt() {
     let fx = Fixture::new("prompt", &[]);
@@ -680,13 +724,80 @@ fn encrypted_key_asks_for_passphrase() {
     expect_prompt(&h).answer(Some(vec!["open sesame".into()]));
     expect_connected(&h);
 
-    // Cancelling the passphrase skips the key and moves on to the password.
-    let h = fx.connect(ConnectParams { identity_file: Some(path), ..fx.params() });
-    expect_prompt(&h).answer(None);
+    // Only an explicit skip moves on to the password.
+    let h = fx.connect(ConnectParams { identity_file: Some(path.clone()), ..fx.params() });
+    expect_prompt(&h).skip();
     let password_prompt = expect_prompt(&h);
-    assert!(password_prompt.title.contains("비밀번호"), "{}", password_prompt.title);
+    assert!(password_prompt.account_password);
     password_prompt.answer(Some(vec!["secret".into()]));
     expect_connected(&h);
+
+    // Cancellation must not try an agent, a default key or a saved password, even on a jump host.
+    let default = fx.write_key("default", &key);
+    let params = ConnectParams {
+        identity_file: Some(path),
+        default_identity_files: vec![default],
+        use_agent: true,
+        password: Some("secret".into()),
+        ..fx.params()
+    };
+    for jump in [false, true] {
+        fx.auth_calls.lock().unwrap().clear();
+        let connect = if jump { ConnectParams { jump: Some(Box::new(params.clone())), ..fx.params() } } else { params.clone() };
+        let h = fx.connect(connect);
+        expect_prompt(&h).answer(None);
+        assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+        assert!(fx.auth_calls.lock().unwrap().is_empty(), "credentials sent after cancellation");
+    }
+
+    // A fresh connection after cancellation still works.
+    let h = fx.connect(params);
+    expect_prompt(&h).answer(Some(vec!["open sesame".into()]));
+    expect_connected(&h);
+}
+
+#[test]
+fn dropped_passphrase_prompt_and_exhausted_retries_abort() {
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("passphrase-abort", &[&key]);
+    fx.trust_host();
+    let encrypted = key.encrypt(&mut rand::rng(), "open sesame").unwrap();
+    let path = fx.write_key("encrypted", &encrypted);
+    let params = ConnectParams { identity_file: Some(path), password: Some("secret".into()), ..fx.params() };
+    let h = fx.connect(params.clone());
+    drop(expect_prompt(&h));
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+    let h = fx.connect(params);
+    for _ in 0..3 {
+        expect_prompt(&h).answer(Some(vec!["wrong".into()]));
+    }
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+    assert!(fx.auth_calls.lock().unwrap().is_empty());
+}
+
+/// A real loopback SSH server for native-window authentication checks. Only fake credentials.
+/// Set PLAYTERM_GUI_FIXTURE_DIR to a fresh evidence directory, run with --ignored --nocapture,
+/// then launch playterm with PLAYTERM_CONFIG_DIR=<directory> and the URL from connection.txt.
+/// Create <directory>/stop to stop it. It also exits after 30 minutes.
+#[test]
+#[ignore = "interactive native-window fixture; starts a local SSH server"]
+fn native_auth_fixture() {
+    let dir = PathBuf::from(std::env::var_os("PLAYTERM_GUI_FIXTURE_DIR").expect("set PLAYTERM_GUI_FIXTURE_DIR"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("native-auth", &[&key]);
+    known_hosts::learn_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), dir.join("known_hosts")).unwrap();
+    let encrypted = key.encrypt(&mut rand::rng(), "open sesame").unwrap();
+    std::fs::write(dir.join("encrypted_key"), encrypted.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
+    std::fs::write(dir.join("plain_key"), key.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
+    std::fs::write(dir.join("settings.toml"), "check_updates = false\nlanguage = \"en\"\n").unwrap();
+    std::fs::write(dir.join("connection.txt"), format!("ssh://tester@127.0.0.1:{}", fx.port)).unwrap();
+    println!("Native GUI fixture: {} (passphrase: open sesame; password: secret)", dir.display());
+    let deadline = Instant::now() + Duration::from_secs(1800);
+    while Instant::now() < deadline && !dir.join("stop").exists() {
+        std::fs::write(dir.join("auth-calls.txt"), fx.auth_calls.lock().unwrap().join("\n")).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[cfg(windows)]
@@ -715,8 +826,10 @@ fn agent_on_named_pipe_authenticates() {
         client.add_identity(&key, &[]).await.unwrap();
     });
 
-    let h = fx.connect(ConnectParams { use_agent: true, agent_pipe: Some(pipe), ..fx.params() });
+    let params = ConnectParams { use_agent: true, agent_pipe: Some(pipe), ..fx.params() };
+    let h = fx.connect(params.clone());
     expect_connected(&h);
+    answer_key_otp(&fx.connect(ConnectParams { username: "keyotp".into(), password: Some("secret".into()), ..params }));
 }
 
 #[cfg(unix)]
@@ -745,8 +858,10 @@ fn agent_on_unix_socket_authenticates() {
     });
 
     let socket = socket.to_string_lossy().into_owned();
-    let h = fx.connect(ConnectParams { use_agent: true, agent_pipe: Some(socket), ..fx.params() });
+    let params = ConnectParams { use_agent: true, agent_pipe: Some(socket), ..fx.params() };
+    let h = fx.connect(params.clone());
     expect_connected(&h);
+    answer_key_otp(&fx.connect(ConnectParams { username: "keyotp".into(), password: Some("secret".into()), ..params }));
 }
 
 // -------------------------------------------------------------------------------------------------

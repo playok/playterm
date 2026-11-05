@@ -2,6 +2,9 @@
 
 [English](README.en.md) | **한국어**
 
+이 README는 개발 중인 master 기준입니다. 배포 버전 기능은 [릴리스별 설명](https://github.com/playok/playterm/releases)을,
+v0.5.0 이후 미배포 변경은 [다음 릴리스 변경 내역](docs/releases/next.md)을 확인하세요.
+
 **관리하는 모든 장비를 한 창에서 — SSH, Telnet, 시리얼 콘솔, Windows 원격 데스크톱을 탭으로.**
 
 playterm은 Rust(egui + alacritty_terminal + russh + IronRDP)로 만든 Windows 터미널입니다.
@@ -53,15 +56,15 @@ cargo build --release
 | 명령 | 하는 일 |
 |---|---|
 | `build.cmd` | 릴리스 빌드 → `target\release\playterm.exe` (`build.cmd debug` 는 디버그 빌드) |
-| `release.cmd` | clippy 검사 → 테스트 → ARM64·x64 패키지 → `dist\` 에 zip 과 `SHA256SUMS.txt` (`release.cmd x64` 처럼 하나만도 가능). exe 는 UPX 로 압축 (`noupx` 로 끔) |
+| `release.cmd` | clippy 검사 → 테스트 → ARM64·x64 기본 미압축 및 선택형 UPX 패키지 → `dist\` 에 zip 과 `SHA256SUMS.txt` (`release.cmd x64` 처럼 하나만도 가능, `noupx` 는 기본 패키지만) |
 
 두 스크립트 모두 LLVM(clang) 경로를 알아서 PATH 에 넣고, `--locked` 로 빌드해 `Cargo.lock` 에 적힌 의존성 버전만 씁니다.
 `release.cmd` 는 커밋하지 않은 변경이 있으면 멈춥니다(시험용 패키지는 `release.cmd dirty`).
 
 ### GitHub 릴리스 (자동 빌드)
 
-`v` 로 시작하는 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 Windows 에서 clippy 검사 → 테스트 → x64·ARM64 패키지(UPX 압축)를,
-macOS 에서 테스트 → arm64·x64 `playterm.app` zip(ad-hoc 서명)을 만들고, 둘 다 성공하면 그 태그의 릴리스에 zip 네 개와 `SHA256SUMS.txt`,
+`v` 로 시작하는 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 Windows 에서 clippy 검사 → 테스트 → x64·ARM64 기본 미압축 및 선택형 UPX 패키지를,
+macOS 에서 테스트 → arm64·x64 `playterm.app` zip(ad-hoc 서명)을 만들고, 둘 다 성공하면 그 태그의 릴리스에 zip 여섯 개와 `SHA256SUMS.txt`,
 그 서명 `SHA256SUMS.txt.sig`, macOS zip 의 `SHA256SUMS-macos.txt` 를 올립니다. 태그는 `Cargo.toml` 의 버전과 같아야 합니다.
 
 코드 서명은 저장소 시크릿이 있을 때만 합니다(없으면 지금처럼 서명 없이 / ad-hoc). 릴리스 설명도 그에 맞춰 바뀝니다.
@@ -85,10 +88,11 @@ Actions 탭에서 **Release → Run workflow** 로 직접 실행하면 릴리스
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc     # 최초 1회
-release.cmd                                  # 또는: pwsh scripts\package.ps1 -Upx (검사·테스트 없이 패키지만, -Upx 를 빼면 압축 안 함)
+release.cmd                                  # 또는: pwsh scripts\package.ps1 -BothVariants (검사·테스트 없이 두 변형 패키지만)
 ```
 
-- zip 안의 exe 는 **UPX** 로 압축됩니다(약 21 MB → 7 MB). UPX 는 환경변수 `UPX_EXE`(경로나 명령 이름)와 그 SHA-256 을 담은 `UPX_SHA256` 으로
+- 기본 `playterm-<버전>-windows-<아키텍처>.zip`의 exe는 미압축이며, 선택형 `-upx.zip`의 exe만 **UPX**로 압축합니다. 기존 및 UPX 사용자의 자동 업데이트도 기본 미압축판을 선택합니다. 이 정책은 다음 릴리스부터 적용됩니다.
+  UPX 는 환경변수 `UPX_EXE`(경로나 명령 이름)와 그 SHA-256 을 담은 `UPX_SHA256` 으로
   지정하거나, 없으면 고정 버전(5.3.0)을 공식 GitHub 릴리스에서 `tools\upx` 로 한 번 받아 씁니다. 받은 zip 과 그 안의 `upx.exe` 는 SHA-256 을 확인하고,
   실행할 때마다 `upx.exe` 를 새 임시 폴더에 복사해 그 사본을 실행 직전에 다시 확인한 뒤 실행합니다(ARM64 exe 는 UPX 5.3.0 이상 필요). 압축된 exe 는 창(프로세스)마다 메모리에서 풀리므로 창을 여러 개 띄우면 메모리를 조금 더 씁니다.
   UPX 압축 exe 는 백신이 오탐하는 경우가 있으니, 필요하면 `release.cmd noupx` 로 압축 없이 만드세요.
@@ -121,6 +125,8 @@ RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh arm64   # 기본이 아닌 툴체
 - 앱 안의 자동 설치는 Windows 에서만 됩니다. macOS 에서는 새 버전(그 릴리스에 이 Mac 용 zip 이 있을 때)을 알려 주고 릴리스 페이지를 엽니다.
 
 ## 실행
+
+실제 서버·장비의 [호환성 검증](docs/compatibility.md), [부하 시험](docs/stress-testing.md), [릴리스 절차](docs/release-process.md), [실행 결과](docs/validation.md)를 참고하세요.
 
 ```powershell
 playterm                                  # 연결 대화상자

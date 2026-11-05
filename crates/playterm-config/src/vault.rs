@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::Engine as _;
@@ -32,6 +33,32 @@ const NONCE_LEN: usize = 24;
 /// Refuse absurd KDF costs from a (possibly tampered) file: 1 GiB, 16 passes.
 const MAX_M_COST_KIB: u32 = 1024 * 1024;
 const MAX_T_COST: u32 = 16;
+
+/// Lock a stable sibling, never the data file which atomic saves replace. OS locks are
+/// released on process exit; the lock file itself must never be unlinked.
+fn lock_file(path: &Path) -> Result<std::fs::File, VaultError> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(name)?;
+    let deadline = Instant::now() + Duration::from_millis(750);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    t("다른 창에서 볼트를 사용 중입니다. 다시 시도하세요", "The vault is busy in another window. Try again"),
+                )
+                .into());
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum VaultError {
@@ -133,6 +160,7 @@ impl Kdf {
     }
 }
 
+#[derive(Clone)]
 struct Unlocked {
     key: Zeroizing<[u8; 32]>,
     kdf: Kdf,
@@ -143,11 +171,11 @@ struct Unlocked {
 
 impl Unlocked {
     /// The secrets in the vault file as it is now, decrypted with this key.
-    fn read(&self, path: &Path) -> Result<Option<Decrypted>, VaultError> {
+    fn read(&self, path: &Path) -> Result<Decrypted, VaultError> {
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
-            // Deleted meanwhile: what is in memory is written back.
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            // A reset in another process must not resurrect old credentials.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(VaultError::Replaced),
             Err(e) => return Err(e.into()),
         };
         let file: VaultFile = toml::from_str(&text).map_err(|e| VaultError::Format(e.to_string()))?;
@@ -157,7 +185,7 @@ impl Unlocked {
             return Err(VaultError::Replaced);
         }
         let contents = decrypt(&self.key, self.kdf, &salt, &file).map_err(|_| VaultError::Replaced)?;
-        Ok(Some(contents))
+        Ok(contents)
     }
 }
 
@@ -203,6 +231,7 @@ impl Vault {
         if master.is_empty() {
             return Err(VaultError::EmptyPassword);
         }
+        let _lock = lock_file(&self.path)?;
         if self.exists() {
             return Err(VaultError::AlreadyExists);
         }
@@ -210,8 +239,10 @@ impl Vault {
         getrandom::fill(&mut salt).map_err(|e| io::Error::other(e.to_string()))?;
         let kdf = Kdf::DEFAULT;
         let key = kdf.derive(master, &salt)?;
-        self.unlocked = Some(Unlocked { key, kdf, salt, secrets: BTreeMap::new(), targets: BTreeMap::new() });
-        self.save()
+        let unlocked = Unlocked { key, kdf, salt, secrets: BTreeMap::new(), targets: BTreeMap::new() };
+        self.save_unlocked(&unlocked)?;
+        self.unlocked = Some(unlocked);
+        Ok(())
     }
 
     pub fn unlock(&mut self, master: &str) -> Result<(), VaultError> {
@@ -292,14 +323,15 @@ impl Vault {
     /// Applies `change` to the vault as it is on disk now (another window may have saved since)
     /// and writes it if `change` returns true.
     fn update(&mut self, change: impl FnOnce(&mut Unlocked) -> bool) -> Result<(), VaultError> {
-        let unlocked = self.unlocked.as_mut().ok_or(VaultError::Locked)?;
-        if let Some((secrets, targets)) = unlocked.read(&self.path)? {
-            unlocked.secrets = secrets;
-            unlocked.targets = targets;
+        let mut unlocked = self.unlocked.as_ref().ok_or(VaultError::Locked)?.clone();
+        let _lock = lock_file(&self.path)?;
+        let (secrets, targets) = unlocked.read(&self.path)?;
+        unlocked.secrets = secrets;
+        unlocked.targets = targets;
+        if change(&mut unlocked) {
+            self.save_unlocked(&unlocked)?;
         }
-        if change(unlocked) {
-            self.save()?;
-        }
+        self.unlocked = Some(unlocked);
         Ok(())
     }
 
@@ -307,6 +339,7 @@ impl Vault {
     /// kept as `vault.toml.bak` (replacing an older one), not deleted: a file that only looked
     /// like a wrong password (damaged by a crash, say) can still be recovered.
     pub fn reset(&mut self) -> Result<(), VaultError> {
+        let _lock = lock_file(&self.path)?;
         self.lock();
         let mut backup = self.path.as_os_str().to_owned();
         backup.push(".bak");
@@ -317,8 +350,8 @@ impl Vault {
         }
     }
 
-    fn save(&self) -> Result<(), VaultError> {
-        let unlocked = self.unlocked.as_ref().ok_or(VaultError::Locked)?;
+    /// Caller holds the sibling lock across the entire read/modify/write transaction.
+    fn save_unlocked(&self, unlocked: &Unlocked) -> Result<(), VaultError> {
         let contents =
             ContentsRef { secrets: unlocked.secrets.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect(), targets: &unlocked.targets };
         let plaintext = Zeroizing::new(toml::to_string(&contents).map_err(|e| VaultError::Format(e.to_string()))?);
@@ -357,6 +390,149 @@ fn decode_fixed<const N: usize>(b64: &str, what: &str) -> Result<[u8; N], VaultE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wait_file(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !path.exists() {
+            assert!(Instant::now() < deadline, "timeout: {}", path.display());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    // Spawn this exact test in a separate OS process. Fake passwords only.
+    #[test]
+    fn process_worker() {
+        let Some(dir) = std::env::var_os("PLAYTERM_VAULT_TEST_DIR") else { return };
+        let dir = PathBuf::from(dir);
+        let name = std::env::var("PLAYTERM_VAULT_TEST_NAME").unwrap();
+        let op = std::env::var("PLAYTERM_VAULT_TEST_OP").unwrap();
+        let mut v = Vault::new(dir.join("vault.toml"));
+        if op != "create" {
+            v.unlock("test-master").unwrap();
+        }
+        std::fs::write(dir.join(format!("ready-{name}")), "").unwrap();
+        wait_file(&dir.join(format!("start-{name}")));
+        if op == "reset" {
+            v.reset().unwrap();
+        } else if op == "create" {
+            let result = v.create("test-master");
+            assert!(result.is_ok() || matches!(result, Err(VaultError::AlreadyExists)));
+        } else {
+            v.update(|u| {
+                std::fs::write(dir.join(format!("entered-{name}")), "").unwrap();
+                wait_file(&dir.join(format!("release-{name}")));
+                if op == "remove" {
+                    u.secrets.remove("old");
+                    u.targets.remove("old");
+                } else {
+                    u.secrets.insert(name.clone(), Zeroizing::new("fake-secret".into()));
+                    u.targets.insert(name.clone(), format!("ssh://{name}"));
+                }
+                true
+            })
+            .unwrap();
+        }
+        std::fs::write(dir.join(format!("done-{name}")), "").unwrap();
+    }
+
+    fn worker(dir: &Path, name: &str, op: &str) -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "vault::tests::process_worker", "--nocapture"])
+            .env("PLAYTERM_VAULT_TEST_DIR", dir)
+            .env("PLAYTERM_VAULT_TEST_NAME", name)
+            .env("PLAYTERM_VAULT_TEST_OP", op)
+            .spawn()
+            .unwrap()
+    }
+
+    fn signal(dir: &Path, name: &str) {
+        std::fs::write(dir.join(name), "").unwrap();
+    }
+
+    #[test]
+    fn separate_processes_serialize_add_remove_and_reset() {
+        for op in ["add", "remove", "reset"] {
+            let (dir, mut v) = vault();
+            v.create("test-master").unwrap();
+            v.set("old", "ssh://old", "old-secret").unwrap();
+            let mut a = worker(dir.path(), "a", "add");
+            let mut b = worker(dir.path(), "b", op);
+            for name in ["ready-a", "ready-b"] {
+                wait_file(&dir.path().join(name));
+            }
+            signal(dir.path(), "start-a");
+            wait_file(&dir.path().join("entered-a"));
+            signal(dir.path(), "start-b");
+            // B must not enter the transaction while A owns the OS lock.
+            std::thread::sleep(Duration::from_millis(150));
+            assert!(!dir.path().join("entered-b").exists());
+            assert!(!dir.path().join("done-b").exists());
+            signal(dir.path(), "release-b");
+            signal(dir.path(), "release-a");
+            wait_file(&dir.path().join("done-a"));
+            wait_file(&dir.path().join("done-b"));
+            assert!(a.wait().unwrap().success());
+            assert!(b.wait().unwrap().success());
+            if op == "reset" {
+                assert!(!v.exists());
+                assert!(matches!(v.set("resurrect", "t", "x"), Err(VaultError::Replaced)));
+                v.create("new-master").unwrap();
+                continue;
+            }
+            v.unlock("test-master").unwrap();
+            assert_eq!(v.get("a"), Some("fake-secret"));
+            if op == "add" {
+                assert_eq!(v.get("b"), Some("fake-secret"));
+            } else {
+                assert_eq!(v.get("old"), None);
+            }
+        }
+    }
+
+    #[test]
+    fn process_exit_releases_lock_and_concurrent_creates_have_one_winner() {
+        let (dir, mut v) = vault();
+        let mut a = worker(dir.path(), "a", "create");
+        let mut b = worker(dir.path(), "b", "create");
+        for name in ["ready-a", "ready-b"] {
+            wait_file(&dir.path().join(name));
+        }
+        for name in ["start-a", "start-b"] {
+            signal(dir.path(), name);
+        }
+        for name in ["done-a", "done-b"] {
+            wait_file(&dir.path().join(name));
+        }
+        assert!(a.wait().unwrap().success());
+        assert!(b.wait().unwrap().success());
+        v.unlock("test-master").unwrap();
+        let mut crashed = worker(dir.path(), "crash", "add");
+        wait_file(&dir.path().join("ready-crash"));
+        signal(dir.path(), "start-crash");
+        wait_file(&dir.path().join("entered-crash"));
+        crashed.kill().unwrap();
+        crashed.wait().unwrap();
+        v.set("survivor", "ssh://test", "fake").unwrap();
+        assert_eq!(v.get("crash"), None);
+        v.unlock("test-master").unwrap();
+        assert_eq!(v.get("survivor"), Some("fake"));
+    }
+
+    #[test]
+    fn lock_timeout_preserves_memory_and_file() {
+        let (_dir, mut v) = vault();
+        v.create("test-master").unwrap();
+        v.set("old", "ssh://test", "fake").unwrap();
+        let before = std::fs::read(&v.path).unwrap();
+        let guard = lock_file(&v.path).unwrap();
+        let started = Instant::now();
+        assert!(matches!(v.set("new", "t", "fake"), Err(VaultError::Io(e)) if e.kind() == io::ErrorKind::TimedOut));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(v.get("new"), None);
+        assert_eq!(std::fs::read(&v.path).unwrap(), before);
+        drop(guard);
+        v.set("new", "t", "fake").unwrap();
+    }
 
     fn vault() -> (tempfile::TempDir, Vault) {
         let dir = tempfile::tempdir().unwrap();
@@ -467,7 +643,9 @@ mod tests {
         v.set("p1", "ssh://kept", "1").unwrap();
         // As written by an older version: a secret without a target.
         v.unlocked.as_mut().unwrap().secrets.insert("old".into(), Zeroizing::new("2".into()));
-        v.save().unwrap();
+        let _lock = lock_file(&v.path).unwrap();
+        v.save_unlocked(v.unlocked.as_ref().unwrap()).unwrap();
+        drop(_lock);
         v.bind_missing(|id| Some(format!("ssh://now-{id}"))).unwrap();
         assert_eq!((v.target("p1"), v.target("old")), (Some("ssh://kept"), Some("ssh://now-old")));
     }

@@ -189,6 +189,15 @@ for arch in $targets; do
         rm -f "$dist/$zip"
         ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/$zip"
     fi
+    # Verify what will actually be uploaded, after the final ZIP and stapling step.
+    verify=$(mktemp -d "$stage/$arch/final-verify.XXXXXX")
+    ditto -x -k "$dist/$zip" "$verify"
+    codesign --verify --deep --strict --verbose=2 "$verify/playterm.app"
+    codesign --display --verbose=4 "$verify/playterm.app" 2>&1
+    if [ -n "$notarize" ]; then
+        xcrun stapler validate "$verify/playterm.app"
+        spctl --assess --type execute --verbose=2 "$verify/playterm.app"
+    fi
     echo "== $zip ($(lipo -archs "$app/Contents/MacOS/playterm"))"
     zips="$zips $zip"
 done

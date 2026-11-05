@@ -2,6 +2,9 @@
 
 **English** | [한국어](README.md)
 
+This README describes development on master. See [release notes](https://github.com/playok/playterm/releases) for shipped features,
+and [the next release draft](docs/releases/next.md) for changes after v0.5.0 that have not shipped.
+
 **One window for every box you manage — SSH, Telnet, serial consoles and Windows Remote Desktop, in tabs.**
 
 playterm is a native Windows terminal written in Rust (egui + alacritty_terminal + russh + IronRDP).
@@ -55,7 +58,7 @@ cargo build --release
 | Command | What it does |
 |---|---|
 | `build.cmd` | Release build → `target\release\playterm.exe` (`build.cmd debug` for a debug build) |
-| `release.cmd` | clippy → tests → ARM64 and x64 packages → zips and `SHA256SUMS.txt` in `dist\` (`release.cmd x64` builds just one). The exe is compressed with UPX (`noupx` turns it off) |
+| `release.cmd` | clippy → tests → ARM64 and x64 standard uncompressed and optional UPX packages → zips and `SHA256SUMS.txt` in `dist\` (`release.cmd x64` builds one architecture; `noupx` creates standard packages only) |
 
 Both scripts put LLVM (clang) on PATH by themselves and build with `--locked`, so only the dependency versions in `Cargo.lock` are used.
 `release.cmd` stops when there are uncommitted changes (`release.cmd dirty` makes a test package anyway).
@@ -63,7 +66,7 @@ Both scripts put LLVM (clang) on PATH by themselves and build with `--locked`, s
 ### GitHub releases (automatic build)
 
 Pushing a tag that starts with `v` runs GitHub Actions (`.github/workflows/release.yml`): on Windows clippy → tests → x64 and ARM64 packages
-(UPX-compressed), on macOS tests → arm64 and x64 `playterm.app` zips (signed ad hoc). When both succeed, the four zips are uploaded with
+(standard uncompressed and optional UPX), on macOS tests → arm64 and x64 `playterm.app` zips (signed ad hoc). When both succeed, the six zips are uploaded with
 `SHA256SUMS.txt`, its signature `SHA256SUMS.txt.sig` and `SHA256SUMS-macos.txt` (for the macOS zips) to that tag's release. The tag must match the version in `Cargo.toml`.
 
 Code signing happens only when its repository secrets are set (without them, as before: unsigned / ad hoc); the release notes follow.
@@ -87,10 +90,10 @@ Running it by hand from the Actions tab (**Release → Run workflow**) makes no 
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc     # once
-release.cmd                                  # or: pwsh scripts\package.ps1 -Upx (package only, no checks or tests; without -Upx nothing is compressed)
+release.cmd                                  # or: pwsh scripts\package.ps1 -BothVariants (both variants, package only, no checks or tests)
 ```
 
-- The exe in the zip is compressed with **UPX** (about 21 MB → 7 MB). Set `UPX_EXE` (a path or command name) with `UPX_SHA256`, its SHA-256, or the
+- Starting with the next release, standard `playterm-<version>-windows-<arch>.zip` executables are uncompressed. Optional `-upx.zip` executables use **UPX**. Automatic updates select the standard uncompressed package for all installations, including UPX users. Set `UPX_EXE` (a path or command name) with `UPX_SHA256`, its SHA-256, or the
   script downloads a pinned version (5.3.0) once from the official GitHub release into `tools\upx`. The zip and the `upx.exe` in it are checked
   against SHA-256, and each run copies `upx.exe` to a new temporary folder and checks that copy right before running it (ARM64 exes need UPX 5.3.0 or newer). A compressed exe is unpacked in memory by each window (process),
   so several windows use a little more memory. Some antivirus products flag UPX-compressed exes; build with `release.cmd noupx` if that matters.
@@ -124,6 +127,8 @@ RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh arm64   # with a toolchain other 
   and its release page opened.
 
 ## Running
+
+See the [compatibility matrix](docs/compatibility.md), [stress tests](docs/stress-testing.md), [release process](docs/release-process.md), and [validation results](docs/validation.md).
 
 ```powershell
 playterm                                  # connection dialog
