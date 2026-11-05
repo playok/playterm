@@ -27,6 +27,7 @@ pub enum SidebarAction {
     New,
     ImportPutty,
     ImportXshell,
+    ImportSecureCrt,
     /// Hide the list.
     Hide,
     Duplicate(String),
@@ -315,6 +316,9 @@ impl Sidebar {
                 }
                 if ui.add(icon::button(icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
                     action = Some(SidebarAction::ImportXshell);
+                }
+                if ui.add(icon::button(icon::IMPORT, t("SecureCRT 가져오기", "Import SecureCRT"))).clicked() {
+                    action = Some(SidebarAction::ImportSecureCrt);
                 }
                 return;
             }

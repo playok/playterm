@@ -18,7 +18,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **Remote Desktop**: resolution that follows the tab size, shared clipboard, sound, folder and printer sharing, Unicode/IME input, and certificate pinning
 - **Password vault**: saved passwords are encrypted with a master password (Argon2id + XChaCha20-Poly1305)
 - **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads and uploads (`sz`/`rz`)
-- **Site manager**: folders, per-site tab colors, PuTTY and Xshell session import, and a `playterm>` command prompt in unconnected tabs
+- **Site manager**: folders, per-site tab colors, PuTTY, Xshell and SecureCRT session import, and a `playterm>` command prompt in unconnected tabs
 - Korean / English UI, dark / light themes
 
 ## Screenshots
@@ -182,6 +182,12 @@ Connection commands connect in that tab, and the prompt comes back when the conn
   Xshell's subfolders are kept inside the import folder. Host, port, user, encoding and terminal type of SSH, Telnet and serial sessions are
   carried over; passwords Xshell saved (encrypted), user keys kept inside Xshell and port forwardings are not, and the list says so. Check serial
   settings after the import.
+- **File → Import → SecureCRT sessions**: reads the `.ini` files in SecureCRT's sessions folder (`%APPDATA%\VanDyke\Config\Sessions`) and imports
+  them as sites. If SecureCRT's configuration folder was moved, pick its `Sessions` folder with **Other folder…**. Subfolders are kept inside the
+  import folder. Host, port, user, encoding, terminal type and key file path of SSH2, Telnet and serial sessions are carried over.
+  **Passwords SecureCRT saved (encrypted) are not imported**: the import dialog and a notice afterwards say so. Type the password at the first
+  connection and choose 'Save password' to keep it in the vault. Port forwardings, firewall (proxy) settings and SecureCRT's global public key
+  are not carried over either, and the list says so.
 - **Tab color**: give each site a color (red, orange, yellow, green, teal, blue, purple, pink, gray) under "Tab color" in the Site Manager. Its tabs
   are tinted (a bar at the bottom and a light background) and the site list shows the color too — handy for marking production servers red, say.
   An open tab can be recolored by itself: right-click the tab → **Tab color** (or Tab menu → Tab color).

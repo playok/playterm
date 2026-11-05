@@ -15,18 +15,18 @@ use crate::import_dialog::ImportedSession;
 /// home folder must not hang the dialog, so folders and directory entries are counted too,
 /// not only session files.
 #[derive(Clone, Copy, Debug)]
-struct Limits {
+pub(crate) struct Limits {
     /// Deepest subfolder read.
-    depth: usize,
+    pub depth: usize,
     /// Folders read.
-    dirs: usize,
+    pub dirs: usize,
     /// Directory entries looked at (files and folders).
-    entries: usize,
+    pub entries: usize,
     /// Session files read.
-    files: usize,
+    pub files: usize,
 }
 
-const LIMITS: Limits = Limits { depth: 8, dirs: 2_000, entries: 50_000, files: 5_000 };
+pub(crate) const LIMITS: Limits = Limits { depth: 8, dirs: 2_000, entries: 50_000, files: 5_000 };
 
 /// The sessions found under a folder.
 #[derive(Debug)]
@@ -66,7 +66,7 @@ pub fn default_dir() -> Option<PathBuf> {
 
 /// The text of an `.xsh` file: UTF-16 (Xshell 6 and later write it with a byte order mark),
 /// UTF-8, or the Korean code page of older versions.
-pub fn decode(bytes: &[u8]) -> String {
+pub(crate) fn decode(bytes: &[u8]) -> String {
     let utf16 = |bytes: &[u8], le: bool| {
         let units: Vec<u16> =
             bytes.as_chunks::<2>().0.iter().map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) }).collect();
@@ -243,9 +243,10 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
     done(Ok(p), notes)
 }
 
-/// The `.xsh` files under `dir` with their subfolder ("" at the top, `a/b` below), sorted, and
-/// whether `limits` stopped the walk before it read everything.
-fn session_files(dir: &Path, limits: Limits) -> (Vec<(String, PathBuf)>, bool) {
+/// The files ending in `extension` (such as `.xsh`, any case) under `dir` with their subfolder
+/// ("" at the top, `a/b` below), sorted, and whether `limits` stopped the walk before it read
+/// everything.
+pub(crate) fn session_files(dir: &Path, extension: &str, limits: Limits) -> (Vec<(String, PathBuf)>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
     let (mut dirs, mut entries_seen) = (0, 0);
@@ -274,7 +275,7 @@ fn session_files(dir: &Path, limits: Limits) -> (Vec<(String, PathBuf)>, bool) {
                 } else {
                     truncated = true;
                 }
-            } else if kind.is_file() && name.to_lowercase().ends_with(".xsh") {
+            } else if kind.is_file() && name.to_lowercase().ends_with(extension) {
                 out.push((folder.clone(), path));
             }
         }
@@ -292,7 +293,7 @@ fn load_with(dir: &Path, limits: Limits) -> Result<Loaded, String> {
     if !dir.is_dir() {
         return Err(tr!("폴더가 없습니다: {}", "Folder not found: {}", dir.display()));
     }
-    let (files, truncated) = session_files(dir, limits);
+    let (files, truncated) = session_files(dir, ".xsh", limits);
     let sessions = files
         .into_iter()
         .map(|(folder, path)| {
@@ -393,12 +394,12 @@ mod tests {
     fn stops_at_the_limits_and_still_sorts() {
         let dir = wide_tree(4);
         let all = Limits { depth: 8, dirs: 100, entries: 1000, files: 1000 };
-        let (files, truncated) = session_files(dir.path(), all);
+        let (files, truncated) = session_files(dir.path(), ".xsh", all);
         assert_eq!((files.len(), truncated), (16, false));
 
         // Folders without any session files count too: a big tree stops early.
         for limits in [Limits { dirs: 2, ..all }, Limits { entries: 6, ..all }, Limits { files: 3, ..all }, Limits { depth: 0, ..all }] {
-            let (files, truncated) = session_files(dir.path(), limits);
+            let (files, truncated) = session_files(dir.path(), ".xsh", limits);
             assert!(truncated, "{limits:?}");
             assert!(files.len() < 16, "{limits:?}");
             let mut sorted = files.clone();

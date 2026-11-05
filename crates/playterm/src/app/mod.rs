@@ -84,6 +84,8 @@ enum Modal {
     Macros(Box<crate::macros::MacroDialog>),
     /// Closing would end connections: asks first; the flag is the "do not ask again" box.
     ConfirmClose(CloseRequest, bool),
+    /// A notice to acknowledge: title and text.
+    Notice(String, String),
 }
 
 /// Font size changes from zooming are saved once they have settled for this long.

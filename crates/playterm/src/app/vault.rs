@@ -246,6 +246,9 @@ impl PlaytermApp {
             SidebarAction::ImportXshell => {
                 self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::Xshell))));
             }
+            SidebarAction::ImportSecureCrt => {
+                self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::SecureCrt))));
+            }
             SidebarAction::Duplicate(id) => {
                 self.duplicate_profile(&id);
             }

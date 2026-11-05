@@ -23,6 +23,7 @@ pub enum Command {
     NewSite,
     ImportPutty,
     ImportXshell,
+    ImportSecureCrt,
     Quit,
 
     Copy,
@@ -215,6 +216,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             submenu(ui, t("가져오기", "Import"), |ui| {
                 item(ui, out, t("PuTTY 세션…", "PuTTY sessions…"), "", true, Command::ImportPutty);
                 item(ui, out, t("Xshell 세션…", "Xshell sessions…"), "", true, Command::ImportXshell);
+                item(ui, out, t("SecureCRT 세션…", "SecureCRT sessions…"), "", true, Command::ImportSecureCrt);
             });
             ui.separator();
             item(ui, out, t("끝내기", "Exit"), keys("Alt+F4", "⌘Q"), true, Command::Quit);

@@ -28,6 +28,7 @@ mod profile_form;
 mod putty;
 mod rdp_view;
 mod search_bar;
+mod securecrt;
 mod session;
 mod settings_dialog;
 mod sftp_view;
