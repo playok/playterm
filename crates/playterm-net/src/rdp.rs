@@ -695,7 +695,7 @@ fn device_redirection(rdp: &RdpSettings) -> anyhow::Result<Option<ironrdp_rdpdr:
 /// Folder and printer sharing use the Windows backend only.
 #[cfg(not(windows))]
 fn device_redirection(rdp: &RdpSettings) -> anyhow::Result<Option<ironrdp_rdpdr::Rdpdr>> {
-    if redirects_devices(&rdp) {
+    if redirects_devices(rdp) {
         log::warn!("rdp: folder and printer sharing is only available on Windows");
     }
     Ok(None)
@@ -1572,3 +1572,4 @@ mod tests {
         assert_eq!(r, Some(7));
     }
 }
+
