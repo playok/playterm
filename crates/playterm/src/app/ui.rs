@@ -18,7 +18,7 @@ impl PlaytermApp {
                     }
                     let name = save.then(|| profile.display_name());
                     let target = self.dialog_target.take();
-                    self.connect_in(target, |app| app.open_session(&profile, password.map(|p| p.to_string()), name));
+                    self.connect_in(target, |app| app.open_session(&profile, password.map(Password::from), name));
                 }
             },
             Modal::Shortcuts => {
@@ -49,6 +49,24 @@ impl PlaytermApp {
                     self.save_settings();
                 }
             },
+            Modal::ConfirmPasswordMacro(plan) => {
+                let targets: Vec<String> = plan
+                    .targets
+                    .iter()
+                    .filter_map(|id| self.sessions.iter().find(|session| session.id == *id))
+                    .map(Session::macro_target_label)
+                    .collect();
+                match dialogs::confirm_password_macro(ctx, &plan.name, &targets) {
+                    None => self.modal = Some(Modal::ConfirmPasswordMacro(plan)),
+                    Some(false) => {}
+                    Some(true) => self.execute_macro_plan(plan),
+                }
+            }
+            Modal::TrustedHosts(mut dialog) => {
+                if !dialog.show(ctx) {
+                    self.modal = Some(Modal::TrustedHosts(dialog));
+                }
+            }
             Modal::Settings(mut dialog) => match dialog.show(ctx) {
                 SettingsResult::Open => self.modal = Some(Modal::Settings(dialog)),
                 SettingsResult::Changed(s) => {
@@ -88,12 +106,11 @@ impl PlaytermApp {
                 VaultResult::Open => self.modal = Some(Modal::Vault(dialog, pending)),
                 VaultResult::Cancel => self.vault_cancelled(pending),
                 VaultResult::Submit(master) => {
-                    let result = match dialog.mode {
-                        VaultMode::Unlock => self.vault.unlock(&master),
-                        VaultMode::Create => self.vault.create(&master),
-                    };
-                    match result {
-                        Ok(()) => self.vault_ready(pending),
+                    match self.vault_worker.start(self.vault.path().to_owned(), dialog.mode, master, ctx.clone()) {
+                        Ok(task) => {
+                            dialog.clear_secrets();
+                            self.modal = Some(Modal::VaultWorking(dialog, pending, task));
+                        }
                         Err(e) => {
                             dialog.fail(e.to_string());
                             self.modal = Some(Modal::Vault(dialog, pending));
@@ -106,6 +123,23 @@ impl PlaytermApp {
                         Err(e) => dialog.fail(e.to_string()),
                     }
                     self.modal = Some(Modal::Vault(dialog, pending));
+                }
+            },
+            Modal::VaultWorking(mut dialog, pending, task) => match task.poll() {
+                Some(Ok(vault)) => {
+                    self.vault = vault;
+                    self.vault_ready(pending);
+                }
+                Some(Err(e)) => {
+                    dialog.fail(e.to_string());
+                    self.modal = Some(Modal::Vault(dialog, pending));
+                }
+                None => {
+                    if dialog.show_working(ctx, task.can_cancel()) && task.cancel() {
+                        self.vault_cancelled(pending);
+                    } else {
+                        self.modal = Some(Modal::VaultWorking(dialog, pending, task));
+                    }
                 }
             },
             Modal::Template(mut dialog) => match dialog.show(ctx, &self.store) {

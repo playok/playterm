@@ -1,0 +1,54 @@
+name: Quality tools
+
+on:
+  pull_request:
+    paths: ['fuzz/**', 'crates/playterm-term/**', 'crates/playterm-sign/**', '.github/workflows/quality.yml']
+  push:
+    branches: [master]
+    paths: ['fuzz/**', 'crates/playterm-term/**', 'crates/playterm-sign/**', '.github/workflows/quality.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Nightly Rust
+        run: rustup toolchain install nightly --profile minimal --no-self-update
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        with:
+          tool: cargo-fuzz@0.13.2
+      - name: Ten-second VT parser smoke run
+        run: |
+          mkdir -p fuzz/corpus/vt_input
+          cp fuzz/seeds/vt_input/* fuzz/corpus/vt_input/
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu vt_input -- -max_total_time=10 -max_len=65536 -timeout=5 -rss_limit_mb=1024
+
+  coverage-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Rust coverage tools
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add llvm-tools-preview
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - name: Reproduce signer HTML coverage without thresholds
+        run: cargo llvm-cov --locked -p playterm-sign --html --output-dir target/coverage/sign
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signer-coverage
+          path: target/coverage/sign/html
+          if-no-files-found: error

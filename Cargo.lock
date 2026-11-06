@@ -5051,8 +5051,8 @@ dependencies = [
  "chacha20poly1305",
  "getrandom 0.4.3",
  "playterm-i18n",
- "playterm-net",
  "playterm-term",
+ "playterm-types",
  "serde",
  "tempfile",
  "toml",
@@ -5072,6 +5072,7 @@ dependencies = [
  "encoding_rs",
  "futures",
  "getrandom 0.4.3",
+ "hmac 0.13.0",
  "ironrdp-cliprdr",
  "ironrdp-cliprdr-native",
  "ironrdp-connector",
@@ -5091,11 +5092,12 @@ dependencies = [
  "ironrdp-tokio",
  "log",
  "playterm-i18n",
+ "playterm-types",
  "rand 0.10.3",
  "rcgen",
  "russh",
  "russh-sftp",
- "serde",
+ "sha1 0.11.0",
  "sha2",
  "smallvec",
  "tempfile",
@@ -5113,6 +5115,7 @@ name = "playterm-sign"
 version = "0.6.0"
 dependencies = [
  "ring",
+ "tempfile",
 ]
 
 [[package]]
@@ -5125,6 +5128,14 @@ dependencies = [
  "playterm-i18n",
  "serde",
  "tempfile",
+]
+
+[[package]]
+name = "playterm-types"
+version = "0.6.0"
+dependencies = [
+ "playterm-i18n",
+ "serde",
 ]
 
 [[package]]

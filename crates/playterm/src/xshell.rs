@@ -141,7 +141,11 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
             return done(Err(reason), notes);
         }
     };
-    let mut p = SessionProfile { name: name.to_owned(), protocol, ..Default::default() };
+    let base = match SessionProfile::new() {
+        Ok(profile) => profile,
+        Err(e) => return done(Err(e.to_string()), notes),
+    };
+    let mut p = SessionProfile { name: name.to_owned(), protocol, ..base };
     p.charset = charset(get("terminal", "codepage"));
     let term = get("terminal", "type");
     if !term.is_empty() {

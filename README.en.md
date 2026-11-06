@@ -2,6 +2,10 @@
 
 **English** | [한국어](README.md)
 
+[Report a security vulnerability privately](SECURITY.md)
+
+[Contributing](CONTRIBUTING.md) | [Versioned changes](docs/releases/)
+
 This README describes development on master. See [the v0.6.0 changes](docs/releases/v0.6.0.md)
 and [release notes](https://github.com/playok/playterm/releases) for shipped features and update notes.
 
@@ -38,6 +42,7 @@ The screenshots show the Korean UI; English is one setting away.
 |---|---|
 | `crates/playterm-term` | Terminal emulation (alacritty_terminal), UTF-8/CP949 conversion, color palettes |
 | `crates/playterm-net` | SSH (russh) / Telnet / serial / RDP (IronRDP) transports, session event and command channels, ZMODEM receiving and sending |
+| `crates/playterm-types` | Protocol, forwarding, serial and RDP settings shared by config and transports |
 | `crates/playterm-config` | Site list (`sessions.toml`), password vault (`vault.toml`), settings (`settings.toml`) |
 | `crates/playterm-i18n` | Korean / English UI strings |
 | `crates/playterm` | GUI app (eframe/egui): rendering, keyboard/IME input, dialogs, updates |
@@ -49,7 +54,7 @@ The screenshots show the Korean UI; English is one setting away.
 cargo build --release
 ```
 
-- Needs Rust 1.90+ and the MSVC build tools (Visual Studio 2022).
+- Needs Rust 1.95+ and the MSVC build tools (Visual Studio 2022).
 - **On Windows ARM64 you also need clang** (to build the crypto library `ring`):
   `winget install LLVM.LLVM`, then add `C:\Program Files\LLVM\bin` to PATH.
 
@@ -424,6 +429,8 @@ server (xterm, installers…) show on the X server of this PC.
   display of this PC, keyboard included. Turn it on only for servers you trust.
 
 ## SSH authentication order
+
+SSH host certificates require an explicitly trusted CA in `known_hosts`. See [configuration and validation](docs/ssh-host-certificates.md) for CA scope, validity, hostname and revocation checks. Manage stored SSH keys and RDP fingerprints from Tools → Remembered host keys and certificates.
 
 1. The key file set for the session (OpenSSH format / PuTTY `.ppk`; asks for the passphrase if it has one)
 2. SSH agent — `SSH_AUTH_SOCK` if it is a named pipe, otherwise the Windows OpenSSH agent (`\\.\pipe\openssh-ssh-agent`), then Pageant (on macOS, the `SSH_AUTH_SOCK` socket)

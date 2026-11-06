@@ -2,6 +2,10 @@
 
 [English](README.en.md) | **한국어**
 
+[보안 취약점 비공개 보고](SECURITY.md)
+
+[기여 안내](CONTRIBUTING.md) | [버전별 변경 내역](docs/releases/)
+
 이 README는 개발 중인 master 기준입니다. [v0.6.0 변경 내역](docs/releases/v0.6.0.md)과
 [릴리스별 설명](https://github.com/playok/playterm/releases)에서 배포 버전의 기능과 주의사항을 확인하세요.
 
@@ -36,6 +40,7 @@ x64·ARM64용 실행 파일 하나로 동작하며, 설치나 런타임 설치�
 |---|---|
 | `crates/playterm-term` | 터미널 에뮬레이션(alacritty_terminal), UTF-8/CP949 변환, 색상 팔레트 |
 | `crates/playterm-net` | SSH(russh) / Telnet / 시리얼 / RDP(IronRDP) 전송, 세션 이벤트·명령 채널, ZMODEM 받기·보내기 |
+| `crates/playterm-types` | 설정·전송이 공유하는 프로토콜·포워딩·시리얼·RDP 설정 타입 |
 | `crates/playterm-config` | 세션 목록(`sessions.toml`), 비밀번호 볼트(`vault.toml`), 설정(`settings.toml`) |
 | `crates/playterm-i18n` | 한국어 / 영어 UI 문구 |
 | `crates/playterm` | GUI 앱(eframe/egui): 렌더링, 키보드/IME 입력, 대화상자, 업데이트 |
@@ -47,7 +52,7 @@ x64·ARM64용 실행 파일 하나로 동작하며, 설치나 런타임 설치�
 cargo build --release
 ```
 
-- Rust 1.90+ 와 MSVC 빌드 도구(Visual Studio 2022)가 필요합니다.
+- Rust 1.95+ 와 MSVC 빌드 도구(Visual Studio 2022)가 필요합니다.
 - **Windows ARM64에서는 clang도 필요합니다** (암호 라이브러리 `ring` 빌드용):
   `winget install LLVM.LLVM` 후 `C:\Program Files\LLVM\bin` 을 PATH에 추가.
 
@@ -398,6 +403,8 @@ SSH 사이트 설정(고급)의 **X11 포워딩** 을 켜거나 로컬 프롬프
 - 사이트 설정의 **신뢰 (-Y)** (또는 `ssh -Y`)를 켜면 실제 쿠키(없으면 인증 없이)로 이어 주어, 서버의 X 프로그램이 이 PC 화면 전체와 키 입력에 접근할 수 있습니다. 믿는 서버에만 켜세요.
 
 ## SSH 인증 순서
+
+SSH 호스트 인증서는 `known_hosts`에 신뢰하는 CA를 등록해 사용합니다. CA 범위·만료·호스트 이름·폐기 검증과 [설정 방법](docs/ssh-host-certificates.md)을 확인하세요. 저장된 SSH 키와 RDP 지문은 도구 → 저장된 호스트 키·인증서에서 관리합니다.
 
 1. 세션에 지정한 키 파일 (OpenSSH 형식 / PuTTY `.ppk`, 암호가 걸려 있으면 passphrase 입력)
 2. SSH 에이전트 — `SSH_AUTH_SOCK` 이 named pipe 이면 그것, 아니면 Windows OpenSSH 에이전트(`\\.\pipe\openssh-ssh-agent`), 그다음 Pageant (macOS 에서는 `SSH_AUTH_SOCK` 소켓)

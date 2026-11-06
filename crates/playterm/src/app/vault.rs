@@ -32,7 +32,7 @@ impl PlaytermApp {
             Some(password) if connect => {
                 // Not saved: use it for this connection only.
                 if let Some(p) = self.store.get(&id).cloned() {
-                    self.open_session(&p, Some(password.to_string()), Some(p.display_name()));
+                    self.open_session(&p, Some(password.into()), Some(p.display_name()));
                 }
             }
             _ if connect => self.connect_saved(&id),
@@ -160,7 +160,7 @@ impl PlaytermApp {
             Pending::StoreSecret { id, password, connect, target } => {
                 self.status = Some(t("비밀번호는 저장되지 않았습니다", "The password was not saved").into());
                 if connect && let Some(p) = self.store.get(&id).cloned() {
-                    let password = password.to_string();
+                    let password = Password::from(password);
                     self.connect_in(target, |app| app.open_session(&p, Some(password), Some(p.display_name())));
                 }
             }
@@ -170,7 +170,13 @@ impl PlaytermApp {
     /// Saves a copy of a site (with its stored password, if the vault is open). Returns the copy.
     pub(super) fn duplicate_profile(&mut self, id: &str) -> Option<SessionProfile> {
         let original = self.store.get(id)?.clone();
-        let mut copy = original.duplicate();
+        let mut copy = match original.duplicate() {
+            Ok(copy) => copy,
+            Err(e) => {
+                self.status = Some(format!("{}: {e}", t("사이트 복사 실패", "Could not duplicate the site")));
+                return None;
+            }
+        };
         // Only a password saved for where the site points now goes with the copy: the copy is
         // bound to its own target, so a changed target would otherwise launder the password.
         let secret = match bound_secret(&self.vault, &original) {
@@ -353,7 +359,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut vault = playterm_config::Vault::new(dir.path().join("vault.bin"));
         vault.create("master").unwrap();
-        let site = SessionProfile { id: "a".into(), host: "db01".into(), port: 22, username: "ops".into(), ..Default::default() };
+        let site =
+            SessionProfile { id: "a".into(), host: "db01".into(), port: 22, username: "ops".into(), ..SessionProfile::new().unwrap() };
         assert!(matches!(bound_secret(&vault, &site), Ok(None)), "no password saved");
         vault.set("a", &vault_target(&site), "s3cret").unwrap();
         assert_eq!(bound_secret(&vault, &site).unwrap().as_deref().map(String::as_str), Some("s3cret"));
@@ -373,7 +380,7 @@ mod tests {
             port: 3389,
             username: "ops".into(),
             rdp,
-            ..Default::default()
+            ..SessionProfile::new().unwrap()
         }
     }
 

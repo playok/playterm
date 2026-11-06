@@ -2,6 +2,7 @@
 name = "playterm-net"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -9,6 +10,8 @@ anyhow = "1.0.104"
 base64 = "0.23.1"
 encoding_rs = "0.8.44"
 getrandom = "0.4.3"
+hmac = "0.13"
+sha1 = "0.11"
 # Only for the `testing` feature (an SSH server for tests of the app).
 rand = { version = "0.10", features = ["thread_rng"], optional = true }
 ironrdp-cliprdr = "0.9"
@@ -28,7 +31,7 @@ log = "0.4.35"
 playterm-i18n = { version = "0.6.0", path = "../playterm-i18n" }
 russh = { version = "0.65.0", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "3.0.1"
-serde = { version = "1.0.229", features = ["derive"] }
+playterm-types = { version = "0.6.0", path = "../playterm-types" }
 sha2 = "0.11"
 smallvec = "1"
 thiserror = "2.0.21"

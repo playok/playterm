@@ -36,7 +36,6 @@ use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput, fast_path};
 use ironrdp_tokio::{FramedWrite as _, TokioFramed};
 use playterm_i18n::{t, tr};
-use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use smallvec::SmallVec;
 use tokio::net::TcpStream;
@@ -68,77 +67,16 @@ const DEVICE_REPLY_INTERVAL: Duration = Duration::from_millis(50);
 /// Longest a Deactivation-Reactivation Sequence (after a resize, say) may take.
 const REACTIVATION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Per-site RDP options.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RdpSettings {
-    /// Desktop size in pixels; 0 x 0 follows the size of the tab.
-    pub width: u16,
-    pub height: u16,
-    /// Share the clipboard with the remote desktop.
-    pub clipboard: bool,
-    /// Play the remote desktop's sound on this PC (as mstsc's "Play on this computer").
-    pub sound: bool,
-    /// A folder of this PC shown in the remote desktop as a drive; empty shares none.
-    pub drive_folder: String,
-    /// The remote desktop can read the shared folder but not change it.
-    pub drive_read_only: bool,
-    /// Print from the remote desktop on this PC's default printer.
-    pub printer: bool,
-    /// RD Gateway to connect through, `host[:port]` (443 when left out); empty connects directly.
-    pub gateway: String,
-    /// User for the gateway; empty logs on to it with the site's user and password.
-    pub gateway_user: String,
+pub use playterm_types::RdpSettings;
+
+/// The shared folder, when it is not a folder on this PC (sharing is Windows-only).
+fn missing_folder(settings: &RdpSettings) -> Option<&str> {
+    settings.shared_folder().filter(|f| cfg!(windows) && !Path::new(f).is_dir())
 }
 
-impl Default for RdpSettings {
-    fn default() -> Self {
-        Self {
-            width: 0,
-            height: 0,
-            clipboard: true,
-            sound: true,
-            drive_folder: String::new(),
-            drive_read_only: false,
-            printer: false,
-            gateway: String::new(),
-            gateway_user: String::new(),
-        }
-    }
-}
-
-impl RdpSettings {
-    /// Desktop sizes offered in the site editor; (0, 0) follows the tab.
-    pub const SIZES: [(u16, u16); 6] = [(0, 0), (1920, 1080), (1600, 900), (1366, 768), (1280, 720), (1024, 768)];
-
-    pub fn fits_tab(&self) -> bool {
-        self.width == 0 || self.height == 0
-    }
-
-    /// The folder to share, if any.
-    pub fn shared_folder(&self) -> Option<&str> {
-        Some(self.drive_folder.trim()).filter(|f| !f.is_empty())
-    }
-
-    /// The gateway to connect through, if any.
-    pub fn gateway(&self) -> Option<&str> {
-        Some(self.gateway.trim()).filter(|g| !g.is_empty())
-    }
-
-    /// The gateway's own user, when it does not take the site's user and password.
-    pub fn gateway_user(&self) -> Option<&str> {
-        self.gateway().and(Some(self.gateway_user.trim()).filter(|u| !u.is_empty()))
-    }
-
-    /// The shared folder, when it is not a folder on this PC (sharing is Windows-only).
-    fn missing_folder(&self) -> Option<&str> {
-        self.shared_folder().filter(|f| cfg!(windows) && !Path::new(f).is_dir())
-    }
-
-    /// Whether the device redirection channel (drives, printers) is needed.
-    fn redirects_devices(&self) -> bool {
-        self.shared_folder().is_some() || self.printer
-    }
+/// Whether the device redirection channel (drives, printers) is needed.
+fn redirects_devices(settings: &RdpSettings) -> bool {
+    settings.shared_folder().is_some() || settings.printer
 }
 
 /// A changed part of the remote screen, for the UI.
@@ -392,25 +330,37 @@ enum Known {
     Changed(usize),
 }
 
-fn check_known(file: &Path, target: &str, fp: &str) -> Known {
-    let Ok(text) = std::fs::read_to_string(file) else { return Known::Unknown };
+fn check_known(file: &Path, target: &str, fp: &str) -> std::io::Result<Known> {
+    let text = crate::trust::read(file)?;
+    let mut found = false;
     for (i, line) in text.lines().enumerate() {
         if let Some((host, known)) = line.split_once(' ')
             && host == target
         {
-            return if known.trim() == fp { Known::Match } else { Known::Changed(i + 1) };
+            if known.trim() != fp {
+                return Ok(Known::Changed(i + 1));
+            }
+            found = true;
         }
     }
-    Known::Unknown
+    Ok(if found { Known::Match } else { Known::Unknown })
 }
 
 fn learn_known(file: &Path, target: &str, fp: &str) -> std::io::Result<()> {
-    use std::io::Write as _;
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
+    let _lock = crate::trust::lock(file)?;
+    match check_known(file, target, fp)? {
+        Known::Match => return Ok(()),
+        Known::Changed(_) => {
+            return Err(std::io::Error::other("The certificate changed while awaiting confirmation; reconnect and verify it"));
+        }
+        Known::Unknown => {}
     }
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(file)?;
-    writeln!(f, "{target} {fp}")
+    let mut text = crate::trust::read(file)?;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!("{target} {fp}\n"));
+    crate::trust::write_atomic(file, text.as_bytes())
 }
 
 /// Kerberos would need a KDC; without one CredSSP uses NTLM.
@@ -542,7 +492,7 @@ async fn run(params: ConnectParams, mut commands: mpsc::UnboundedReceiver<Sessio
     };
     let has_clipboard = factory.is_some();
 
-    let mut password = params.password.clone().map(Zeroizing::new);
+    let mut password = params.password.clone().map(crate::Password::into_zeroizing);
     // Asked when the gateway has a user of its own, and again after the gateway refuses it.
     let mut gateway_password: Option<Zeroizing<String>> = None;
     for _ in 0..MAX_PASSWORD_TRIES {
@@ -727,7 +677,7 @@ fn device_redirection(rdp: &RdpSettings) -> anyhow::Result<Option<ironrdp_rdpdr:
     use ironrdp_rdpdr::RdpdrBackendFactory as _;
     use ironrdp_rdpdr_native::{FIRST_NAMED_DRIVE_DEVICE_ID, RedirectedDrive, WindowsRdpdrBackendFactory};
 
-    if !rdp.redirects_devices() {
+    if !redirects_devices(rdp) {
         return Ok(None);
     }
     let mut drives = Vec::new();
@@ -757,7 +707,7 @@ fn device_redirection(rdp: &RdpSettings) -> anyhow::Result<Option<ironrdp_rdpdr:
 /// Folder and printer sharing use the Windows backend only.
 #[cfg(not(windows))]
 fn device_redirection(rdp: &RdpSettings) -> anyhow::Result<Option<ironrdp_rdpdr::Rdpdr>> {
-    if rdp.redirects_devices() {
+    if redirects_devices(rdp) {
         log::warn!("rdp: folder and printer sharing is only available on Windows");
     }
     Ok(None)
@@ -920,7 +870,7 @@ async fn connect(
 
     // A shared folder that is gone (a removed USB drive, say) is left out rather than shown as a
     // broken drive, and does not keep the desktop from connecting.
-    if let Some(folder) = rdp.missing_folder() {
+    if let Some(folder) = missing_folder(&rdp) {
         sink.notice(tr!(
             "공유 폴더가 없어 공유하지 않고 연결합니다: {folder}",
             "The shared folder does not exist; connecting without it: {folder}"
@@ -971,7 +921,7 @@ async fn check_certificate(params: &ConnectParams, cert: &x509_cert::Certificate
     let fp = fingerprint(&der);
     let file = params.known_hosts.with_file_name("known_rdp_hosts");
     let target = format!("{}:{}", params.host, params.port);
-    match check_known(&file, &target, &fp) {
+    match check_known(&file, &target, &fp)? {
         Known::Match => Ok(()),
         Known::Changed(line) => bail!(tr!(
             "경고: 서버 인증서가 변경되었습니다! 중간자 공격일 수 있습니다. \
@@ -985,9 +935,7 @@ async fn check_certificate(params: &ConnectParams, cert: &x509_cert::Certificate
             if !accepted {
                 bail!(t("서버 인증서를 신뢰하지 않아 연결하지 않았습니다", "The server certificate was not trusted"));
             }
-            if let Err(e) = learn_known(&file, &target, &fp) {
-                sink.notice(tr!("known_rdp_hosts 저장 실패: {e}", "Could not save known_rdp_hosts: {e}"));
-            }
+            learn_known(&file, &target, &fp).context(t("known_rdp_hosts 저장 실패", "Could not save known_rdp_hosts"))?;
             Ok(())
         }
     }
@@ -1313,7 +1261,7 @@ mod tests {
     #[test]
     fn no_device_channel_unless_something_is_shared() {
         let params = test_params();
-        assert!(!params.rdp.redirects_devices(), "nothing is shared by default");
+        assert!(!redirects_devices(&params.rdp), "nothing is shared by default");
         let connector = client_connector(&params, "pw", None, test_addr()).unwrap();
         assert!(connector.static_channels.get_by_type::<ironrdp_rdpdr::Rdpdr>().is_none());
     }
@@ -1322,7 +1270,7 @@ mod tests {
     fn a_blank_folder_shares_nothing() {
         let mut rdp = RdpSettings { drive_folder: "  ".into(), ..Default::default() };
         assert_eq!(rdp.shared_folder(), None);
-        assert!(!rdp.redirects_devices());
+        assert!(!redirects_devices(&rdp));
         rdp.drive_folder = r" C:\work ".into();
         assert_eq!(rdp.shared_folder(), Some(r"C:\work"));
     }
@@ -1356,9 +1304,9 @@ mod tests {
     fn a_missing_folder_is_left_out() {
         let dir = tempfile::tempdir().unwrap();
         let mut rdp = RdpSettings { drive_folder: dir.path().display().to_string(), ..Default::default() };
-        assert_eq!(rdp.missing_folder(), None);
+        assert_eq!(missing_folder(&rdp), None);
         rdp.drive_folder = dir.path().join("gone").display().to_string();
-        assert_eq!(rdp.missing_folder(), Some(rdp.drive_folder.as_str()));
+        assert_eq!(missing_folder(&rdp), Some(rdp.drive_folder.as_str()));
     }
 
     #[cfg(windows)]
@@ -1573,12 +1521,70 @@ mod tests {
         let file = dir.path().join("known_rdp_hosts");
         let fp = fingerprint(b"cert one");
         assert!(fp.starts_with("SHA256:"));
-        assert_eq!(check_known(&file, "srv:3389", &fp), Known::Unknown);
+        assert_eq!(check_known(&file, "srv:3389", &fp).unwrap(), Known::Unknown);
         learn_known(&file, "srv:3389", &fp).unwrap();
         learn_known(&file, "other:3389", &fingerprint(b"x")).unwrap();
-        assert_eq!(check_known(&file, "srv:3389", &fp), Known::Match);
-        assert_eq!(check_known(&file, "srv:3389", &fingerprint(b"cert two")), Known::Changed(1));
-        assert_eq!(check_known(&file, "srv:3390", &fp), Known::Unknown, "the port is part of the name");
+        assert_eq!(check_known(&file, "srv:3389", &fp).unwrap(), Known::Match);
+        assert_eq!(check_known(&file, "srv:3389", &fingerprint(b"cert two")).unwrap(), Known::Changed(1));
+        assert_eq!(check_known(&file, "srv:3390", &fp).unwrap(), Known::Unknown, "the port is part of the name");
+    }
+
+    #[test]
+    fn conflicting_certificate_is_never_learned_or_hidden_by_an_earlier_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("known_rdp_hosts");
+        learn_known(&file, "desk:3389", "SHA256:one").unwrap();
+        let before = std::fs::read(&file).unwrap();
+        learn_known(&file, "desk:3389", "SHA256:one").unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        assert!(learn_known(&file, "desk:3389", "SHA256:two").is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        std::fs::write(&file, "desk:3389 SHA256:one\ndesk:3389 SHA256:two\n").unwrap();
+        assert_eq!(check_known(&file, "desk:3389", "SHA256:one").unwrap(), Known::Changed(2));
+        assert!(check_known(dir.path(), "desk:3389", "SHA256:one").is_err(), "read errors are never first use");
+    }
+
+    #[test]
+    fn rdp_learn_worker() {
+        let Some(path) = std::env::var_os("PLAYTERM_RDP_PIN_TEST_PATH") else { return };
+        let ready = std::env::var_os("PLAYTERM_RDP_PIN_TEST_READY").unwrap();
+        let go = std::env::var_os("PLAYTERM_RDP_PIN_TEST_GO").unwrap();
+        std::fs::write(ready, b"ready").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !Path::new(&go).exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        learn_known(Path::new(&path), "desk:3389", "SHA256:same-certificate").unwrap();
+    }
+
+    #[test]
+    fn two_processes_learn_one_rdp_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_rdp_hosts");
+        let go = dir.path().join("go");
+        let mut children = Vec::new();
+        for index in 0..2 {
+            let ready = dir.path().join(format!("ready-{index}"));
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "rdp::tests::rdp_learn_worker", "--nocapture"])
+                .env("PLAYTERM_RDP_PIN_TEST_PATH", &path)
+                .env("PLAYTERM_RDP_PIN_TEST_READY", &ready)
+                .env("PLAYTERM_RDP_PIN_TEST_GO", &go)
+                .spawn()
+                .unwrap();
+            children.push((child, ready));
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while children.iter().any(|(_, ready)| !ready.exists()) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::fs::write(go, b"go").unwrap();
+        for (mut child, _) in children {
+            assert!(child.wait().unwrap().success());
+        }
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "desk:3389 SHA256:same-certificate\n");
     }
 
     /// The gateway's password prompt is not a login the UI may redirect: no user to change

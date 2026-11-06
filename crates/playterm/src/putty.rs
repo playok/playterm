@@ -118,7 +118,11 @@ pub fn convert(name: &str, values: &Values) -> ImportedSession {
             return ImportedSession { name: name.to_owned(), folder: String::new(), profile: Err(reason), notes };
         }
     };
-    let mut p = SessionProfile { name: name.to_owned(), protocol, ..Default::default() };
+    let base = match SessionProfile::new() {
+        Ok(profile) => profile,
+        Err(e) => return ImportedSession { name: name.to_owned(), folder: String::new(), profile: Err(e.to_string()), notes },
+    };
+    let mut p = SessionProfile { name: name.to_owned(), protocol, ..base };
     p.charset = charset(&text("LineCodePage"));
     let term = text("TerminalType");
     if !term.is_empty() {

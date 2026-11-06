@@ -21,6 +21,7 @@ use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct TestServer {
+    forward_address: Arc<Mutex<Option<String>>>,
     accepted_keys: Vec<PublicKey>,
     sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>,
     auth_calls: Arc<Mutex<Vec<String>>>,
@@ -190,8 +191,10 @@ impl server::Handler for TestServer {
     }
 
     async fn tcpip_forward(&mut self, address: &str, port: &mut u32, session: &mut Session) -> Result<bool, Self::Error> {
-        let Ok(listener) = TcpListener::bind(("127.0.0.1", *port as u16)).await else { return Ok(false) };
-        let (handle, address, port) = (session.handle(), address.to_owned(), *port);
+        let bind = if address.is_empty() || address == "localhost" { "127.0.0.1" } else { address };
+        let Ok(listener) = TcpListener::bind((bind, *port as u16)).await else { return Ok(false) };
+        let address = self.forward_address.lock().unwrap().clone().unwrap_or_else(|| address.to_owned());
+        let (handle, address, port) = (session.handle(), address, *port);
         tokio::spawn(async move {
             while let Ok((mut tcp, peer)) = listener.accept().await {
                 let channel = handle.channel_open_forwarded_tcpip(address.clone(), port, peer.ip().to_string(), peer.port().into()).await;
@@ -296,6 +299,7 @@ impl server::Handler for TestServer {
 }
 
 struct Fixture {
+    forward_address: Arc<Mutex<Option<String>>>,
     auth_calls: Arc<Mutex<Vec<String>>>,
     server_rt: tokio::runtime::Runtime,
     port: u16,
@@ -376,10 +380,20 @@ impl Fixture {
     }
 
     fn with_gate(name: &str, client_keys: &[&PrivateKey], sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>) -> Self {
-        let host_key = random_key(Algorithm::Ed25519);
+        Self::with_host_identity(name, client_keys, sftp_gate, random_key(Algorithm::Ed25519), Vec::new())
+    }
+
+    fn with_host_identity(
+        name: &str,
+        client_keys: &[&PrivateKey],
+        sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>,
+        host_key: PrivateKey,
+        certificates: Vec<russh::keys::Certificate>,
+    ) -> Self {
         let server_rt = tokio::runtime::Runtime::new().unwrap();
         let config = Arc::new(server::Config {
             keys: vec![host_key.clone()],
+            certificates,
             auth_rejection_time: Duration::from_millis(10),
             auth_rejection_time_initial: Some(Duration::ZERO),
             ..Default::default()
@@ -392,7 +406,9 @@ impl Fixture {
         let known_hosts = dir.join("known_hosts");
 
         let auth_calls = Arc::new(Mutex::new(Vec::new()));
+        let forward_address = Arc::default();
         let server = TestServer {
+            forward_address: Arc::clone(&forward_address),
             accepted_keys: Vec::new(),
             sftp_gate,
             auth_calls: auth_calls.clone(),
@@ -406,7 +422,7 @@ impl Fixture {
             let _ = { server }.run_on_socket(config, &listener).await;
         });
 
-        Self { auth_calls, server_rt, port, host_key, dir, known_hosts, net: NetRuntime::new().unwrap() }
+        Self { forward_address, auth_calls, server_rt, port, host_key, dir, known_hosts, net: NetRuntime::new().unwrap() }
     }
 
     fn trust_host(&self) {
@@ -500,6 +516,57 @@ fn expect_connected(h: &SessionHandle) {
 
 // -------------------------------------------------------------------------------------------------
 // Host keys and passwords
+
+fn host_certificate_fixture(name: &str, principal: &str, expired: bool) -> (Fixture, PrivateKey) {
+    use russh::keys::ssh_key::certificate::{Builder, CertType};
+    let ca = random_key(Algorithm::Ed25519);
+    let host = random_key(Algorithm::Ed25519);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let before = if expired { now - 1 } else { now + 3600 };
+    let mut builder = Builder::new_with_random_nonce(&mut rand::rng(), host.public_key(), now - 60, before).unwrap();
+    builder.cert_type(CertType::Host).unwrap().valid_principal(principal).unwrap();
+    let certificate = builder.sign(&ca).unwrap();
+    (Fixture::with_host_identity(name, &[], None, host, vec![certificate]), ca)
+}
+
+#[test]
+fn host_certificate_negotiates_and_never_falls_back_to_tofu() {
+    for scenario in ["valid", "wrong-ca", "expired", "wrong-host", "no-ca"] {
+        let principal = if scenario == "wrong-host" { "wrong.example" } else { "127.0.0.1" };
+        let (fx, ca) = host_certificate_fixture(&format!("host-cert-{scenario}"), principal, scenario == "expired");
+        let ca = if scenario == "wrong-ca" { random_key(Algorithm::Ed25519) } else { ca };
+        let trust = if scenario == "no-ca" {
+            String::new()
+        } else {
+            format!("@cert-authority [127.0.0.1]:{} {}\n", fx.port, ca.public_key().to_openssh().unwrap())
+        };
+        std::fs::write(&fx.known_hosts, &trust).unwrap();
+        let handle = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+        if scenario == "valid" {
+            expect_connected(&handle);
+            handle.close();
+        } else {
+            // The server offers both certificate and bare key. Every certificate
+            // failure, including absent CA trust, closes without a TOFU question.
+            match skip_notices(&handle) {
+                SessionEvent::Closed(Some(_)) => {}
+                other => panic!("{scenario}: certificate failure did not close: {other:?}"),
+            }
+        }
+        assert_eq!(std::fs::read_to_string(&fx.known_hosts).unwrap(), trust, "certificate validation never learns a bare key: {scenario}");
+    }
+}
+
+#[test]
+fn configured_ca_refuses_a_bare_key_downgrade_without_question() {
+    let fx = Fixture::new("cert-downgrade", &[]);
+    let ca = random_key(Algorithm::Ed25519);
+    let trust = format!("@cert-authority [127.0.0.1]:{} {}\n", fx.port, ca.public_key().to_openssh().unwrap());
+    std::fs::write(&fx.known_hosts, &trust).unwrap();
+    let handle = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    assert!(matches!(skip_notices(&handle), SessionEvent::Closed(Some(_))));
+    assert_eq!(std::fs::read_to_string(&fx.known_hosts).unwrap(), trust);
+}
 
 #[test]
 fn first_connect_asks_for_host_key_then_runs_shell() {
@@ -1073,14 +1140,27 @@ fn native_auth_fixture() {
     let second_key = random_key(Algorithm::Ed25519);
     let two_keys = std::env::var_os("PLAYTERM_GUI_TWO_KEYS").is_some();
     let gate = Arc::new(common::sftp_fs::TransferGate::default());
-    let fx = Fixture::with_gate("native-auth", &[&key, &second_key], Some(gate.clone()));
+    let (fx, host_ca) = if std::env::var_os("PLAYTERM_GUI_HOST_CERTIFICATE").is_some() {
+        let (fx, ca) = host_certificate_fixture("native-host-certificate", "127.0.0.1", false);
+        (fx, Some(ca))
+    } else {
+        (Fixture::with_gate("native-auth", &[&key, &second_key], Some(gate.clone())), None)
+    };
     if two_keys {
         let agent = start_test_agent(&fx, &[&key, &second_key], "native-two-keys");
         std::fs::write(dir.join("agent.txt"), agent).unwrap();
     }
     std::fs::write(fx.dir.join("sftp").join("large.bin"), vec![7u8; 8 * 1024 * 1024]).unwrap();
     std::fs::write(dir.join("sftp-root.txt"), fx.dir.join("sftp").to_string_lossy().as_bytes()).unwrap();
-    known_hosts::learn_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), dir.join("known_hosts")).unwrap();
+    if let Some(ca) = host_ca {
+        std::fs::write(
+            dir.join("known_hosts"),
+            format!("@cert-authority [127.0.0.1]:{} {}\n", fx.port, ca.public_key().to_openssh().unwrap()),
+        )
+        .unwrap();
+    } else {
+        known_hosts::learn_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), dir.join("known_hosts")).unwrap();
+    }
     let encrypted = key.encrypt(&mut rand::rng(), "open sesame").unwrap();
     std::fs::write(dir.join("encrypted_key"), encrypted.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
     std::fs::write(dir.join("plain_key"), key.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
@@ -1803,6 +1883,69 @@ fn assert_echo(mut tcp: std::net::TcpStream, message: &[u8]) {
 
 fn rule(kind: ForwardKind, bind_port: u16, dest_port: u16) -> ForwardRule {
     ForwardRule { kind, bind_host: String::new(), bind_port, dest_host: "127.0.0.1".into(), dest_port }
+}
+
+fn marker_server(fx: &Fixture, marker: u8) -> u16 {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = fx.server_rt.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    fx.server_rt.spawn(async move {
+        while let Ok((mut tcp, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                tcp.write_all(&[marker]).await.unwrap();
+                let (mut read, mut write) = tcp.into_split();
+                let _ = tokio::io::copy(&mut read, &mut write).await;
+            });
+        }
+    });
+    port
+}
+
+#[test]
+fn remote_forward_same_port_routes_distinct_bind_addresses_to_distinct_destinations() {
+    let fx = Fixture::new("forward-same-port", &[]);
+    fx.trust_host();
+    let (first, second, port) = (marker_server(&fx, b'A'), marker_server(&fx, b'B'), free_port());
+    let mut rules = vec![rule(ForwardKind::Remote, port, first), rule(ForwardKind::Remote, port, second)];
+    rules[0].bind_host = "127.0.0.1".into();
+    rules[1].bind_host = "::1".into();
+    let handle = fx.connect(ConnectParams { password: Some("secret".into()), forwards: rules, ..fx.params() });
+    expect_connected(&handle);
+    for (address, marker) in [("127.0.0.1", b'A'), ("::1", b'B')] {
+        let mut tcp = std::net::TcpStream::connect((address, port)).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut received = [0];
+        tcp.read_exact(&mut received).unwrap();
+        assert_eq!(received, [marker], "{address} must reach its own destination");
+        assert_echo(tcp, b"routed independently");
+    }
+    handle.close();
+}
+
+#[test]
+fn remote_forward_accepts_loopback_aliases_and_rejects_unmatched_reports() {
+    for (label, reported) in [("empty", ""), ("localhost", "localhost"), ("unmatched", "203.0.113.1")] {
+        let fx = Fixture::new(&format!("forward-report-{label}"), &[]);
+        fx.trust_host();
+        *fx.forward_address.lock().unwrap() = Some(reported.into());
+        let (echo, port) = (echo_server(&fx), free_port());
+        let mut forwarding = rule(ForwardKind::Remote, port, echo);
+        forwarding.bind_host = "127.0.0.1".into();
+        let handle = fx.connect(ConnectParams { password: Some("secret".into()), forwards: vec![forwarding], ..fx.params() });
+        expect_connected(&handle);
+        let mut tcp = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        if label == "unmatched" {
+            tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            match tcp.read(&mut [0]) {
+                Ok(0) => {}
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) => {}
+                other => panic!("unmatched channel must be rejected promptly: {other:?}"),
+            }
+        } else {
+            assert_echo(tcp, b"loopback alias");
+        }
+        handle.close();
+    }
 }
 
 #[test]

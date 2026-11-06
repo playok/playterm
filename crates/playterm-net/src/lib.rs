@@ -6,9 +6,11 @@
 
 mod deadline;
 mod forward;
+mod host_certificate;
 mod keepalive;
 pub mod ping;
 mod rdp;
+mod secret;
 mod serial;
 mod session;
 mod sftp;
@@ -17,6 +19,7 @@ mod ssh_auth;
 mod telnet;
 #[cfg(feature = "testing")]
 pub mod testing;
+mod trust;
 pub mod x11;
 pub mod zmodem;
 
@@ -25,12 +28,14 @@ use std::io;
 pub use forward::{ForwardKind, ForwardRule};
 pub use keepalive::{KeepAlive, KeepAliveMode, decode_escapes};
 pub use rdp::{RdpFrame, RdpInput, RdpMouseButton, RdpSettings, scancode};
+pub use secret::Password;
 pub use serial::{SerialFlow, SerialParity, SerialPortEntry, SerialSettings, list_ports};
 pub use session::{
     AuthPrompt, ConnectParams, HostKeyCheck, MAX_PENDING_OUTPUT, PromptField, Protocol, SessionEvent, SessionHandle, Waker, X11Request,
 };
 pub use sftp::{RemoteEntry, SftpConnection, SftpEvent, TransferState, TransferUpdate, is_safe_local_name, remote_join, remote_parent};
 pub use telnet::TelnetCodec;
+pub use trust::{TrustKind, TrustedHost, remove_trusted_host, trusted_hosts};
 
 pub struct NetRuntime {
     rt: tokio::runtime::Runtime,

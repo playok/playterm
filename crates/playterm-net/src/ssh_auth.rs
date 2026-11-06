@@ -335,7 +335,7 @@ async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSi
         && !second_factor
         && allows(&methods, MethodKind::Password)
     {
-        match session.authenticate_password(user, password).await? {
+        match session.authenticate_password(user, password.as_str()).await? {
             AuthResult::Success => return Ok(()),
             AuthResult::Failure { remaining_methods, partial_success } => {
                 methods = remaining_methods;
@@ -425,7 +425,7 @@ async fn keyboard_interactive(
     session: &mut Session,
     user: &str,
     target: &str,
-    autofill: &mut Option<String>,
+    autofill: &mut Option<crate::Password>,
     second_factor: bool,
     sink: &EventSink,
 ) -> anyhow::Result<Outcome> {
@@ -450,7 +450,8 @@ async fn keyboard_interactive(
                     && password_question(&only.prompt)
                     && let Some(password) = autofill.take()
                 {
-                    vec![password]
+                    // russh owns String responses at this protocol boundary.
+                    vec![password.as_str().to_owned()]
                 } else {
                     let title = if name.is_empty() { tr!("{target} 인증", "Authentication for {target}") } else { name };
                     let fields: Vec<PromptField> =

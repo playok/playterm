@@ -32,6 +32,36 @@ fn params(known_hosts: PathBuf, port_variable: &str) -> ConnectParams {
 }
 
 #[test]
+#[ignore = "requires an isolated OpenSSH host-certificate server; see scripts/test-openssh.sh"]
+fn openssh_trusted_host_certificate_without_tofu() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("known_hosts");
+    let options = params(file.clone(), "PLAYTERM_OPENSSH_CERT_PORT");
+    let ca = std::fs::read_to_string(std::env::var_os("PLAYTERM_OPENSSH_HOST_CA").unwrap()).unwrap();
+    let trust = format!("@cert-authority [127.0.0.1]:{} {}\n", options.port, ca.trim());
+    std::fs::write(&file, &trust).unwrap();
+    let net = NetRuntime::new().unwrap();
+    let handle = net.connect(options, Arc::new(|| {}));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut verified = false;
+    loop {
+        assert!(Instant::now() < deadline, "OpenSSH certificate connection timed out");
+        match handle.try_recv() {
+            Some(SessionEvent::Connected) => break,
+            Some(SessionEvent::HostKeyCheck(_)) => panic!("certificate trust must never ask TOFU"),
+            Some(SessionEvent::Closed(error)) => panic!("certificate connection failed: {error:?}"),
+            Some(SessionEvent::Notice(text)) => {
+                verified |= text.contains("Verified SSH host certificate") || text.contains("SSH 호스트 인증서")
+            }
+            _ => std::thread::sleep(Duration::from_millis(5)),
+        }
+    }
+    assert!(verified, "the certificate validation notice must precede authentication");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), trust);
+    handle.close();
+}
+
+#[test]
 #[ignore = "requires an isolated OpenSSH server; see scripts/test-openssh.sh"]
 fn openssh_key_shell_and_unicode_sftp() {
     let dir = tempfile::tempdir().unwrap();

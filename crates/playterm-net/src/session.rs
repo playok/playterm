@@ -15,41 +15,7 @@ use crate::sftp::SftpConnection;
 /// Called from network threads whenever a new event is queued, so the UI can wake up.
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Protocol {
-    #[default]
-    Ssh,
-    Telnet,
-    /// Local COM port; `host`/`port` are unused, see [`ConnectParams::serial`].
-    Serial,
-    /// Windows Remote Desktop; shown as a picture instead of a terminal.
-    Rdp,
-}
-
-impl Protocol {
-    pub const ALL: [Protocol; 4] = [Protocol::Ssh, Protocol::Telnet, Protocol::Serial, Protocol::Rdp];
-
-    pub fn default_port(self) -> u16 {
-        match self {
-            Protocol::Ssh => 22,
-            Protocol::Telnet => 23,
-            Protocol::Serial => 0,
-            Protocol::Rdp => 3389,
-        }
-    }
-}
-
-impl fmt::Display for Protocol {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Protocol::Ssh => "SSH",
-            Protocol::Telnet => "Telnet",
-            Protocol::Serial => "Serial",
-            Protocol::Rdp => "RDP",
-        })
-    }
-}
+pub use playterm_types::Protocol;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct X11Request {
@@ -67,7 +33,7 @@ pub struct ConnectParams {
     pub port: u16,
     /// SSH user name. Unused for Telnet (the remote login prompt asks for it).
     pub username: String,
-    pub password: Option<String>,
+    pub password: Option<crate::Password>,
     /// Private key chosen for this connection; tried first.
     pub identity_file: Option<PathBuf>,
     /// Keys tried after the agent if they exist (`~/.ssh/id_ed25519`, ...).

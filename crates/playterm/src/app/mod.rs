@@ -6,7 +6,7 @@ use anyhow::Context as _;
 use eframe::egui::{self, Color32, RichText};
 use playterm_config::{AppSettings, Language, PreventSleep, ProfileStore, SessionProfile, TemplateLayout, UiTheme, Vault};
 use playterm_i18n::{t, tr};
-use playterm_net::{ConnectParams, NetRuntime, Protocol, Waker};
+use playterm_net::{ConnectParams, NetRuntime, Password, Protocol, Waker};
 use playterm_term::{LogMode, Palette, Theme};
 use zeroize::Zeroizing;
 
@@ -42,6 +42,7 @@ mod settings;
 pub(crate) mod theme;
 mod ui;
 mod vault;
+mod vault_worker;
 mod windows;
 mod zmodem;
 
@@ -71,8 +72,10 @@ enum Pending {
 }
 
 enum Modal {
+    TrustedHosts(crate::trust_dialog::TrustDialog),
     QuickConnect(Box<QuickConnect>),
     Vault(VaultDialog, Pending),
+    VaultWorking(VaultDialog, Pending, vault_worker::Task),
     ConfirmDelete(String),
     Template(Box<TemplateDialog>),
     ConfirmDeleteTemplate(String),
@@ -82,6 +85,7 @@ enum Modal {
     Settings(Box<SettingsDialog>),
     Import(Box<ImportDialog>),
     Macros(Box<crate::macros::MacroDialog>),
+    ConfirmPasswordMacro(broadcast::MacroPlan),
     /// Closing would end connections: asks first; the flag is the "do not ask again" box.
     ConfirmClose(CloseRequest, bool),
     /// A notice to acknowledge: title and text.
@@ -174,6 +178,7 @@ pub struct PlaytermApp {
     known_hosts: PathBuf,
     store: ProfileStore,
     vault: Vault,
+    vault_worker: vault_worker::Worker,
     /// Changes made while the vault was locked, applied when it is unlocked.
     vault_todo: Vec<VaultTodo>,
     sessions: Vec<Session>,
@@ -282,6 +287,7 @@ impl PlaytermApp {
             waker: Arc::new(move || ctx.request_repaint()),
             known_hosts: config_dir.join("known_hosts"),
             vault: Vault::new(config_dir.join("vault.toml")),
+            vault_worker: vault_worker::Worker::default(),
             vault_todo: Vec::new(),
             modal: None,
             store,

@@ -40,6 +40,7 @@ mod template_dialog;
 mod toast;
 mod toolbar;
 mod tooltips;
+mod trust_dialog;
 #[cfg(test)]
 mod ui_tests;
 mod update;
