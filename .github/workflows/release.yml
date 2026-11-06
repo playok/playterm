@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -40,6 +40,8 @@ jobs:
       codesigned: ${{ steps.package.outputs.codesigned }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Rust toolchain
         shell: pwsh
@@ -105,6 +107,8 @@ jobs:
       notarized: ${{ steps.package.outputs.notarized }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Rust toolchain
         run: |
@@ -192,12 +196,15 @@ jobs:
   publish:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [windows, macos]
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download the packages
         uses: actions/download-artifact@v4
