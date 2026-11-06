@@ -1,0 +1,31 @@
+name: Quality tools
+
+on:
+  pull_request:
+    paths: ['fuzz/**', 'crates/playterm-term/**', 'crates/playterm-sign/**', '.github/workflows/quality.yml']
+  push:
+    branches: [master]
+    paths: ['fuzz/**', 'crates/playterm-term/**', 'crates/playterm-sign/**', '.github/workflows/quality.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Nightly Rust
+        run: rustup toolchain install nightly --profile minimal --no-self-update
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        with:
+          tool: cargo-fuzz@0.13.2
+      - name: Ten-second VT parser smoke run
+        run: |
+          mkdir -p fuzz/corpus/vt_input
+          cp fuzz/seeds/vt_input/* fuzz/corpus/vt_input/
+          cargo +nightly fuzz run vt_input -- -max_total_time=10 -max_len=65536 -timeout=5 -rss_limit_mb=1024
