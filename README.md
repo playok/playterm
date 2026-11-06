@@ -4,6 +4,8 @@
 
 [보안 취약점 비공개 보고](SECURITY.md)
 
+[기여 안내](CONTRIBUTING.md) | [버전별 변경 내역](docs/releases/)
+
 이 README는 개발 중인 master 기준입니다. [v0.6.0 변경 내역](docs/releases/v0.6.0.md)과
 [릴리스별 설명](https://github.com/playok/playterm/releases)에서 배포 버전의 기능과 주의사항을 확인하세요.
 
