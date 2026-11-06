@@ -6,6 +6,7 @@
 
 mod deadline;
 mod forward;
+mod host_certificate;
 mod keepalive;
 pub mod ping;
 mod rdp;

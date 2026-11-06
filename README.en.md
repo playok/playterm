@@ -428,6 +428,8 @@ server (xterm, installers…) show on the X server of this PC.
 
 ## SSH authentication order
 
+SSH host certificates require an explicitly trusted CA in `known_hosts`. See [configuration and validation](docs/ssh-host-certificates.md) for CA scope, validity, hostname and revocation checks. Manage stored SSH keys and RDP fingerprints from Tools → Remembered host keys and certificates.
+
 1. The key file set for the session (OpenSSH format / PuTTY `.ppk`; asks for the passphrase if it has one)
 2. SSH agent — `SSH_AUTH_SOCK` if it is a named pipe, otherwise the Windows OpenSSH agent (`\\.\pipe\openssh-ssh-agent`), then Pageant (on macOS, the `SSH_AUTH_SOCK` socket)
 3. The default key files `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa` (if present)
