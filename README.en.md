@@ -2,6 +2,8 @@
 
 **English** | [한국어](README.md)
 
+[Report a security vulnerability privately](SECURITY.md)
+
 This README describes development on master. See [the v0.6.0 changes](docs/releases/v0.6.0.md)
 and [release notes](https://github.com/playok/playterm/releases) for shipped features and update notes.
 
