@@ -7,6 +7,8 @@ allow = [
     "BSL-1.0", "Unlicense", "CC0-1.0", "0BSD",
     # Fonts bundled by epaint_default_fonts.
     "OFL-1.1", "Ubuntu-font-1.0",
+    # LLVM libFuzzer bundled by the standalone development-only fuzz harness.
+    "NCSA",
 ]
 exceptions = [
     { crate = "serialport", allow = ["MPL-2.0"] },

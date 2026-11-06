@@ -32,7 +32,13 @@ jobs:
       - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
         with:
           tool: cargo-deny@0.20.2
-      - name: Licenses and RustSec advisories
+      - name: Licenses and RustSec advisories (workspace and fuzz)
         # Maintenance notices stay visible without treating them as vulnerabilities.
         # Known vulnerabilities, unsoundness and yanked versions still fail.
-        run: cargo deny --all-features check --warn unmaintained licenses advisories
+        # Audit both independent lockfiles even when the first one fails.
+        shell: bash
+        run: |
+          result=0
+          cargo deny --all-features check --warn unmaintained licenses advisories || result=1
+          cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --all-features check --warn unmaintained licenses advisories || result=1
+          exit "$result"
