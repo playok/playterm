@@ -153,7 +153,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = ProfileStore::load(dir.path().join("sessions.toml")).unwrap();
         for (name, folder) in sites {
-            store.upsert(SessionProfile { name: (*name).into(), folder: (*folder).into(), ..Default::default() }).unwrap();
+            store.upsert(SessionProfile { name: (*name).into(), folder: (*folder).into(), ..SessionProfile::new().unwrap() }).unwrap();
         }
         for f in folders {
             store.create_folder(f).unwrap();

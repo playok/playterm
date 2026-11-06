@@ -10,6 +10,8 @@ anyhow = "1.0.104"
 base64 = "0.23.1"
 encoding_rs = "0.8.44"
 getrandom = "0.4.3"
+hmac = "0.13"
+sha1 = "0.11"
 # Only for the `testing` feature (an SSH server for tests of the app).
 rand = { version = "0.10", features = ["thread_rng"], optional = true }
 ironrdp-cliprdr = "0.9"
