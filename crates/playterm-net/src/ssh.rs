@@ -40,6 +40,7 @@ impl client::Handler for ClientHandler {
             bail!(t("인증서 기반 호스트 키는 아직 지원하지 않습니다", "Certificate host keys are not supported yet"));
         };
 
+        crate::trust::read(&self.known_hosts).context(t("known_hosts 확인 실패", "Could not check known_hosts"))?;
         let known = known_hosts::known_host_keys_path(&self.host, self.port, &self.known_hosts)
             .context(t("known_hosts 확인 실패", "Could not check known_hosts"))?;
         if known.iter().any(|(_, recorded)| recorded.key_data() == key.key_data()) {
@@ -63,8 +64,20 @@ impl client::Handler for ClientHandler {
         }
         let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
         let accepted = self.sink.confirm_host_key(&self.host, self.port, key.algorithm().to_string(), fingerprint).await;
-        if accepted && let Err(e) = known_hosts::learn_known_hosts_path(&self.host, self.port, key, &self.known_hosts) {
-            self.sink.notice(tr!("known_hosts 저장 실패: {e}", "Could not save known_hosts: {e}"));
+        if accepted {
+            let _lock = crate::trust::lock(&self.known_hosts)?;
+            // Another window may have learned a key while this confirmation was open.
+            let latest = known_hosts::known_host_keys_path(&self.host, self.port, &self.known_hosts)?;
+            if !latest.is_empty() && !latest.iter().any(|(_, recorded)| recorded.key_data() == key.key_data()) {
+                bail!(t(
+                    "확인 중 호스트 키가 변경되었습니다. 다시 연결해 확인하세요",
+                    "The host key changed while confirming; reconnect and verify it"
+                ));
+            }
+            if latest.is_empty() {
+                known_hosts::learn_known_hosts_path(&self.host, self.port, key, &self.known_hosts)
+                    .context(t("known_hosts 저장 실패", "Could not save known_hosts"))?;
+            }
         }
         Ok(accepted)
     }

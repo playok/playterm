@@ -219,6 +219,9 @@ impl PlaytermApp {
             Command::ZoomIn => self.set_font_size(self.settings.font_size.floor() + 1.0),
             Command::ZoomOut => self.set_font_size(self.settings.font_size.ceil() - 1.0),
             Command::ZoomReset => self.set_font_size(AppSettings::DEFAULT_FONT_SIZE),
+            Command::TrustedHosts => {
+                self.modal = Some(Modal::TrustedHosts(crate::trust_dialog::TrustDialog::new(self.known_hosts.clone())))
+            }
             Command::Settings => self.modal = Some(Modal::Settings(Box::new(SettingsDialog::new(&self.settings)))),
             Command::RunMacro(k) => self.run_macro(k),
             Command::StopMacro => {

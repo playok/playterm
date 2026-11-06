@@ -72,6 +72,7 @@ enum Pending {
 }
 
 enum Modal {
+    TrustedHosts(crate::trust_dialog::TrustDialog),
     QuickConnect(Box<QuickConnect>),
     Vault(VaultDialog, Pending),
     VaultWorking(VaultDialog, Pending, vault_worker::Task),

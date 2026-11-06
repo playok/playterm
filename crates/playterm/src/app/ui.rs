@@ -62,6 +62,11 @@ impl PlaytermApp {
                     Some(true) => self.execute_macro_plan(plan),
                 }
             }
+            Modal::TrustedHosts(mut dialog) => {
+                if !dialog.show(ctx) {
+                    self.modal = Some(Modal::TrustedHosts(dialog));
+                }
+            }
             Modal::Settings(mut dialog) => match dialog.show(ctx) {
                 SettingsResult::Open => self.modal = Some(Modal::Settings(dialog)),
                 SettingsResult::Changed(s) => {

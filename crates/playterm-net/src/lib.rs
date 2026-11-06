@@ -18,6 +18,7 @@ mod ssh_auth;
 mod telnet;
 #[cfg(feature = "testing")]
 pub mod testing;
+mod trust;
 pub mod x11;
 pub mod zmodem;
 
@@ -33,6 +34,7 @@ pub use session::{
 };
 pub use sftp::{RemoteEntry, SftpConnection, SftpEvent, TransferState, TransferUpdate, is_safe_local_name, remote_join, remote_parent};
 pub use telnet::TelnetCodec;
+pub use trust::{TrustKind, TrustedHost, remove_trusted_host, trusted_hosts};
 
 pub struct NetRuntime {
     rt: tokio::runtime::Runtime,

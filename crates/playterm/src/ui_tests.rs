@@ -430,6 +430,27 @@ fn password_macro_requires_confirmation_before_any_bytes_are_sent() {
     assert!(!std::fs::read_to_string(dir.path().join("settings.toml")).unwrap().contains("macro-test-secret"));
 }
 
+#[test]
+fn remembered_host_removal_requires_confirmation_and_cancel_preserves_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("known_rdp_hosts");
+    let original = "desk.example:3389 SHA256:fake-test-certificate\n";
+    std::fs::write(&path, original).unwrap();
+    let mut harness = app(dir.path());
+    menu(&mut harness, "도구", "저장된 호스트 키·인증서…");
+    assert!(has_label_text(&harness, "desk.example:3389"));
+    click(&mut harness, "삭제…");
+    assert!(has_label_text(&harness, "저장된 호스트 신뢰 삭제"));
+    assert!(has_label_text(&harness, "SHA256:fake-test-certificate"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    click(&mut harness, "취소");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    click(&mut harness, "삭제…");
+    click(&mut harness, "삭제 확인");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    assert!(has_label_text(&harness, "저장된 호스트가 없습니다"));
+}
+
 /// Each tab's id and window.
 fn tab_windows(harness: &mut App) -> Vec<(u64, u64)> {
     harness.state_mut().test_sessions().iter().map(|s| (s.id, s.window)).collect()

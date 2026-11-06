@@ -41,6 +41,7 @@ pub enum Command {
     ZoomOut,
     ZoomReset,
     Settings,
+    TrustedHosts,
 
     /// The SFTP explorer sliding in at the right edge, following the active tab.
     ToggleSftpPanel,
@@ -300,6 +301,7 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 );
             }
             ui.separator();
+            item(ui, out, t("저장된 호스트 키·인증서…", "Remembered host keys and certificates…"), "", true, Command::TrustedHosts);
             item(ui, out, t("설정…", "Settings…"), &hint(Shortcut::Settings), true, Command::Settings);
         });
 
