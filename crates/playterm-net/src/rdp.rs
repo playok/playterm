@@ -330,25 +330,37 @@ enum Known {
     Changed(usize),
 }
 
-fn check_known(file: &Path, target: &str, fp: &str) -> Known {
-    let Ok(text) = std::fs::read_to_string(file) else { return Known::Unknown };
+fn check_known(file: &Path, target: &str, fp: &str) -> std::io::Result<Known> {
+    let text = crate::trust::read(file)?;
+    let mut found = false;
     for (i, line) in text.lines().enumerate() {
         if let Some((host, known)) = line.split_once(' ')
             && host == target
         {
-            return if known.trim() == fp { Known::Match } else { Known::Changed(i + 1) };
+            if known.trim() != fp {
+                return Ok(Known::Changed(i + 1));
+            }
+            found = true;
         }
     }
-    Known::Unknown
+    Ok(if found { Known::Match } else { Known::Unknown })
 }
 
 fn learn_known(file: &Path, target: &str, fp: &str) -> std::io::Result<()> {
-    use std::io::Write as _;
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
+    let _lock = crate::trust::lock(file)?;
+    match check_known(file, target, fp)? {
+        Known::Match => return Ok(()),
+        Known::Changed(_) => {
+            return Err(std::io::Error::other("The certificate changed while awaiting confirmation; reconnect and verify it"));
+        }
+        Known::Unknown => {}
     }
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(file)?;
-    writeln!(f, "{target} {fp}")
+    let mut text = crate::trust::read(file)?;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!("{target} {fp}\n"));
+    crate::trust::write_atomic(file, text.as_bytes())
 }
 
 /// Kerberos would need a KDC; without one CredSSP uses NTLM.
@@ -909,7 +921,7 @@ async fn check_certificate(params: &ConnectParams, cert: &x509_cert::Certificate
     let fp = fingerprint(&der);
     let file = params.known_hosts.with_file_name("known_rdp_hosts");
     let target = format!("{}:{}", params.host, params.port);
-    match check_known(&file, &target, &fp) {
+    match check_known(&file, &target, &fp)? {
         Known::Match => Ok(()),
         Known::Changed(line) => bail!(tr!(
             "경고: 서버 인증서가 변경되었습니다! 중간자 공격일 수 있습니다. \
@@ -923,9 +935,7 @@ async fn check_certificate(params: &ConnectParams, cert: &x509_cert::Certificate
             if !accepted {
                 bail!(t("서버 인증서를 신뢰하지 않아 연결하지 않았습니다", "The server certificate was not trusted"));
             }
-            if let Err(e) = learn_known(&file, &target, &fp) {
-                sink.notice(tr!("known_rdp_hosts 저장 실패: {e}", "Could not save known_rdp_hosts: {e}"));
-            }
+            learn_known(&file, &target, &fp).context(t("known_rdp_hosts 저장 실패", "Could not save known_rdp_hosts"))?;
             Ok(())
         }
     }
@@ -1511,12 +1521,70 @@ mod tests {
         let file = dir.path().join("known_rdp_hosts");
         let fp = fingerprint(b"cert one");
         assert!(fp.starts_with("SHA256:"));
-        assert_eq!(check_known(&file, "srv:3389", &fp), Known::Unknown);
+        assert_eq!(check_known(&file, "srv:3389", &fp).unwrap(), Known::Unknown);
         learn_known(&file, "srv:3389", &fp).unwrap();
         learn_known(&file, "other:3389", &fingerprint(b"x")).unwrap();
-        assert_eq!(check_known(&file, "srv:3389", &fp), Known::Match);
-        assert_eq!(check_known(&file, "srv:3389", &fingerprint(b"cert two")), Known::Changed(1));
-        assert_eq!(check_known(&file, "srv:3390", &fp), Known::Unknown, "the port is part of the name");
+        assert_eq!(check_known(&file, "srv:3389", &fp).unwrap(), Known::Match);
+        assert_eq!(check_known(&file, "srv:3389", &fingerprint(b"cert two")).unwrap(), Known::Changed(1));
+        assert_eq!(check_known(&file, "srv:3390", &fp).unwrap(), Known::Unknown, "the port is part of the name");
+    }
+
+    #[test]
+    fn conflicting_certificate_is_never_learned_or_hidden_by_an_earlier_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("known_rdp_hosts");
+        learn_known(&file, "desk:3389", "SHA256:one").unwrap();
+        let before = std::fs::read(&file).unwrap();
+        learn_known(&file, "desk:3389", "SHA256:one").unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        assert!(learn_known(&file, "desk:3389", "SHA256:two").is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        std::fs::write(&file, "desk:3389 SHA256:one\ndesk:3389 SHA256:two\n").unwrap();
+        assert_eq!(check_known(&file, "desk:3389", "SHA256:one").unwrap(), Known::Changed(2));
+        assert!(check_known(dir.path(), "desk:3389", "SHA256:one").is_err(), "read errors are never first use");
+    }
+
+    #[test]
+    fn rdp_learn_worker() {
+        let Some(path) = std::env::var_os("PLAYTERM_RDP_PIN_TEST_PATH") else { return };
+        let ready = std::env::var_os("PLAYTERM_RDP_PIN_TEST_READY").unwrap();
+        let go = std::env::var_os("PLAYTERM_RDP_PIN_TEST_GO").unwrap();
+        std::fs::write(ready, b"ready").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !Path::new(&go).exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        learn_known(Path::new(&path), "desk:3389", "SHA256:same-certificate").unwrap();
+    }
+
+    #[test]
+    fn two_processes_learn_one_rdp_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_rdp_hosts");
+        let go = dir.path().join("go");
+        let mut children = Vec::new();
+        for index in 0..2 {
+            let ready = dir.path().join(format!("ready-{index}"));
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "rdp::tests::rdp_learn_worker", "--nocapture"])
+                .env("PLAYTERM_RDP_PIN_TEST_PATH", &path)
+                .env("PLAYTERM_RDP_PIN_TEST_READY", &ready)
+                .env("PLAYTERM_RDP_PIN_TEST_GO", &go)
+                .spawn()
+                .unwrap();
+            children.push((child, ready));
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while children.iter().any(|(_, ready)| !ready.exists()) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::fs::write(go, b"go").unwrap();
+        for (mut child, _) in children {
+            assert!(child.wait().unwrap().success());
+        }
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "desk:3389 SHA256:same-certificate\n");
     }
 
     /// The gateway's password prompt is not a login the UI may redirect: no user to change
