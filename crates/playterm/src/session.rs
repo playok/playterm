@@ -590,9 +590,9 @@ impl Session {
     }
 
     /// Gives the tab its saved password again (the vault was unlocked to reconnect).
-    pub fn restore_password(&mut self, password: String) {
+    pub fn restore_password(&mut self, password: playterm_net::Password) {
         if let Some(script) = &mut self.login_script {
-            script.password = Some(Zeroizing::new(password.clone()));
+            script.password = Some(password.clone().into_zeroizing());
         }
         if let Some(remote) = &mut self.remote {
             remote.params.password = Some(password);
@@ -640,7 +640,7 @@ impl Session {
 
     /// Connects again as another user (the user name was mistyped), with `password` if one was
     /// typed for them.
-    pub fn relogin(&mut self, user: String, password: Option<String>, net: &NetRuntime, waker: Waker) {
+    pub fn relogin(&mut self, user: String, password: Option<playterm_net::Password>, net: &NetRuntime, waker: Waker) {
         let Some(remote) = &mut self.remote else { return };
         remote.params.username = user.clone();
         remote.params.password = password;
@@ -1196,6 +1196,18 @@ impl Session {
 
     /// Starts a macro in this tab (a running one stops).
     pub fn run_macro(&mut self, name: &str, steps: Vec<macros::Step>) {
+        if macros::uses_password(&steps) {
+            self.notice(&tr!(
+                "매크로 '{name}' 자동 실행 중단: 비밀번호가 에코될 수 있습니다. 도구 메뉴에서 매크로를 선택하고 위험 안내를 확인한 뒤 실행하세요.",
+                "Macro '{name}' automatic run stopped: the password may be echoed. Select it in Tools and confirm the warning before running."
+            ), "33");
+            return;
+        }
+        self.run_macro_confirmed(name, steps);
+    }
+
+    /// The caller has confirmed the password echo warning, or this macro has no password.
+    pub fn run_macro_confirmed(&mut self, name: &str, steps: Vec<macros::Step>) {
         if self.state != SessionState::Connected || self.remote.is_none() {
             return;
         }
@@ -1227,6 +1239,12 @@ impl Session {
         }
     }
 
+    pub fn macro_target_label(&self) -> String {
+        let Some(remote) = &self.remote else { return self.tab_title() };
+        let params = &remote.params;
+        format!("{} — {}://{}@{}:{}", self.tab_title(), params.protocol, params.username, params.host, params.port)
+    }
+
     /// Lets the running macro go on: types its next lines, reports its end. Returns whether
     /// anything changed.
     fn macro_step(&mut self) -> bool {
@@ -1247,27 +1265,22 @@ impl Session {
                     let Some(remote) = &self.remote else { continue };
                     // {user} and {password}: this connection's (the site's saved password, or
                     // the one typed at the prompt). Never shown, never in the macro's file.
-                    let mut text = Zeroizing::new(text.replace("{user}", &remote.params.username));
-                    if text.contains("{password}") {
-                        let Some(password) = remote
-                            .params
-                            .password
-                            .clone()
-                            .or_else(|| self.login_script.as_ref().and_then(|l| l.password.as_ref().map(|p| p.to_string())))
-                        else {
-                            self.macro_run = None;
-                            self.notice(
-                                &tr!(
-                                    "매크로 '{name}' 중단: {{password}} 에 쓸 비밀번호가 없습니다 (저장된 비밀번호도, 입력한 비밀번호도 없음)",
-                                    "Macro '{name}' stopped: no password for {{password}} (none saved or typed)"
-                                ),
-                                "31",
-                            );
-                            return true;
-                        };
-                        let password = Zeroizing::new(password);
-                        text = Zeroizing::new(text.replace("{password}", &password));
-                    }
+                    let password = remote
+                        .params
+                        .password
+                        .as_deref()
+                        .or_else(|| self.login_script.as_ref().and_then(|l| l.password.as_deref().map(String::as_str)));
+                    let Some(text) = macros::expand(&text, &remote.params.username, password) else {
+                        self.macro_run = None;
+                        self.notice(
+                            &tr!(
+                                "매크로 '{name}' 중단: {{password}} 에 쓸 비밀번호가 없습니다 (저장된 비밀번호도, 입력한 비밀번호도 없음)",
+                                "Macro '{name}' stopped: no password for {{password}} (none saved or typed)"
+                            ),
+                            "31",
+                        );
+                        return true;
+                    };
                     let bytes = Zeroizing::new(self.terminal.encode_input(&text));
                     self.tx_bytes += bytes.len() as u64;
                     remote.handle.send(bytes.to_vec());
@@ -1796,7 +1809,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port,
             username: "admin".into(),
-            password: password.map(str::to_owned),
+            password: password.map(playterm_net::Password::from),
             identity_file: None,
             default_identity_files: Vec::new(),
             use_agent: false,
@@ -1869,7 +1882,10 @@ mod tests {
 
         // {password} with no password known: stopped before typing anything.
         assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "x", "what was typed went through");
-        session.run_macro("pw", macros::parse("enable\n@wait #\n{password}").unwrap());
+        session.run_macro("pw", macros::parse("{password}").unwrap());
+        assert!(session.macro_name().is_none(), "unconfirmed password macro must not start");
+        assert!(lines.try_recv().is_err(), "no secret is sent before confirmation");
+        session.run_macro_confirmed("pw", macros::parse("enable\n@wait #\n{password}").unwrap());
         poll_until(&mut session, |s| s.macro_name().is_none());
         assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "enable");
         assert!(lines.recv_timeout(Duration::from_millis(400)).is_err());
@@ -1877,14 +1893,37 @@ mod tests {
 
     #[test]
     fn a_site_macro_runs_once_connected() {
-        let steps = macros::parse("@wait #\nhello {user}\n@wait #\n{password}").unwrap();
+        let steps = macros::parse("@wait #\nhello {user}").unwrap();
         let (mut session, _net, lines) = device_tab(Duration::ZERO, Some("s3cret"), Some(("site".into(), steps)));
         poll_until(&mut session, |s| s.macro_name().is_none() && !s.after_connect_pending);
         assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "hello admin");
-        assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "s3cret");
+        assert!(lines.recv_timeout(Duration::from_millis(100)).is_err());
         assert!(shows(&mut session, "'site'"));
         // Its spec carries the macro, so a reconnect runs it again.
         assert!(session.spec().unwrap().after_connect.is_some());
+    }
+
+    #[test]
+    fn automatic_password_macro_waits_for_explicit_confirmation() {
+        let steps = macros::parse("{password}").unwrap();
+        let (mut session, _net, lines) = device_tab(Duration::ZERO, Some("s3cret"), Some(("sensitive".into(), steps.clone())));
+        poll_until(&mut session, |s| !s.after_connect_pending);
+        assert!(session.macro_name().is_none());
+        assert!(lines.recv_timeout(Duration::from_millis(100)).is_err());
+        session.run_macro_confirmed("sensitive", steps);
+        assert_eq!(lines.recv_timeout(Duration::from_secs(2)).unwrap(), "s3cret");
+    }
+
+    #[test]
+    fn restored_password_and_reconnect_spec_keep_zeroizing_copies() {
+        let (mut session, net, _lines) = device_tab(Duration::ZERO, None, None);
+        session.restore_password(playterm_net::Password::from("restored-secret"));
+        let copy: playterm_net::Password = session.spec().unwrap().params.password.unwrap();
+        assert_eq!(copy.as_str(), "restored-secret");
+        assert_eq!(format!("{copy:?}"), "<redacted>");
+        session.reconnect(&net, std::sync::Arc::new(|| {}));
+        let reconnected: playterm_net::Password = session.spec().unwrap().params.password.unwrap();
+        assert_eq!(reconnected.as_str(), "restored-secret");
     }
 
     /// A tab connected over Telnet to a server that sends `total` bytes of text at once.

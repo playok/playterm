@@ -3,7 +3,7 @@
 use eframe::egui;
 use playterm_config::{ClipboardKeys, SessionProfile, ShortcutKeys};
 use playterm_i18n::{t, tr};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::icon;
 use crate::profile_form::{FormOptions, ProfileForm};
@@ -111,9 +111,36 @@ impl VaultDialog {
     /// Shows an error from the attempted unlock/create and clears the input.
     pub fn fail(&mut self, message: String) {
         self.error = Some(message);
-        self.master.clear();
-        self.confirm.clear();
+        self.clear_secrets();
         self.focus_requested = false;
+    }
+
+    pub fn clear_secrets(&mut self) {
+        self.master.zeroize();
+        self.confirm.zeroize();
+    }
+
+    /// The computation stays outside the UI thread. Cancellation is available until commit.
+    pub fn show_working(&self, ctx: &egui::Context, can_cancel: bool) -> bool {
+        let mut cancel = false;
+        let close = modal("vault-working", ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading(match self.mode {
+                VaultMode::Unlock => t("저장된 비밀번호 잠금 해제 중", "Unlocking saved passwords"),
+                VaultMode::Create => t("비밀번호 볼트 만드는 중", "Creating the password vault"),
+            });
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(if can_cancel {
+                    t("잠시 기다려 주세요", "Please wait")
+                } else {
+                    t("마무리하는 중입니다", "Finishing")
+                });
+            });
+            cancel = ui.add_enabled(can_cancel, icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked();
+        });
+        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        can_cancel && (cancel || close)
     }
 
     /// Switches to creating a new vault (after a reset).
@@ -232,6 +259,36 @@ impl VaultDialog {
 
 // ---------------------------------------------------------------------------------------------
 // Simple confirmation
+
+/// Explicit per-run confirmation: a macro cannot infer whether remote input will echo.
+pub fn confirm_password_macro(ctx: &egui::Context, name: &str, targets: &[String]) -> Option<bool> {
+    let mut answer = None;
+    let close = modal("password-macro", ctx, |ui| {
+        ui.set_width(440.0);
+        ui.heading(t("비밀번호를 전송하는 매크로", "Macro sends a password"));
+        ui.label(name);
+        ui.label(t(
+            "이 매크로는 비밀번호 프롬프트를 확인하지 않고 {password}를 전송합니다. 원격 프로그램의 에코가 켜져 있으면 비밀번호가 화면이나 로그에 남을 수 있습니다. 대상과 프롬프트를 확인한 뒤 실행하세요.",
+            "This macro sends {password} without verifying a password prompt. If remote input is echoed, the password may appear in the terminal or logs. Check the targets and prompt before running.",
+        ));
+        for target in targets.iter().take(6) {
+            ui.label(target);
+        }
+        if targets.len() > 6 {
+            ui.label(tr!("외 {}개 대상", "{} more targets", targets.len() - 6));
+        }
+        ui.add_space(8.0);
+        let (run, cancel) =
+            icon::ok_cancel_row(ui, icon::primary(ui, icon::SEND, t("확인 후 실행", "Run after checking")), true, icon::cancel());
+        if run.clicked() {
+            answer = Some(true);
+        }
+        if cancel.clicked() {
+            answer = Some(false);
+        }
+    });
+    if close && answer.is_none() { Some(false) } else { answer }
+}
 
 /// Asks before deleting something. `Some(true)` = confirmed, `Some(false)` = cancelled, `None` =
 /// still open.
@@ -559,7 +616,7 @@ pub fn host_key(ctx: &egui::Context, session: &mut Session) {
 pub struct Relogin {
     pub user: String,
     /// The password typed for that user, if the dialog asked for exactly a password.
-    pub password: Option<String>,
+    pub password: Option<playterm_net::Password>,
     /// Also change the user name of the saved site.
     pub save: bool,
 }
@@ -657,7 +714,7 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
         && &user != original
     {
         // A password prompt's answer is that user's password; other questions start over.
-        let password = pending.is_password().then(|| pending.answers.first().map(|p| p.to_string()).filter(|p| !p.is_empty())).flatten();
+        let password = pending.is_password().then(|| pending.answers.first().filter(|p| !p.is_empty()).map(|p| p.clone().into())).flatten();
         pending.prompt.answer(None);
         return Some(Relogin { user, password, save: pending.save_user });
     }

@@ -60,7 +60,7 @@ impl PlaytermApp {
         self.connect_target = None;
     }
 
-    pub(super) fn open_session(&mut self, profile: &SessionProfile, password: Option<String>, name: Option<String>) {
+    pub(super) fn open_session(&mut self, profile: &SessionProfile, password: Option<Password>, name: Option<String>) {
         let mut params = self.connect_params(profile, password);
         params.jump = self.jump_params(profile, 0);
         let log = profile.log.auto.then(|| LogPlan {
@@ -70,7 +70,7 @@ impl PlaytermApp {
         let login = (profile.auto_login.enabled && !profile.auto_login.steps.is_empty()).then(|| LoginScript {
             steps: profile.auto_login.steps.clone(),
             user: profile.username.clone(),
-            password: params.password.clone().map(Zeroizing::new),
+            password: params.password.clone().map(Password::into_zeroizing),
         });
         let site = self.store.get(&profile.id).map(|p| p.id.clone());
         let tab_color = profile.tab_color;
@@ -145,7 +145,7 @@ impl PlaytermApp {
     }
 
     /// How to connect to `profile` (without its jump host).
-    pub(super) fn connect_params(&self, profile: &SessionProfile, password: Option<String>) -> ConnectParams {
+    pub(super) fn connect_params(&self, profile: &SessionProfile, password: Option<Password>) -> ConnectParams {
         let identity_file = (!profile.identity_file.is_empty()).then(|| expand_home(&profile.identity_file));
         // Like OpenSSH, the usual key files are tried when present.
         let default_identity_files = ["id_ed25519", "id_ecdsa", "id_rsa"]
@@ -206,8 +206,8 @@ impl PlaytermApp {
     }
 
     /// The saved password of `profile`, if it was saved for where the site points now.
-    pub(super) fn saved_password(&mut self, profile: &SessionProfile) -> Option<String> {
-        let secret = self.vault.get(&profile.id)?.to_owned();
+    pub(super) fn saved_password(&mut self, profile: &SessionProfile) -> Option<Password> {
+        let secret = Password::from(self.vault.get(&profile.id)?);
         let now = vault_target(profile);
         match self.vault.target(&profile.id) {
             Some(saved) if saved == now => Some(secret),

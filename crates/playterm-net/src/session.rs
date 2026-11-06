@@ -67,7 +67,7 @@ pub struct ConnectParams {
     pub port: u16,
     /// SSH user name. Unused for Telnet (the remote login prompt asks for it).
     pub username: String,
-    pub password: Option<String>,
+    pub password: Option<crate::Password>,
     /// Private key chosen for this connection; tried first.
     pub identity_file: Option<PathBuf>,
     /// Keys tried after the agent if they exist (`~/.ssh/id_ed25519`, ...).

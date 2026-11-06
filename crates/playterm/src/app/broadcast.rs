@@ -2,6 +2,12 @@
 
 use super::*;
 
+pub(super) struct MacroPlan {
+    pub(super) name: String,
+    pub(super) targets: Vec<u64>,
+    steps: Vec<crate::macros::Step>,
+}
+
 impl PlaytermApp {
     /// The connected tabs, other than the active one, that receive simultaneous input.
     pub(super) fn broadcast_targets(&self) -> Vec<usize> {
@@ -66,9 +72,19 @@ impl PlaytermApp {
         } else {
             targets.extend(self.broadcast_targets());
         }
-        for i in targets {
-            if let Some(session) = self.sessions.get_mut(i) {
-                session.run_macro(&name, steps.clone());
+        let targets = targets.into_iter().filter_map(|i| self.sessions.get(i).map(|session| session.id)).collect();
+        let plan = MacroPlan { name, targets, steps };
+        if crate::macros::uses_password(&plan.steps) {
+            self.modal = Some(Modal::ConfirmPasswordMacro(plan));
+        } else {
+            self.execute_macro_plan(plan);
+        }
+    }
+
+    pub(super) fn execute_macro_plan(&mut self, plan: MacroPlan) {
+        for id in plan.targets {
+            if let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) {
+                session.run_macro_confirmed(&plan.name, plan.steps.clone());
             }
         }
     }

@@ -399,6 +399,37 @@ fn macros_are_checked_saved_and_listed() {
     assert!(item.accesskit_node().is_disabled(), "off without a connected tab");
 }
 
+#[test]
+fn password_macro_requires_confirmation_before_any_bytes_are_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = app(dir.path());
+    connect_telnet(&mut harness, fake_device());
+    harness.state_mut().test_sessions()[0].restore_password("macro-test-secret".into());
+    menu(&mut harness, "도구", "매크로");
+    menu_item(&mut harness, "매크로 관리…");
+    click(&mut harness, "추가");
+    let dialog = harness.get_by_role(Role::Dialog);
+    type_into(&harness, &dialog.query_all_by_role(Role::TextInput).next().unwrap(), "민감 매크로");
+    type_into(&harness, &dialog.query_all_by_role(Role::MultilineTextInput).next().unwrap(), "{password}");
+    harness.run_steps(3);
+    click(&mut harness, "저장");
+    let before = harness.state_mut().test_sessions()[0].tx_bytes;
+    menu(&mut harness, "도구", "매크로");
+    menu_item(&mut harness, "민감 매크로");
+    assert!(has_label_text(&harness, "비밀번호를 전송하는 매크로"));
+    assert_eq!(harness.state_mut().test_sessions()[0].tx_bytes, before);
+    click(&mut harness, "취소");
+    harness.run_steps(20);
+    assert_eq!(harness.state_mut().test_sessions()[0].tx_bytes, before);
+    menu(&mut harness, "도구", "매크로");
+    menu_item(&mut harness, "민감 매크로");
+    click(&mut harness, "확인 후 실행");
+    run_until(&mut harness, "the explicitly confirmed macro", |h| {
+        h.state_mut().test_sessions()[0].screen_contains("out:macro-test-secret")
+    });
+    assert!(!std::fs::read_to_string(dir.path().join("settings.toml")).unwrap().contains("macro-test-secret"));
+}
+
 /// Each tab's id and window.
 fn tab_windows(harness: &mut App) -> Vec<(u64, u64)> {
     harness.state_mut().test_sessions().iter().map(|s| (s.id, s.window)).collect()

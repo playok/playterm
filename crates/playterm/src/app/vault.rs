@@ -32,7 +32,7 @@ impl PlaytermApp {
             Some(password) if connect => {
                 // Not saved: use it for this connection only.
                 if let Some(p) = self.store.get(&id).cloned() {
-                    self.open_session(&p, Some(password.to_string()), Some(p.display_name()));
+                    self.open_session(&p, Some(password.into()), Some(p.display_name()));
                 }
             }
             _ if connect => self.connect_saved(&id),
@@ -160,7 +160,7 @@ impl PlaytermApp {
             Pending::StoreSecret { id, password, connect, target } => {
                 self.status = Some(t("비밀번호는 저장되지 않았습니다", "The password was not saved").into());
                 if connect && let Some(p) = self.store.get(&id).cloned() {
-                    let password = password.to_string();
+                    let password = Password::from(password);
                     self.connect_in(target, |app| app.open_session(&p, Some(password), Some(p.display_name())));
                 }
             }
