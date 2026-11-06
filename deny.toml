@@ -1,0 +1,22 @@
+# Review policy changes together with policy/license-exceptions.toml.
+[licenses]
+include-dev = true
+allow = [
+    "MIT", "MIT-0", "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0",
+    "BSL-1.0", "Unlicense", "CC0-1.0", "0BSD",
+    # Fonts bundled by epaint_default_fonts.
+    "OFL-1.1", "Ubuntu-font-1.0",
+    # LLVM libFuzzer bundled by the standalone development-only fuzz harness.
+    "NCSA",
+]
+exceptions = [
+    { crate = "serialport", allow = ["MPL-2.0"] },
+    { crate = "option-ext", allow = ["MPL-2.0"] },
+]
+
+[advisories]
+yanked = "deny"
+# No vulnerability is silently accepted. Maintenance-only notices are warnings
+# in the CI command; vulnerabilities and unsoundness remain errors.
+ignore = []

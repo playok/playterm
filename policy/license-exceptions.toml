@@ -1,0 +1,11 @@
+[[exceptions]]
+crate = "serialport"
+allow = ["MPL-2.0"]
+reason = "Provides serial console support. Use the upstream crate without local modifications and retain its MPL license and source links in Help -> Open-source licenses."
+source = "https://crates.io/crates/serialport"
+
+[[exceptions]]
+crate = "option-ext"
+allow = ["MPL-2.0"]
+reason = "Used by the platform directory lookup dependencies. Use the upstream crate without local modifications and retain its MPL license and source links in Help -> Open-source licenses."
+source = "https://crates.io/crates/option-ext"
