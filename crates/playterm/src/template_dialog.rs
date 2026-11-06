@@ -77,6 +77,8 @@ impl TemplateDialog {
                         self.error = Some(t("이름을 입력하세요", "Enter a name").into());
                     } else if self.template.sites.is_empty() {
                         self.error = Some(t("사이트를 하나 이상 넣으세요", "Add at least one site").into());
+                    } else if let Err(e) = self.template.ensure_id() {
+                        self.error = Some(e.to_string());
                     } else {
                         result = TemplateResult::Save(self.template.clone());
                     }

@@ -24,7 +24,47 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_millis(250);
 #[derive(Default)]
 struct CancelSignal {
     flag: AtomicBool,
+    failed: AtomicBool,
     wake: tokio::sync::Notify,
+}
+
+const CANCEL_MAP_FAILURE: &str = "The transfer cancellation registry was interrupted; retry the transfer";
+
+#[derive(Default)]
+struct CancelMap(Mutex<HashMap<u64, Arc<CancelSignal>>>);
+
+impl CancelMap {
+    fn access(&self) -> Result<std::sync::MutexGuard<'_, HashMap<u64, Arc<CancelSignal>>>, ()> {
+        match self.0.lock() {
+            Ok(map) => Ok(map),
+            Err(poisoned) => {
+                let mut map = poisoned.into_inner();
+                for (_, signal) in map.drain() {
+                    signal.failed.store(true, Ordering::Release);
+                    signal.cancel();
+                }
+                self.0.clear_poison();
+                Err(())
+            }
+        }
+    }
+
+    fn insert(&self, id: u64, signal: Arc<CancelSignal>) -> Result<(), ()> {
+        self.access()?.insert(id, signal);
+        Ok(())
+    }
+
+    fn cancel(&self, id: u64) -> Result<(), ()> {
+        if let Some(signal) = self.access()?.get(&id) {
+            signal.cancel();
+        }
+        Ok(())
+    }
+
+    fn remove(&self, id: u64) -> Result<(), ()> {
+        self.access()?.remove(&id);
+        Ok(())
+    }
 }
 
 impl CancelSignal {
@@ -107,7 +147,7 @@ struct Inner {
     events: std_mpsc::Sender<SftpEvent>,
     waker: Waker,
     next_id: AtomicU64,
-    cancel: Mutex<HashMap<u64, Arc<CancelSignal>>>,
+    cancel: CancelMap,
 }
 
 impl Inner {
@@ -138,7 +178,7 @@ impl SftpConnection {
             events: tx,
             waker,
             next_id: AtomicU64::new(1),
-            cancel: Mutex::new(HashMap::new()),
+            cancel: CancelMap::default(),
         };
         Self { inner: Arc::new(inner), events: rx }
     }
@@ -247,9 +287,7 @@ impl SftpConnection {
     }
 
     pub fn cancel(&self, id: u64) {
-        if let Some(flag) = self.inner.cancel.lock().expect("cancel map").get(&id) {
-            flag.cancel();
-        }
+        let _ = self.inner.cancel.cancel(id);
     }
 
     fn transfer<F>(&self, f: impl FnOnce(SftpRef, Progress) -> F + Send + 'static) -> u64
@@ -258,19 +296,29 @@ impl SftpConnection {
     {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let cancelled = Arc::new(CancelSignal::default());
-        self.inner.cancel.lock().expect("cancel map").insert(id, cancelled.clone());
+        if self.inner.cancel.insert(id, cancelled.clone()).is_err() {
+            Progress::new(id, self.inner.clone(), cancelled).finish(TransferState::Failed(CANCEL_MAP_FAILURE.into()));
+            return id;
+        }
         self.spawn(move |inner| async move {
             let progress = Progress::new(id, inner.clone(), cancelled.clone());
             let result = f(SftpRef(inner.clone()), progress.clone()).await;
-            let state = match result {
-                Ok(()) => TransferState::Finished,
-                Err(_) if cancelled.flag.load(Ordering::Acquire) => TransferState::Cancelled,
-                Err(e) => TransferState::Failed(format!("{e:#}")),
-            };
-            progress.finish(state);
-            inner.cancel.lock().expect("cancel map").remove(&id);
+            let cleanup_failed = inner.cancel.remove(id).is_err();
+            progress.finish(transfer_outcome(result, &cancelled, cleanup_failed));
         });
         id
+    }
+}
+
+fn transfer_outcome(result: anyhow::Result<()>, signal: &CancelSignal, cleanup_failed: bool) -> TransferState {
+    if cleanup_failed || signal.failed.load(Ordering::Acquire) {
+        TransferState::Failed(CANCEL_MAP_FAILURE.into())
+    } else {
+        match result {
+            Ok(()) => TransferState::Finished,
+            Err(_) if signal.flag.load(Ordering::Acquire) => TransferState::Cancelled,
+            Err(e) => TransferState::Failed(format!("{e:#}")),
+        }
     }
 }
 
@@ -788,6 +836,40 @@ async fn remove_tree(sftp: &SftpSession, root: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancellation_map_poison_fails_active_transfers_and_recovers_all_operations() {
+        for operation in ["cancel", "insert", "remove"] {
+            let map = CancelMap::default();
+            let first = Arc::new(CancelSignal::default());
+            let second = Arc::new(CancelSignal::default());
+            map.insert(1, first.clone()).unwrap();
+            map.insert(2, second.clone()).unwrap();
+            let panic = std::panic::catch_unwind(|| {
+                let _guard = map.0.lock().unwrap();
+                panic!("injected cancellation-map panic");
+            });
+            assert!(panic.is_err());
+            let recovered = match operation {
+                "cancel" => map.cancel(1),
+                "insert" => map.insert(3, Arc::default()),
+                "remove" => map.remove(1),
+                _ => unreachable!(),
+            };
+            assert!(recovered.is_err());
+            for signal in [first, second] {
+                tokio::time::timeout(Duration::from_millis(100), signal.wait()).await.unwrap();
+                assert!(matches!(transfer_outcome(Ok(()), &signal, false), TransferState::Failed(_)));
+                assert!(matches!(transfer_outcome(Err(anyhow::anyhow!("interrupted")), &signal, false), TransferState::Failed(_)));
+            }
+            assert!(map.access().unwrap().is_empty());
+            let next = Arc::new(CancelSignal::default());
+            map.insert(4, next.clone()).unwrap();
+            map.cancel(4).unwrap();
+            assert!(matches!(transfer_outcome(Err(anyhow::anyhow!("cancelled")), &next, false), TransferState::Cancelled));
+            map.remove(4).unwrap();
+        }
+    }
 
     #[test]
     fn server_names_that_could_leave_the_folder_are_refused() {

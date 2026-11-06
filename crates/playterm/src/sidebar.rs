@@ -437,7 +437,7 @@ mod tests {
     use playterm_net::Protocol;
 
     fn site(id: &str, name: &str, host: &str) -> SessionProfile {
-        SessionProfile { id: id.into(), name: name.into(), host: host.into(), ..Default::default() }
+        SessionProfile { id: id.into(), name: name.into(), host: host.into(), ..SessionProfile::new().unwrap() }
     }
 
     #[test]

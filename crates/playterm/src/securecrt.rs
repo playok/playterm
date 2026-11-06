@@ -102,7 +102,11 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
             return done(Err(tr!("{other} 프로토콜은 지원하지 않습니다", "The {other} protocol is not supported")), notes);
         }
     };
-    let mut p = SessionProfile { name: name.to_owned(), protocol, ..Default::default() };
+    let base = match SessionProfile::new() {
+        Ok(profile) => profile,
+        Err(e) => return done(Err(e.to_string()), notes),
+    };
+    let mut p = SessionProfile { name: name.to_owned(), protocol, ..base };
     p.charset = charset(get("output transformer name"));
     // Xterm (and anything else) keeps the default terminal type.
     let emulation = get("emulation").to_lowercase();

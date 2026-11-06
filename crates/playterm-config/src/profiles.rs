@@ -166,7 +166,7 @@ pub struct SessionProfile {
 impl Default for SessionProfile {
     fn default() -> Self {
         Self {
-            id: random_id(),
+            id: String::new(),
             name: String::new(),
             folder: String::new(),
             protocol: Protocol::Ssh,
@@ -196,6 +196,18 @@ impl Default for SessionProfile {
 }
 
 impl SessionProfile {
+    pub fn new() -> io::Result<Self> {
+        Ok(Self { id: random_id()?, ..Self::default() })
+    }
+
+    /// Defaults are unidentified drafts. Report entropy errors before using their identity.
+    pub fn ensure_id(&mut self) -> io::Result<()> {
+        if self.id.is_empty() {
+            self.id = random_id()?;
+        }
+        Ok(())
+    }
+
     /// Name to show in lists: the explicit name, or `user@host`.
     pub fn display_name(&self) -> String {
         if !self.name.trim().is_empty() {
@@ -220,8 +232,8 @@ impl SessionProfile {
     }
 
     /// A copy with a fresh id, for "duplicate".
-    pub fn duplicate(&self) -> Self {
-        Self { id: random_id(), name: playterm_i18n::tr!("{} (복사본)", "{} (copy)", self.display_name()), ..self.clone() }
+    pub fn duplicate(&self) -> io::Result<Self> {
+        Ok(Self { id: random_id()?, name: playterm_i18n::tr!("{} (복사본)", "{} (copy)", self.display_name()), ..self.clone() })
     }
 }
 
@@ -266,7 +278,20 @@ pub struct SiteTemplate {
 
 impl Default for SiteTemplate {
     fn default() -> Self {
-        Self { id: random_id(), name: String::new(), sites: Vec::new(), layout: TemplateLayout::Tabs }
+        Self { id: String::new(), name: String::new(), sites: Vec::new(), layout: TemplateLayout::Tabs }
+    }
+}
+
+impl SiteTemplate {
+    pub fn new() -> io::Result<Self> {
+        Ok(Self { id: random_id()?, ..Self::default() })
+    }
+
+    pub fn ensure_id(&mut self) -> io::Result<()> {
+        if self.id.is_empty() {
+            self.id = random_id()?;
+        }
+        Ok(())
     }
 }
 
@@ -329,9 +354,14 @@ impl ProfileStore {
         let folders = file.folders.iter().map(|f| normalize_folder(f)).filter(|f| !f.is_empty()).collect();
         let mut profiles = file.sessions;
         for p in &mut profiles {
+            p.ensure_id()?;
             p.folder = normalize_folder(&p.folder);
         }
-        Ok(Self { path, profiles, templates: file.templates, folders })
+        let mut templates = file.templates;
+        for template in &mut templates {
+            template.ensure_id()?;
+        }
+        Ok(Self { path, profiles, templates, folders })
     }
 
     /// An empty store that will be written to `path` on the first change.
@@ -353,6 +383,9 @@ impl ProfileStore {
 
     /// Inserts or replaces (by id) and saves.
     pub fn upsert(&mut self, mut profile: SessionProfile) -> io::Result<()> {
+        if profile.id.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "The site has no identifier; create it with SessionProfile::new"));
+        }
         profile.folder = normalize_folder(&profile.folder);
         match self.profiles.iter_mut().find(|p| p.id == profile.id) {
             Some(existing) => *existing = profile,
@@ -380,6 +413,9 @@ impl ProfileStore {
 
     /// Inserts or replaces (by id) a template and saves.
     pub fn upsert_template(&mut self, template: SiteTemplate) -> io::Result<()> {
+        if template.id.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "The template has no identifier; create it with SiteTemplate::new"));
+        }
         match self.templates.iter_mut().find(|t| t.id == template.id) {
             Some(existing) => *existing = template,
             None => self.templates.push(template),
@@ -513,7 +549,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sessions.toml");
         let mut store = ProfileStore::load(&path).unwrap();
-        let site = |name: &str, folder: &str| SessionProfile { name: name.into(), folder: folder.into(), ..Default::default() };
+        let site = |name: &str, folder: &str| SessionProfile { name: name.into(), folder: folder.into(), ..SessionProfile::new().unwrap() };
         store.upsert(site("web1", " 운영 / 웹 ")).unwrap();
         store.upsert(site("db1", "운영/DB")).unwrap();
         store.upsert(site("lab", "")).unwrap();
@@ -565,15 +601,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sessions.toml");
         let mut store = ProfileStore::load(&path).unwrap();
-        let a = SessionProfile { host: "a".into(), ..Default::default() };
-        let b = SessionProfile { host: "b".into(), ..Default::default() };
+        let a = SessionProfile { host: "a".into(), ..SessionProfile::new().unwrap() };
+        let b = SessionProfile { host: "b".into(), ..SessionProfile::new().unwrap() };
         store.upsert(a.clone()).unwrap();
         store.upsert(b.clone()).unwrap();
         let template = SiteTemplate {
             name: "lab".into(),
             sites: vec![b.id.clone(), a.id.clone()],
             layout: TemplateLayout::Grid,
-            ..Default::default()
+            ..SiteTemplate::new().unwrap()
         };
         store.upsert_template(template.clone()).unwrap();
         assert_eq!(ProfileStore::load(&path).unwrap().template(&template.id), Some(&template));
@@ -628,13 +664,13 @@ mod tests {
             host: "10.0.0.1".into(),
             port: 23,
             charset: Charset::Cp949,
-            ..Default::default()
+            ..SessionProfile::new().unwrap()
         };
         let b = SessionProfile {
             host: "web01".into(),
             username: "deploy".into(),
             forwards: vec![ForwardRule::parse(playterm_types::ForwardKind::Local, "8080:db:5432").unwrap()],
-            ..Default::default()
+            ..SessionProfile::new().unwrap()
         };
         store.upsert(a.clone()).unwrap();
         store.upsert(b.clone()).unwrap();
@@ -650,7 +686,7 @@ mod tests {
             protocol: Protocol::Serial,
             serial: SerialSettings { port: "COM3".into(), baud: 115200, ..Default::default() },
             log: LogSettings { auto: true, timestamps: true, ..Default::default() },
-            ..Default::default()
+            ..SessionProfile::new().unwrap()
         };
         assert_eq!(serial.display_name(), "COM3");
         store.upsert(serial.clone()).unwrap();
@@ -676,6 +712,40 @@ mod tests {
     }
 
     #[test]
+    fn unidentified_drafts_never_mutate_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        let mut store = ProfileStore::empty(&path);
+        let site = SessionProfile::new().unwrap();
+        store.upsert(site.clone()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(store.upsert(SessionProfile::default()).is_err());
+        assert!(store.upsert_template(SiteTemplate::default()).is_err());
+        assert_eq!(store.profiles(), &[site]);
+        assert!(store.templates().is_empty());
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
+    #[test]
+    fn entropy_errors_reach_creation_duplication_loading_and_atomic_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        let original = "[[session]]\nhost = 'legacy.example'\n";
+        std::fs::write(&path, original).unwrap();
+        let site = SessionProfile::new().unwrap();
+        crate::fsutil::with_id_entropy_failure(|| {
+            assert!(SessionProfile::new().is_err());
+            assert!(SiteTemplate::new().is_err());
+            assert!(SessionProfile::default().ensure_id().is_err());
+            assert!(SiteTemplate::default().ensure_id().is_err());
+            assert!(site.duplicate().is_err());
+            assert!(ProfileStore::load(&path).is_err());
+            assert!(crate::fsutil::write_atomic(&path, b"replacement").is_err());
+        });
+        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    }
+
+    #[test]
     fn missing_fields_use_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sessions.toml");
@@ -695,7 +765,7 @@ mod tests {
             username: "admin".into(),
             tab_color: Some(TabColor::Blue),
             auto_login: AutoLogin { enabled: true, steps: AutoLogin::standard_steps() },
-            ..Default::default()
+            ..SessionProfile::new().unwrap()
         };
         assert_eq!(SessionProfile::from_toml(&p.to_toml().unwrap()).unwrap(), p);
         assert!(SessionProfile::from_toml("host = 5").is_err());
@@ -703,8 +773,8 @@ mod tests {
 
     #[test]
     fn duplicate_gets_new_id() {
-        let p = SessionProfile { host: "h".into(), ..Default::default() };
-        let d = p.duplicate();
+        let p = SessionProfile { host: "h".into(), ..SessionProfile::new().unwrap() };
+        let d = p.duplicate().unwrap();
         assert_ne!(p.id, d.id);
         assert_eq!(p.host, d.host);
     }
