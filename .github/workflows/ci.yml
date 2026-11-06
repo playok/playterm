@@ -1,5 +1,5 @@
 # Checks every pull request and every push to master: formatting (rustfmt), clippy and the workspace tests on the
-# platforms the releases are built for (Windows, macOS), and the ZMODEM tests against lrzsz.
+# release platforms (Windows, macOS), the MSRV workspace build on Linux, and ZMODEM against lrzsz.
 #
 # The lrzsz interop tests skip when rz/sz are missing; here PLAYTERM_REQUIRE_LRZSZ makes a
 # missing lrzsz a failure, so a green run means they really ran (macOS and Linux; lrzsz has no
@@ -107,3 +107,29 @@ jobs:
 
       - name: Actual OpenSSH key, shell and Unicode SFTP
         run: sh scripts/test-openssh.sh
+
+  msrv-linux:
+    name: workspace MSRV 1.95.0 (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Minimum Rust toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --no-self-update
+          rustc +1.95.0 --version
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: msrv-1.95.0
+
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libssl-dev pkg-config
+
+      - name: Build entire workspace at the declared minimum
+        run: cargo +1.95.0 build --locked --workspace --all-targets

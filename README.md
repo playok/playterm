@@ -50,7 +50,7 @@ x64·ARM64용 실행 파일 하나로 동작하며, 설치나 런타임 설치�
 cargo build --release
 ```
 
-- Rust 1.90+ 와 MSVC 빌드 도구(Visual Studio 2022)가 필요합니다.
+- Rust 1.95+ 와 MSVC 빌드 도구(Visual Studio 2022)가 필요합니다.
 - **Windows ARM64에서는 clang도 필요합니다** (암호 라이브러리 `ring` 빌드용):
   `winget install LLVM.LLVM` 후 `C:\Program Files\LLVM\bin` 을 PATH에 추가.
 
