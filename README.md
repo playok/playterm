@@ -402,6 +402,8 @@ SSH 사이트 설정(고급)의 **X11 포워딩** 을 켜거나 로컬 프롬프
 
 ## SSH 인증 순서
 
+SSH 호스트 인증서는 `known_hosts`에 신뢰하는 CA를 등록해 사용합니다. CA 범위·만료·호스트 이름·폐기 검증과 [설정 방법](docs/ssh-host-certificates.md)을 확인하세요. 저장된 SSH 키와 RDP 지문은 도구 → 저장된 호스트 키·인증서에서 관리합니다.
+
 1. 세션에 지정한 키 파일 (OpenSSH 형식 / PuTTY `.ppk`, 암호가 걸려 있으면 passphrase 입력)
 2. SSH 에이전트 — `SSH_AUTH_SOCK` 이 named pipe 이면 그것, 아니면 Windows OpenSSH 에이전트(`\\.\pipe\openssh-ssh-agent`), 그다음 Pageant (macOS 에서는 `SSH_AUTH_SOCK` 소켓)
 3. 기본 키 파일 `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa` (있을 때만)

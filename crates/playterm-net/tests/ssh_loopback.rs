@@ -376,10 +376,20 @@ impl Fixture {
     }
 
     fn with_gate(name: &str, client_keys: &[&PrivateKey], sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>) -> Self {
-        let host_key = random_key(Algorithm::Ed25519);
+        Self::with_host_identity(name, client_keys, sftp_gate, random_key(Algorithm::Ed25519), Vec::new())
+    }
+
+    fn with_host_identity(
+        name: &str,
+        client_keys: &[&PrivateKey],
+        sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>,
+        host_key: PrivateKey,
+        certificates: Vec<russh::keys::Certificate>,
+    ) -> Self {
         let server_rt = tokio::runtime::Runtime::new().unwrap();
         let config = Arc::new(server::Config {
             keys: vec![host_key.clone()],
+            certificates,
             auth_rejection_time: Duration::from_millis(10),
             auth_rejection_time_initial: Some(Duration::ZERO),
             ..Default::default()
@@ -500,6 +510,57 @@ fn expect_connected(h: &SessionHandle) {
 
 // -------------------------------------------------------------------------------------------------
 // Host keys and passwords
+
+fn host_certificate_fixture(name: &str, principal: &str, expired: bool) -> (Fixture, PrivateKey) {
+    use russh::keys::ssh_key::certificate::{Builder, CertType};
+    let ca = random_key(Algorithm::Ed25519);
+    let host = random_key(Algorithm::Ed25519);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let before = if expired { now - 1 } else { now + 3600 };
+    let mut builder = Builder::new_with_random_nonce(&mut rand::rng(), host.public_key(), now - 60, before).unwrap();
+    builder.cert_type(CertType::Host).unwrap().valid_principal(principal).unwrap();
+    let certificate = builder.sign(&ca).unwrap();
+    (Fixture::with_host_identity(name, &[], None, host, vec![certificate]), ca)
+}
+
+#[test]
+fn host_certificate_negotiates_and_never_falls_back_to_tofu() {
+    for scenario in ["valid", "wrong-ca", "expired", "wrong-host", "no-ca"] {
+        let principal = if scenario == "wrong-host" { "wrong.example" } else { "127.0.0.1" };
+        let (fx, ca) = host_certificate_fixture(&format!("host-cert-{scenario}"), principal, scenario == "expired");
+        let ca = if scenario == "wrong-ca" { random_key(Algorithm::Ed25519) } else { ca };
+        let trust = if scenario == "no-ca" {
+            String::new()
+        } else {
+            format!("@cert-authority [127.0.0.1]:{} {}\n", fx.port, ca.public_key().to_openssh().unwrap())
+        };
+        std::fs::write(&fx.known_hosts, &trust).unwrap();
+        let handle = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+        if scenario == "valid" {
+            expect_connected(&handle);
+            handle.close();
+        } else {
+            // The server offers both certificate and bare key. Every certificate
+            // failure, including absent CA trust, closes without a TOFU question.
+            match skip_notices(&handle) {
+                SessionEvent::Closed(Some(_)) => {}
+                other => panic!("{scenario}: certificate failure did not close: {other:?}"),
+            }
+        }
+        assert_eq!(std::fs::read_to_string(&fx.known_hosts).unwrap(), trust, "certificate validation never learns a bare key: {scenario}");
+    }
+}
+
+#[test]
+fn configured_ca_refuses_a_bare_key_downgrade_without_question() {
+    let fx = Fixture::new("cert-downgrade", &[]);
+    let ca = random_key(Algorithm::Ed25519);
+    let trust = format!("@cert-authority [127.0.0.1]:{} {}\n", fx.port, ca.public_key().to_openssh().unwrap());
+    std::fs::write(&fx.known_hosts, &trust).unwrap();
+    let handle = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
+    assert!(matches!(skip_notices(&handle), SessionEvent::Closed(Some(_))));
+    assert_eq!(std::fs::read_to_string(&fx.known_hosts).unwrap(), trust);
+}
 
 #[test]
 fn first_connect_asks_for_host_key_then_runs_shell() {
@@ -1073,14 +1134,27 @@ fn native_auth_fixture() {
     let second_key = random_key(Algorithm::Ed25519);
     let two_keys = std::env::var_os("PLAYTERM_GUI_TWO_KEYS").is_some();
     let gate = Arc::new(common::sftp_fs::TransferGate::default());
-    let fx = Fixture::with_gate("native-auth", &[&key, &second_key], Some(gate.clone()));
+    let (fx, host_ca) = if std::env::var_os("PLAYTERM_GUI_HOST_CERTIFICATE").is_some() {
+        let (fx, ca) = host_certificate_fixture("native-host-certificate", "127.0.0.1", false);
+        (fx, Some(ca))
+    } else {
+        (Fixture::with_gate("native-auth", &[&key, &second_key], Some(gate.clone())), None)
+    };
     if two_keys {
         let agent = start_test_agent(&fx, &[&key, &second_key], "native-two-keys");
         std::fs::write(dir.join("agent.txt"), agent).unwrap();
     }
     std::fs::write(fx.dir.join("sftp").join("large.bin"), vec![7u8; 8 * 1024 * 1024]).unwrap();
     std::fs::write(dir.join("sftp-root.txt"), fx.dir.join("sftp").to_string_lossy().as_bytes()).unwrap();
-    known_hosts::learn_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), dir.join("known_hosts")).unwrap();
+    if let Some(ca) = host_ca {
+        std::fs::write(
+            dir.join("known_hosts"),
+            format!("@cert-authority [127.0.0.1]:{} {}\n", fx.port, ca.public_key().to_openssh().unwrap()),
+        )
+        .unwrap();
+    } else {
+        known_hosts::learn_known_hosts_path("127.0.0.1", fx.port, fx.host_key.public_key(), dir.join("known_hosts")).unwrap();
+    }
     let encrypted = key.encrypt(&mut rand::rng(), "open sesame").unwrap();
     std::fs::write(dir.join("encrypted_key"), encrypted.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
     std::fs::write(dir.join("plain_key"), key.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();

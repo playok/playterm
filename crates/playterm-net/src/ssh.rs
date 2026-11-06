@@ -36,9 +36,22 @@ impl client::Handler for ClientHandler {
     type Error = anyhow::Error;
 
     async fn check_server_key(&mut self, server_key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
-        let PublicKeyOrCertificate::PublicKey { key, .. } = server_key else {
-            bail!(t("인증서 기반 호스트 키는 아직 지원하지 않습니다", "Certificate host keys are not supported yet"));
+        let authorities = crate::host_certificate::load(&self.known_hosts, &self.host, self.port)?;
+        let key = match server_key {
+            PublicKeyOrCertificate::Certificate(cert) => {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+                authorities.verify(cert, &self.host, now)?;
+                self.sink.notice(t("신뢰한 CA의 SSH 호스트 인증서를 확인했습니다", "Verified SSH host certificate from a trusted CA"));
+                return Ok(true);
+            }
+            PublicKeyOrCertificate::PublicKey { key, .. } => key,
         };
+        if authorities.is_revoked(key) {
+            bail!(t("폐기된 SSH 호스트 키입니다", "The SSH host key is revoked"));
+        }
+        if authorities.configured() {
+            bail!(t("신뢰한 CA의 호스트 인증서가 필요합니다", "A host certificate from the trusted CA is required"));
+        }
 
         crate::trust::read(&self.known_hosts).context(t("known_hosts 확인 실패", "Could not check known_hosts"))?;
         let known = known_hosts::known_host_keys_path(&self.host, self.port, &self.known_hosts)
@@ -173,6 +186,9 @@ fn connect_ssh<'a>(params: &'a ConnectParams, sink: &'a EventSink, x11: Option<A
         // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
         let mut preferred = russh::Preferred::default();
         preferred.key = Cow::Owned(prefer_known_host_keys(&preferred.key, &params.host, params.port, &params.known_hosts));
+        // Prefer the certificate when offered. Missing CA trust then rejects the
+        // certificate instead of silently falling back to bare-key TOFU.
+        preferred.host_key_certificates = Cow::Owned(preferred.key.to_vec());
         let config = Arc::new(client::Config {
             keepalive_interval: (params.keepalive.mode != KeepAliveMode::Off).then(|| params.keepalive.period()),
             preferred,
