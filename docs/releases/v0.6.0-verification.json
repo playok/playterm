@@ -1,0 +1,50 @@
+{
+  "release": "v0.6.0",
+  "source": "c807c1fbecec0edf4247fb9186526c6a64ac28df",
+  "published_utc": "2026-11-06T00:39:55Z",
+  "release_workflow": "https://github.com/playok/playterm/actions/runs/42133404799",
+  "windows_checksum_ed25519": "verified",
+  "packages": [
+    {
+      "package": "playterm-0.6.0-windows-arm64.zip",
+      "sha256": "ed0c4ff14dd59241a4bd1de9334e8d9c1fa4a67a1bfbefde8de21fcb6b181030",
+      "version": "0.6.0",
+      "machine": 43620,
+      "signature": "NotSigned"
+    },
+    {
+      "package": "playterm-0.6.0-windows-arm64-upx.zip",
+      "sha256": "2c97f3482760bb48774141ce6812afe81b6844e1d1e0aeacfbec5a96a8ec5375",
+      "version": "0.6.0",
+      "machine": 43620,
+      "signature": "NotSigned"
+    },
+    {
+      "package": "playterm-0.6.0-windows-x64.zip",
+      "sha256": "978902a76f74b81512356562d93ec1d2befd0d5e374e32f7547bc6f0da7ab7f6",
+      "version": "0.6.0",
+      "machine": 34404,
+      "signature": "NotSigned"
+    },
+    {
+      "package": "playterm-0.6.0-windows-x64-upx.zip",
+      "sha256": "91d88d963205dc4e98c19afc5cc95a7f9f7f24c54bcc575fd9b8d55f9030c079",
+      "version": "0.6.0",
+      "machine": 34404,
+      "signature": "NotSigned"
+    },
+    {
+      "package": "playterm-0.6.0-macos-arm64.zip",
+      "sha256": "e94a9198f9526f0a767c03f8612d9df6aec187c2ee91fc3c40216a0161f4aa55",
+      "version": "0.6.0",
+      "signature": "adhoc (CI verified)"
+    },
+    {
+      "package": "playterm-0.6.0-macos-x64.zip",
+      "sha256": "16f772361dbc67a8eac13ca5846bccf38739d060f118c084a6957f48c319c988",
+      "version": "0.6.0",
+      "signature": "adhoc (CI verified)"
+    }
+  ],
+  "native_gui": "Windows packages started and reached two-key OTP prompts; interactive completion and in-app upgrade blocked by Windows lock screen"
+}
