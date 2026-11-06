@@ -69,8 +69,8 @@ cargo build --release
 ### GitHub 릴리스 (자동 빌드)
 
 `v` 로 시작하는 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 Windows 에서 clippy 검사 → 테스트 → x64·ARM64 기본 미압축 및 선택형 UPX 패키지를,
-macOS 에서 테스트 → arm64·x64 `playterm.app` zip(ad-hoc 서명)을 만들고, 둘 다 성공하면 그 태그의 릴리스에 zip 여섯 개와 `SHA256SUMS.txt`,
-그 서명 `SHA256SUMS.txt.sig`, macOS zip 의 `SHA256SUMS-macos.txt` 를 올립니다. 태그는 `Cargo.toml` 의 버전과 같아야 합니다.
+macOS 에서 테스트 → arm64·x64 `playterm.app` DMG·zip(ad-hoc 서명)을 만들고, 둘 다 성공하면 그 태그의 릴리스에 DMG 두 개, zip 여섯 개와 `SHA256SUMS.txt`,
+그 서명 `SHA256SUMS.txt.sig`, macOS DMG·zip 의 `SHA256SUMS-macos.txt` 를 올립니다. 태그는 `Cargo.toml` 의 버전과 같아야 합니다.
 
 코드 서명은 저장소 시크릿이 있을 때만 합니다(없으면 지금처럼 서명 없이 / ad-hoc). 릴리스 설명도 그에 맞춰 바뀝니다.
 - Windows: `WINDOWS_CERT_PFX`(.pfx 의 base64), `WINDOWS_CERT_PASSWORD` → UPX 압축 뒤 `signtool` 로 서명(SHA-256, 타임스탬프). 직접 할 때는 `package.ps1 -CodeSign`.
@@ -116,12 +116,13 @@ macOS 에서도 빌드해 실행할 수 있습니다(Rust 1.95+ 와 Xcode 명령
 
 ```sh
 cargo build --release                        # target/release/playterm
-scripts/package-macos.sh                     # arm64·x64 → dist/playterm-<버전>-macos-<arch>.zip (playterm.app)
+scripts/package-macos.sh                     # arm64·x64 → dist/playterm-<버전>-macos-<arch>.dmg·.zip (playterm.app)
 scripts/package-macos.sh universal           # Apple silicon·Intel 겸용 앱 하나 (lipo)
 RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh arm64   # 기본이 아닌 툴체인으로
 ```
 
-- zip 을 풀어 `playterm.app` 을 응용 프로그램 폴더로 옮기면 됩니다. zip 들의 SHA-256 은 `dist/SHA256SUMS-macos.txt` 에 씁니다.
+- DMG 를 열어 `playterm.app` 을 Applications 링크로 끌어 놓으면 됩니다(또는 zip 을 풀어 응용 프로그램 폴더로 옮겨도 됩니다). DMG·zip 의
+  SHA-256 은 `dist/SHA256SUMS-macos.txt` 에 씁니다. Developer ID 가 있으면 DMG 도 서명하고, 공증 secret 이 있으면 공증·staple 합니다.
 - 기본은 **ad-hoc 서명**입니다. 인터넷에서 받은 앱은 처음 실행할 때 Gatekeeper 가 막으므로 우클릭 → 열기(또는 시스템 설정 → 개인정보 보호 및 보안 →
   그래도 열기)로 엽니다. 환경변수 `MACOS_SIGN_IDENTITY` 에 "Developer ID Application" 인증서 이름을 주면 hardened runtime 과 타임스탬프로
   서명합니다. `MACOS_NOTARY_APPLE_ID`·`MACOS_NOTARY_TEAM_ID`·`MACOS_NOTARY_PASSWORD`(앱 암호)까지 주면 공증(`notarytool submit --wait`)하고
