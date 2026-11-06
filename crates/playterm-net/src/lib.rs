@@ -9,6 +9,7 @@ mod forward;
 mod keepalive;
 pub mod ping;
 mod rdp;
+mod secret;
 mod serial;
 mod session;
 mod sftp;
@@ -25,6 +26,7 @@ use std::io;
 pub use forward::{ForwardKind, ForwardRule};
 pub use keepalive::{KeepAlive, KeepAliveMode, decode_escapes};
 pub use rdp::{RdpFrame, RdpInput, RdpMouseButton, RdpSettings, scancode};
+pub use secret::Password;
 pub use serial::{SerialFlow, SerialParity, SerialPortEntry, SerialSettings, list_ports};
 pub use session::{
     AuthPrompt, ConnectParams, HostKeyCheck, MAX_PENDING_OUTPUT, PromptField, Protocol, SessionEvent, SessionHandle, Waker, X11Request,

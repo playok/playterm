@@ -28,6 +28,38 @@ use playterm_i18n::{t, tr};
 
 use crate::icon;
 
+/// Substitutes only tokens in the original template, never tokens inside inserted values.
+/// All output, including partial output on failure, stays in zeroizing storage.
+pub fn expand(template: &str, user: &str, password: Option<&str>) -> Option<zeroize::Zeroizing<String>> {
+    // Reserve before inserting secrets, so growth never frees a previous secret-bearing
+    // allocation without clearing it. Token text is included in this conservative bound.
+    let extra_user = template.matches("{user}").count().checked_mul(user.len())?;
+    let extra_password = template.matches("{password}").count().checked_mul(password.map_or(0, str::len))?;
+    let capacity = template.len().checked_add(extra_user)?.checked_add(extra_password)?;
+    let mut output = zeroize::Zeroizing::new(String::with_capacity(capacity));
+    let mut rest = template;
+    while let Some(at) = rest.find('{') {
+        output.push_str(&rest[..at]);
+        rest = &rest[at..];
+        if let Some(after) = rest.strip_prefix("{user}") {
+            output.push_str(user);
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix("{password}") {
+            output.push_str(password?);
+            rest = after;
+        } else {
+            output.push('{');
+            rest = &rest[1..];
+        }
+    }
+    output.push_str(rest);
+    Some(output)
+}
+
+pub fn uses_password(steps: &[Step]) -> bool {
+    steps.iter().any(|step| matches!(step, Step::Send(text) if text.contains("{password}")))
+}
+
 /// How long `@wait` waits unless `@timeout` says otherwise.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Output kept for `@wait` to look in (the end of it).
@@ -401,6 +433,16 @@ impl MacroDialog {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn secret_expansion_does_not_reinterpret_inserted_values() {
+        let output: zeroize::Zeroizing<String> =
+            super::expand("{user}:{password}:{password}", "{password}", Some("{user}-secret")).unwrap();
+        assert_eq!(output.as_str(), "{password}:{user}-secret:{user}-secret");
+        assert!(super::expand("prefix:{password}", "user", None).is_none());
+        assert_eq!(super::expand("{unknown} 한글 {user}", "tester", None).unwrap().as_str(), "{unknown} 한글 tester");
+        assert!(super::uses_password(&super::parse("@send {password}").unwrap()));
+        assert!(!super::uses_password(&super::parse("@send {user}").unwrap()));
+    }
     use super::*;
 
     fn sends(actions: &[Action]) -> Vec<&str> {

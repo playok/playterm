@@ -62,6 +62,7 @@ fn lock_file(path: &Path) -> Result<std::fs::File, VaultError> {
 
 #[derive(Debug)]
 pub enum VaultError {
+    Cancelled,
     WrongPassword,
     Locked,
     AlreadyExists,
@@ -76,6 +77,7 @@ pub enum VaultError {
 impl std::fmt::Display for VaultError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            VaultError::Cancelled => f.write_str(t("볼트 작업이 취소되었습니다", "Vault operation cancelled")),
             VaultError::WrongPassword => f.write_str(t("마스터 비밀번호가 틀렸습니다", "Wrong master password")),
             VaultError::Locked => f.write_str(t("볼트가 잠겨 있습니다", "The password vault is locked")),
             VaultError::AlreadyExists => f.write_str(t("볼트가 이미 존재합니다", "The password vault already exists")),
@@ -142,7 +144,11 @@ struct Kdf {
 }
 
 impl Kdf {
-    const DEFAULT: Kdf = Kdf { m_cost: Params::DEFAULT_M_COST, t_cost: Params::DEFAULT_T_COST, p_cost: 1 };
+    const DEFAULT: Kdf = Kdf { m_cost: 64 * 1024, t_cost: 3, p_cost: 1 };
+
+    fn upgraded(self) -> Self {
+        Self { m_cost: self.m_cost.max(Self::DEFAULT.m_cost), t_cost: self.t_cost.max(Self::DEFAULT.t_cost), p_cost: self.p_cost }
+    }
 
     fn derive(&self, master: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, VaultError> {
         let params = Params::new(self.m_cost, self.t_cost, self.p_cost, Some(32))
@@ -226,8 +232,18 @@ impl Vault {
         self.unlocked.is_some()
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Creates a new, empty vault protected by `master` and leaves it unlocked.
     pub fn create(&mut self, master: &str) -> Result<(), VaultError> {
+        self.create_cancellable(master, || true)
+    }
+
+    /// Checks permission to commit after the expensive derivation, before persisting anything.
+    /// Returning false leaves both the data file and this vault's state unchanged.
+    pub fn create_cancellable(&mut self, master: &str, commit: impl FnOnce() -> bool) -> Result<(), VaultError> {
         if master.is_empty() {
             return Err(VaultError::EmptyPassword);
         }
@@ -240,12 +256,22 @@ impl Vault {
         let kdf = Kdf::DEFAULT;
         let key = kdf.derive(master, &salt)?;
         let unlocked = Unlocked { key, kdf, salt, secrets: BTreeMap::new(), targets: BTreeMap::new() };
+        if !commit() {
+            return Err(VaultError::Cancelled);
+        }
         self.save_unlocked(&unlocked)?;
         self.unlocked = Some(unlocked);
         Ok(())
     }
 
     pub fn unlock(&mut self, master: &str) -> Result<(), VaultError> {
+        self.unlock_cancellable(master, || true)
+    }
+
+    /// Decrypts and upgrades weak KDF parameters while holding the same cross-process lock
+    /// used for updates. The commit check also guards adopting the decrypted state.
+    pub fn unlock_cancellable(&mut self, master: &str, commit: impl FnOnce() -> bool) -> Result<(), VaultError> {
+        let _lock = lock_file(&self.path)?;
         let text = match std::fs::read_to_string(&self.path) {
             Ok(t) => t,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(VaultError::Missing),
@@ -262,7 +288,23 @@ impl Vault {
         let kdf = Kdf { m_cost: file.m_cost, t_cost: file.t_cost, p_cost: file.p_cost };
         let key = kdf.derive(master, &salt)?;
         let (secrets, targets) = decrypt(&key, kdf, &salt, &file)?;
-        self.unlocked = Some(Unlocked { key, kdf, salt, secrets, targets });
+        let upgraded = kdf.upgraded();
+        let needs_upgrade = (upgraded.m_cost, upgraded.t_cost) != (kdf.m_cost, kdf.t_cost);
+        let unlocked = if needs_upgrade {
+            let mut new_salt = [0u8; SALT_LEN];
+            getrandom::fill(&mut new_salt).map_err(|e| io::Error::other(e.to_string()))?;
+            let new_key = upgraded.derive(master, &new_salt)?;
+            Unlocked { key: new_key, kdf: upgraded, salt: new_salt, secrets, targets }
+        } else {
+            Unlocked { key, kdf, salt, secrets, targets }
+        };
+        if !commit() {
+            return Err(VaultError::Cancelled);
+        }
+        if needs_upgrade {
+            self.save_unlocked(&unlocked)?;
+        }
+        self.unlocked = Some(unlocked);
         Ok(())
     }
 
@@ -590,7 +632,7 @@ mod tests {
         v.create("master").unwrap();
         v.lock();
         let raw = std::fs::read_to_string(&v.path).unwrap();
-        let tampered = raw.replace(&format!("t_cost = {}", Params::DEFAULT_T_COST), "t_cost = 1");
+        let tampered = raw.replace(&format!("t_cost = {}", Kdf::DEFAULT.t_cost), "t_cost = 1");
         assert_ne!(raw, tampered);
         std::fs::write(&v.path, tampered).unwrap();
         assert!(matches!(v.unlock("master"), Err(VaultError::WrongPassword)));
@@ -659,5 +701,101 @@ mod tests {
         v.remove("a").unwrap();
         let second = std::fs::read_to_string(&v.path).unwrap();
         assert_ne!(first, second);
+    }
+
+    fn legacy_vault(kdf: Kdf) -> (tempfile::TempDir, Vault) {
+        let (dir, vault) = vault();
+        let salt = [7; SALT_LEN];
+        let key = kdf.derive("test-master", &salt).unwrap();
+        let unlocked = Unlocked {
+            key,
+            kdf,
+            salt,
+            secrets: BTreeMap::from([("site".into(), Zeroizing::new("saved-secret".into()))]),
+            targets: BTreeMap::from([("site".into(), "ssh://test@localhost:22".into())]),
+        };
+        let _lock = lock_file(&vault.path).unwrap();
+        vault.save_unlocked(&unlocked).unwrap();
+        (dir, vault)
+    }
+
+    #[test]
+    fn new_vault_uses_desktop_kdf_cost() {
+        let (_dir, mut vault) = vault();
+        let started = Instant::now();
+        vault.create("test-master").unwrap();
+        eprintln!("64 MiB / t=3 create: {:?}", started.elapsed());
+        let file: VaultFile = toml::from_str(&std::fs::read_to_string(&vault.path).unwrap()).unwrap();
+        assert!(file.m_cost >= 64 * 1024);
+        assert_eq!((file.t_cost, file.p_cost), (3, 1));
+    }
+
+    #[test]
+    fn old_kdf_upgrades_only_after_successful_password_and_preserves_secrets() {
+        let (_dir, mut vault) = legacy_vault(Kdf { m_cost: 19 * 1024, t_cost: 2, p_cost: 1 });
+        let old = std::fs::read(&vault.path).unwrap();
+        assert!(matches!(vault.unlock("wrong"), Err(VaultError::WrongPassword)));
+        assert_eq!(std::fs::read(&vault.path).unwrap(), old);
+        assert!(!vault.is_unlocked());
+        vault.unlock("test-master").unwrap();
+        assert_eq!(vault.get("site"), Some("saved-secret"));
+        assert_eq!(vault.target("site"), Some("ssh://test@localhost:22"));
+        let new: VaultFile = toml::from_str(&std::fs::read_to_string(&vault.path).unwrap()).unwrap();
+        let previous: VaultFile = toml::from_str(std::str::from_utf8(&old).unwrap()).unwrap();
+        assert_eq!((new.m_cost, new.t_cost, new.p_cost), (64 * 1024, 3, 1));
+        assert_ne!(new.salt, previous.salt);
+        vault.set("next", "ssh://next", "next-secret").unwrap();
+        vault.lock();
+        vault.unlock("test-master").unwrap();
+        assert_eq!(vault.get("next"), Some("next-secret"));
+    }
+
+    #[test]
+    fn cancellation_never_persists_creation_or_rehash_and_stronger_costs_stay() {
+        let (_dir, mut fresh) = vault();
+        assert!(matches!(fresh.create_cancellable("test-master", || false), Err(VaultError::Cancelled)));
+        assert!(!fresh.exists() && !fresh.is_unlocked());
+        let (_dir, mut old) = legacy_vault(Kdf { m_cost: 19 * 1024, t_cost: 2, p_cost: 1 });
+        let original = std::fs::read(&old.path).unwrap();
+        assert!(matches!(old.unlock_cancellable("test-master", || false), Err(VaultError::Cancelled)));
+        assert_eq!(std::fs::read(&old.path).unwrap(), original);
+        assert!(!old.is_unlocked());
+        let (_dir, mut strong) = legacy_vault(Kdf { m_cost: 64 * 1024, t_cost: 4, p_cost: 1 });
+        let original = std::fs::read(&strong.path).unwrap();
+        strong.unlock("test-master").unwrap();
+        assert_eq!(std::fs::read(&strong.path).unwrap(), original);
+    }
+
+    #[test]
+    fn excessive_kdf_costs_are_rejected_without_rewriting() {
+        let (_dir, mut vault) = vault();
+        vault.create("test-master").unwrap();
+        vault.lock();
+        let original = std::fs::read_to_string(&vault.path).unwrap();
+        for (m, t) in [(MAX_M_COST_KIB + 1, 3), (64 * 1024, MAX_T_COST + 1)] {
+            let mut file: VaultFile = toml::from_str(&original).unwrap();
+            file.m_cost = m;
+            file.t_cost = t;
+            let tampered = toml::to_string(&file).unwrap();
+            std::fs::write(&vault.path, &tampered).unwrap();
+            assert!(matches!(vault.unlock("test-master"), Err(VaultError::Format(_))));
+            assert_eq!(std::fs::read_to_string(&vault.path).unwrap(), tampered);
+        }
+    }
+
+    /// Fake encrypted data for an actual-window cancellation/rehash check.
+    #[test]
+    #[ignore = "interactive vault fixture; set PLAYTERM_VAULT_GUI_DIR and optionally PLAYTERM_VAULT_GUI_SLOW"]
+    fn native_vault_fixture() {
+        let dir = PathBuf::from(std::env::var_os("PLAYTERM_VAULT_GUI_DIR").unwrap());
+        let kdf = if std::env::var_os("PLAYTERM_VAULT_GUI_SLOW").is_some() {
+            Kdf { m_cost: 512 * 1024, t_cost: 16, p_cost: 1 }
+        } else {
+            Kdf { m_cost: 19 * 1024, t_cost: 2, p_cost: 1 }
+        };
+        let (_temporary, vault) = legacy_vault(kdf);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(vault.path(), dir.join("vault.toml")).unwrap();
+        println!("Fake GUI vault: {} (master: test-master)", dir.display());
     }
 }

@@ -542,7 +542,7 @@ async fn run(params: ConnectParams, mut commands: mpsc::UnboundedReceiver<Sessio
     };
     let has_clipboard = factory.is_some();
 
-    let mut password = params.password.clone().map(Zeroizing::new);
+    let mut password = params.password.clone().map(crate::Password::into_zeroizing);
     // Asked when the gateway has a user of its own, and again after the gateway refuses it.
     let mut gateway_password: Option<Zeroizing<String>> = None;
     for _ in 0..MAX_PASSWORD_TRIES {
