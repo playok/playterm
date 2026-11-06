@@ -71,8 +71,8 @@ Both scripts put LLVM (clang) on PATH by themselves and build with `--locked`, s
 ### GitHub releases (automatic build)
 
 Pushing a tag that starts with `v` runs GitHub Actions (`.github/workflows/release.yml`): on Windows clippy → tests → x64 and ARM64 packages
-(standard uncompressed and optional UPX), on macOS tests → arm64 and x64 `playterm.app` zips (signed ad hoc). When both succeed, the six zips are uploaded with
-`SHA256SUMS.txt`, its signature `SHA256SUMS.txt.sig` and `SHA256SUMS-macos.txt` (for the macOS zips) to that tag's release. The tag must match the version in `Cargo.toml`.
+(standard uncompressed and optional UPX), on macOS tests → arm64 and x64 `playterm.app` DMGs and zips (signed ad hoc). When both succeed, the two DMGs and six zips are uploaded with
+`SHA256SUMS.txt`, its signature `SHA256SUMS.txt.sig` and `SHA256SUMS-macos.txt` (for the macOS DMGs and zips) to that tag's release. The tag must match the version in `Cargo.toml`.
 
 Code signing happens only when its repository secrets are set (without them, as before: unsigned / ad hoc); the release notes follow.
 - Windows: `WINDOWS_CERT_PFX` (base64 of the .pfx), `WINDOWS_CERT_PASSWORD` → signed with `signtool` after UPX (SHA-256, timestamped). By hand: `package.ps1 -CodeSign`.
@@ -117,12 +117,13 @@ playterm also builds and runs on macOS (needs Rust 1.95+ and the Xcode command l
 
 ```sh
 cargo build --release                        # target/release/playterm
-scripts/package-macos.sh                     # arm64 and x64 → dist/playterm-<version>-macos-<arch>.zip (playterm.app)
+scripts/package-macos.sh                     # arm64 and x64 → dist/playterm-<version>-macos-<arch>.dmg and .zip (playterm.app)
 scripts/package-macos.sh universal           # one app for Apple silicon and Intel (lipo)
 RUSTUP_TOOLCHAIN=1.95 scripts/package-macos.sh arm64   # with a toolchain other than the default
 ```
 
-- Unzip and move `playterm.app` to Applications. The SHA-256 sums of the zips go to `dist/SHA256SUMS-macos.txt`.
+- Open the DMG and drag `playterm.app` onto the Applications link (or unzip the zip and move it there). The SHA-256 sums of the DMGs and
+  zips go to `dist/SHA256SUMS-macos.txt`. With a Developer ID the DMG is signed too, and notarized and stapled with the notarization secrets.
 - The app is **signed ad hoc** by default. Gatekeeper stops such an app downloaded from the internet on its first run: right-click → Open (or
   System Settings → Privacy & Security → Open Anyway). With `MACOS_SIGN_IDENTITY` set to a "Developer ID Application" certificate, the app is
   signed with the hardened runtime and a timestamp. With `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_TEAM_ID` and `MACOS_NOTARY_PASSWORD` (an

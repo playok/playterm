@@ -1,6 +1,7 @@
 #!/bin/sh
-# Builds release executables and packs each into dist/playterm-<version>-macos-<arch>.zip,
-# holding playterm.app (unzip it and move playterm.app to Applications).
+# Builds release executables and packs each into dist/playterm-<version>-macos-<arch>.dmg (a disk
+# image holding playterm.app and an Applications link to drag it onto) and
+# dist/playterm-<version>-macos-<arch>.zip (the same app; the in-app update check looks for it).
 #
 #   scripts/package-macos.sh                  # arm64 (Apple silicon) + x64 (Intel)
 #   scripts/package-macos.sh arm64            # one architecture
@@ -23,7 +24,11 @@
 # An app signed ad hoc and downloaded from the internet is stopped by Gatekeeper on first run
 # (right-click → Open, or System Settings → Privacy & Security → Open Anyway).
 #
-# SHA-256 sums of the zips are written to dist/SHA256SUMS-macos.txt.
+# With a Developer ID the disk image is signed too, and with the notarization secrets notarized
+# and stapled as well. Without them it is not signed (an ad hoc signature means nothing to
+# Gatekeeper on a disk image); the app inside is still signed as above.
+#
+# SHA-256 sums of the disk images and zips are written to dist/SHA256SUMS-macos.txt.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -68,6 +73,48 @@ notarize_app() {
     xcrun stapler validate "$1"
     spctl --assess --type execute --verbose=2 "$1"
 }
+# make_dmg <app> <dmg>: packs the (final, stapled) app into a compressed disk image with an
+# Applications link, signs, notarizes and staples it when the secrets allow, and checks the app
+# inside the image.
+make_dmg() {
+    src="$stage/$arch/dmg-root"
+    rm -rf "$src" "$2"
+    mkdir -p "$src"
+    ditto "$1" "$src/playterm.app"
+    ln -s /Applications "$src/Applications"
+    hdiutil create -quiet -volname playterm -srcfolder "$src" -fs HFS+ -format UDZO -ov "$2"
+    rm -rf "$src"
+    if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
+        codesign --force --timestamp --sign "$MACOS_SIGN_IDENTITY" "$2"
+        codesign --verify --strict --verbose=2 "$2"
+    fi
+    if [ -n "$notarize" ]; then
+        echo "== notarizing $(basename "$2")"
+        result=$(xcrun notarytool submit "$2" --apple-id "$MACOS_NOTARY_APPLE_ID" --team-id "$MACOS_NOTARY_TEAM_ID" \
+            --password "$MACOS_NOTARY_PASSWORD" --wait --timeout 1h --output-format plist)
+        status=$(printf '%s' "$result" | plutil -extract status raw -o - -)
+        if [ "$status" != Accepted ]; then
+            echo "notarization: $status" >&2
+            exit 1
+        fi
+        xcrun stapler staple "$2"
+        xcrun stapler validate "$2"
+        spctl --assess --type open --context context:primary-signature --verbose=2 "$2"
+    fi
+    hdiutil verify -quiet "$2"
+    mnt=$(mktemp -d "$stage/$arch/dmg-mount.XXXXXX")
+    hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mnt" "$2"
+    ok=1
+    [ -L "$mnt/Applications" ] || { echo "$(basename "$2"): no Applications link" >&2; ok=; }
+    codesign --verify --deep --strict --verbose=2 "$mnt/playterm.app" || ok=
+    if [ -n "$notarize" ]; then
+        xcrun stapler validate "$mnt/playterm.app" || ok=
+    fi
+    hdiutil detach -quiet "$mnt"
+    rmdir "$mnt"
+    [ -n "$ok" ] || exit 1
+}
+
 # Oldest macOS the app runs on (also the Rust minimum for Apple silicon).
 min_macos=11.0
 export MACOSX_DEPLOYMENT_TARGET=$min_macos
@@ -198,8 +245,10 @@ for arch in $targets; do
         xcrun stapler validate "$verify/playterm.app"
         spctl --assess --type execute --verbose=2 "$verify/playterm.app"
     fi
-    echo "== $zip ($(lipo -archs "$app/Contents/MacOS/playterm"))"
-    zips="$zips $zip"
+    dmg="playterm-$version-macos-$arch.dmg"
+    make_dmg "$app" "$dist/$dmg"
+    echo "== $dmg, $zip ($(lipo -archs "$app/Contents/MacOS/playterm"))"
+    zips="$zips $dmg $zip"
 done
 
 (cd "$dist" && shasum -a 256 $zips > SHA256SUMS-macos.txt)

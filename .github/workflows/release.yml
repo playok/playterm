@@ -1,7 +1,7 @@
-# Builds the Windows packages (x64 and ARM64) and the macOS apps (Apple silicon and Intel) and
+# Builds the Windows packages (x64 and ARM64) and the macOS apps (Apple silicon and Intel; DMG and ZIP) and
 # publishes them as a GitHub release.
 #
-#   git tag v0.1.0 && git push origin v0.1.0     -> release "v0.1.0" with every zip
+#   git tag v0.1.0 && git push origin v0.1.0     -> release "v0.1.0" with every package
 #   Actions tab -> Release -> Run workflow        -> the same builds, kept as workflow artifacts
 #                                                    (no release; to try the build)
 #
@@ -189,6 +189,7 @@ jobs:
         with:
           name: playterm-macos
           path: |
+            dist/*.dmg
             dist/*.zip
             dist/SHA256SUMS-macos.txt
           if-no-files-found: error
@@ -248,8 +249,10 @@ jobs:
           | ${tick}playterm-*-windows-arm64.zip${tick} | ARM64 Windows (Snapdragon, ...) |
           | ${tick}playterm-*-windows-x64-upx.zip${tick} | Optional smaller UPX executable for x64 Windows |
           | ${tick}playterm-*-windows-arm64-upx.zip${tick} | Optional smaller UPX executable for ARM64 Windows |
-          | ${tick}playterm-*-macos-arm64.zip${tick} | Apple silicon Macs, macOS 11 or later (unzip and move ${tick}playterm.app${tick} to Applications) |
-          | ${tick}playterm-*-macos-x64.zip${tick} | Intel Macs, macOS 11 or later |
+          | ${tick}playterm-*-macos-arm64.dmg${tick} | Apple silicon Macs, macOS 11 or later (open it and drag ${tick}playterm.app${tick} to Applications) |
+          | ${tick}playterm-*-macos-x64.dmg${tick} | Intel Macs, macOS 11 or later |
+          | ${tick}playterm-*-macos-arm64.zip${tick} | The same app for Apple silicon as a ZIP (unzip and move ${tick}playterm.app${tick} to Applications) |
+          | ${tick}playterm-*-macos-x64.zip${tick} | The same app for Intel Macs as a ZIP |
 
           $windows_note
 
@@ -270,5 +273,5 @@ jobs:
           python3 scripts/release-notes.py --tag "$TAG" --repository "$GH_REPO" \
             --package-notes dist/packages.md --output dist/notes.md
           cd dist
-          gh release create "$TAG" *.zip SHA256SUMS.txt SHA256SUMS.txt.sig SHA256SUMS-macos.txt \
+          gh release create "$TAG" *.dmg *.zip SHA256SUMS.txt SHA256SUMS.txt.sig SHA256SUMS-macos.txt \
             --verify-tag --title "playterm $TAG" --notes-file notes.md
