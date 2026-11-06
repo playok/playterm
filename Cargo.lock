@@ -5115,6 +5115,7 @@ name = "playterm-sign"
 version = "0.6.0"
 dependencies = [
  "ring",
+ "tempfile",
 ]
 
 [[package]]

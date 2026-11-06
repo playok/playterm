@@ -51,6 +51,8 @@ cargo test --locked --workspace
 
 For configuration work, `cargo test --locked -p playterm-config` is a quick focused check. ZMODEM interoperability tests require `lrzsz` on Linux/macOS; CI requires these tests to run. `scripts/test-openssh.sh` creates an account and daemons and is only for disposable Linux CI runners.
 
+서명 CLI 시험, 짧은 VT 파서 퍼징, 커버리지 재생성 명령은 [품질 도구 안내](docs/quality-tools.md)에 있습니다. / See [quality tools](docs/quality-tools.md) for signing tests, bounded parser fuzzing and coverage commands.
+
 기능 변경은 앱을 실제로 실행해 관련 흐름을 확인하고 OS·실행한 검사·결과를 PR에 적습니다. 자동 GUI 흐름 시험은 `crates/playterm/src/ui_tests.rs`에 있습니다. 시험 설정은 별도 `PLAYTERM_CONFIG_DIR`를 사용하고, 재현 로그·캡처에는 실제 비밀번호·OTP·개인 키를 넣지 않습니다. 미실행 항목과 한계는 결과와 구분해 적습니다.
 
 For feature changes, run the actual app through the affected flow and report the OS, checks and results in the PR. Automated GUI flows live in `ui_tests.rs`. Use an isolated `PLAYTERM_CONFIG_DIR` and disposable credentials; keep real passwords, OTPs and private keys out of evidence. State which checks were not run.
