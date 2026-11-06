@@ -29,3 +29,26 @@ jobs:
           mkdir -p fuzz/corpus/vt_input
           cp fuzz/seeds/vt_input/* fuzz/corpus/vt_input/
           cargo +nightly fuzz run vt_input -- -max_total_time=10 -max_len=65536 -timeout=5 -rss_limit_mb=1024
+
+  coverage-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Rust coverage tools
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add llvm-tools-preview
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - name: Reproduce signer HTML coverage without thresholds
+        run: cargo llvm-cov --locked -p playterm-sign --html --output-dir target/coverage/sign
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signer-coverage
+          path: target/coverage/sign/html
+          if-no-files-found: error

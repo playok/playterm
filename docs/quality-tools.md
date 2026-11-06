@@ -30,6 +30,8 @@ ANSI, OSC/클립보드, 잘린 시퀀스, 한글, 바이너리 입력을 seed로
 
 [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov#usage)와 현재 Rust 툴체인의 LLVM 도구를 설치한다.
 
+다음 명령은 Ubuntu CI에서도 서명 도구에 대해 실행하고 HTML을 artifact로 보관한다. Windows ARM64 MSVC 개발 머신에서는 Rust 1.99.1/cargo-llvm-cov 0.9.1로 시험 실행은 성공했지만 프로파일 병합이 `symbol name is empty`로 실패했다. [upstream의 알려진 플랫폼 제한](https://github.com/taiki-e/cargo-llvm-cov#platform-support)과 구분해 기록하며, 이를 커버리지 생성 성공으로 세지 않는다. 보고서는 지원되는 Linux/macOS 또는 Windows 툴체인에서 생성한다.
+
 ```sh
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov --locked --version 0.9.1
