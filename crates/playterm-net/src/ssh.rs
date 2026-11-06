@@ -103,16 +103,14 @@ impl client::Handler for ClientHandler {
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: russh::Channel<client::Msg>,
-        _connected_address: &str,
+        connected_address: &str,
         connected_port: u32,
         _originator_address: &str,
         _originator_port: u32,
         reply: client::ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
-        // Servers report the bound address in different spellings (``, `localhost`,
-        // `127.0.0.1`), so rules are matched by port; two -R rules cannot share one anyway.
-        let Some(rule) = self.remote_forwards.iter().find(|r| u32::from(r.bind_port) == connected_port).cloned() else {
+        let Some(rule) = remote_forward_rule(&self.remote_forwards, connected_address, connected_port).cloned() else {
             reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
         };
@@ -148,6 +146,36 @@ impl client::Handler for ClientHandler {
         });
         Ok(())
     }
+}
+
+fn normalized_bind(address: &str) -> String {
+    let address = address.trim();
+    let address = address.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(address);
+    if address.is_empty() {
+        return "localhost".into();
+    }
+    address.parse::<std::net::IpAddr>().map_or_else(|_| address.to_ascii_lowercase(), |ip| ip.to_string())
+}
+
+/// Exact addresses win. A loopback spelling is compatible only when it identifies one rule;
+/// an empty/localhost report must not choose between distinct IPv4 and IPv6 destinations.
+fn remote_forward_rule<'a>(rules: &'a [ForwardRule], address: &str, port: u32) -> Option<&'a ForwardRule> {
+    let address = normalized_bind(address);
+    let candidates = || rules.iter().filter(|rule| rule.kind == ForwardKind::Remote && u32::from(rule.bind_port) == port);
+    let mut exact = candidates().filter(|rule| normalized_bind(&rule.bind_host) == address);
+    if let Some(rule) = exact.next() {
+        return exact.next().is_none().then_some(rule);
+    }
+    let loopback = |name: &str| matches!(name, "localhost" | "127.0.0.1" | "::1");
+    if !loopback(&address) {
+        return None;
+    }
+    let mut compatible = candidates().filter(|rule| {
+        let requested = normalized_bind(&rule.bind_host);
+        loopback(&requested) && (requested == "localhost" || address == "localhost")
+    });
+    let rule = compatible.next()?;
+    compatible.next().is_none().then_some(rule)
 }
 
 /// Host key algorithms in `order`, those already known for the host first, as OpenSSH does: a
@@ -378,6 +406,34 @@ async fn open_sftp(session: &client::Handle<ClientHandler>, sink: &EventSink) ->
 mod tests {
     use super::*;
     use russh::keys::EcdsaCurve;
+
+    #[test]
+    fn remote_rules_preserve_addresses_and_only_allow_unambiguous_loopback_aliases() {
+        let rule = |host: &str, dest| ForwardRule {
+            kind: ForwardKind::Remote,
+            bind_host: host.into(),
+            bind_port: 9000,
+            dest_port: dest,
+            ..Default::default()
+        };
+        let rules = [rule("127.0.0.1", 1), rule("127.0.0.2", 2), rule("::1", 3)];
+        for (address, dest) in [("127.0.0.1", 1), ("127.0.0.2", 2), ("[0:0:0:0:0:0:0:1]", 3)] {
+            assert_eq!(remote_forward_rule(&rules, address, 9000).unwrap().dest_port, dest);
+        }
+        for address in ["", "localhost", "203.0.113.1", "0.0.0.0"] {
+            assert!(remote_forward_rule(&rules, address, 9000).is_none(), "ambiguous or unmatched {address}");
+        }
+        assert!(remote_forward_rule(&rules, "127.0.0.1", 9001).is_none());
+        for requested in ["", "localhost", "127.0.0.1", "::1"] {
+            for reported in ["", "LOCALHOST"] {
+                assert!(remote_forward_rule(&[rule(requested, 1)], reported, 9000).is_some());
+            }
+        }
+        assert!(remote_forward_rule(&[rule("localhost", 1)], "127.0.0.1", 9000).is_some());
+        assert!(remote_forward_rule(&[rule("localhost", 1)], "::1", 9000).is_some());
+        assert!(remote_forward_rule(&[rule("127.0.0.2", 1)], "localhost", 9000).is_none());
+        assert!(remote_forward_rule(&[rule("127.0.0.1", 1), rule("127.0.0.1", 2)], "127.0.0.1", 9000).is_none());
+    }
 
     #[test]
     fn known_host_key_kinds_come_first() {

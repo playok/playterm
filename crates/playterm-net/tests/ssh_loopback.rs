@@ -21,6 +21,7 @@ use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct TestServer {
+    forward_address: Arc<Mutex<Option<String>>>,
     accepted_keys: Vec<PublicKey>,
     sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>,
     auth_calls: Arc<Mutex<Vec<String>>>,
@@ -190,8 +191,10 @@ impl server::Handler for TestServer {
     }
 
     async fn tcpip_forward(&mut self, address: &str, port: &mut u32, session: &mut Session) -> Result<bool, Self::Error> {
-        let Ok(listener) = TcpListener::bind(("127.0.0.1", *port as u16)).await else { return Ok(false) };
-        let (handle, address, port) = (session.handle(), address.to_owned(), *port);
+        let bind = if address.is_empty() || address == "localhost" { "127.0.0.1" } else { address };
+        let Ok(listener) = TcpListener::bind((bind, *port as u16)).await else { return Ok(false) };
+        let address = self.forward_address.lock().unwrap().clone().unwrap_or_else(|| address.to_owned());
+        let (handle, address, port) = (session.handle(), address, *port);
         tokio::spawn(async move {
             while let Ok((mut tcp, peer)) = listener.accept().await {
                 let channel = handle.channel_open_forwarded_tcpip(address.clone(), port, peer.ip().to_string(), peer.port().into()).await;
@@ -296,6 +299,7 @@ impl server::Handler for TestServer {
 }
 
 struct Fixture {
+    forward_address: Arc<Mutex<Option<String>>>,
     auth_calls: Arc<Mutex<Vec<String>>>,
     server_rt: tokio::runtime::Runtime,
     port: u16,
@@ -402,7 +406,9 @@ impl Fixture {
         let known_hosts = dir.join("known_hosts");
 
         let auth_calls = Arc::new(Mutex::new(Vec::new()));
+        let forward_address = Arc::default();
         let server = TestServer {
+            forward_address: Arc::clone(&forward_address),
             accepted_keys: Vec::new(),
             sftp_gate,
             auth_calls: auth_calls.clone(),
@@ -416,7 +422,7 @@ impl Fixture {
             let _ = { server }.run_on_socket(config, &listener).await;
         });
 
-        Self { auth_calls, server_rt, port, host_key, dir, known_hosts, net: NetRuntime::new().unwrap() }
+        Self { forward_address, auth_calls, server_rt, port, host_key, dir, known_hosts, net: NetRuntime::new().unwrap() }
     }
 
     fn trust_host(&self) {
@@ -1877,6 +1883,69 @@ fn assert_echo(mut tcp: std::net::TcpStream, message: &[u8]) {
 
 fn rule(kind: ForwardKind, bind_port: u16, dest_port: u16) -> ForwardRule {
     ForwardRule { kind, bind_host: String::new(), bind_port, dest_host: "127.0.0.1".into(), dest_port }
+}
+
+fn marker_server(fx: &Fixture, marker: u8) -> u16 {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = fx.server_rt.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    fx.server_rt.spawn(async move {
+        while let Ok((mut tcp, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                tcp.write_all(&[marker]).await.unwrap();
+                let (mut read, mut write) = tcp.into_split();
+                let _ = tokio::io::copy(&mut read, &mut write).await;
+            });
+        }
+    });
+    port
+}
+
+#[test]
+fn remote_forward_same_port_routes_distinct_bind_addresses_to_distinct_destinations() {
+    let fx = Fixture::new("forward-same-port", &[]);
+    fx.trust_host();
+    let (first, second, port) = (marker_server(&fx, b'A'), marker_server(&fx, b'B'), free_port());
+    let mut rules = vec![rule(ForwardKind::Remote, port, first), rule(ForwardKind::Remote, port, second)];
+    rules[0].bind_host = "127.0.0.1".into();
+    rules[1].bind_host = "::1".into();
+    let handle = fx.connect(ConnectParams { password: Some("secret".into()), forwards: rules, ..fx.params() });
+    expect_connected(&handle);
+    for (address, marker) in [("127.0.0.1", b'A'), ("::1", b'B')] {
+        let mut tcp = std::net::TcpStream::connect((address, port)).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut received = [0];
+        tcp.read_exact(&mut received).unwrap();
+        assert_eq!(received, [marker], "{address} must reach its own destination");
+        assert_echo(tcp, b"routed independently");
+    }
+    handle.close();
+}
+
+#[test]
+fn remote_forward_accepts_loopback_aliases_and_rejects_unmatched_reports() {
+    for (label, reported) in [("empty", ""), ("localhost", "localhost"), ("unmatched", "203.0.113.1")] {
+        let fx = Fixture::new(&format!("forward-report-{label}"), &[]);
+        fx.trust_host();
+        *fx.forward_address.lock().unwrap() = Some(reported.into());
+        let (echo, port) = (echo_server(&fx), free_port());
+        let mut forwarding = rule(ForwardKind::Remote, port, echo);
+        forwarding.bind_host = "127.0.0.1".into();
+        let handle = fx.connect(ConnectParams { password: Some("secret".into()), forwards: vec![forwarding], ..fx.params() });
+        expect_connected(&handle);
+        let mut tcp = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        if label == "unmatched" {
+            tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            match tcp.read(&mut [0]) {
+                Ok(0) => {}
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) => {}
+                other => panic!("unmatched channel must be rejected promptly: {other:?}"),
+            }
+        } else {
+            assert_echo(tcp, b"loopback alias");
+        }
+        handle.close();
+    }
 }
 
 #[test]
