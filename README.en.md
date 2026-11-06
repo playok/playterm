@@ -436,7 +436,7 @@ SSH host certificates require an explicitly trusted CA in `known_hosts`. See [co
 4. The saved password
 5. keyboard-interactive / password prompt
 
-RSA keys sign with `rsa-sha2-512` / `rsa-sha2-256`, as advertised by the server.
+Local RSA private-key files are skipped before signing as an interim mitigation for RUSTSEC-2023-0071, including renamed files and default `id_rsa` fallback. Ed25519/ECDSA files remain supported. RSA through an external agent uses a separate signer path; the agent's security and remaining RDP scope require separate assessment. See the [RSA mitigation record](docs/security-rsa-223.md). This does not mean the advisory is officially patched.
 
 Password fields (login, key passphrase, vault master password, a site's password) switch the input method (IME) off: even right after typing
 Korean in the terminal, a password is typed in Latin letters instead of jamo hidden behind the dots, which would fail the login. The input mode comes back when the dialog closes.
