@@ -40,7 +40,13 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
             return Err(tr!("시리얼 포트가 없습니다: {url}", "Missing serial port: {url}"));
         }
         let serial = SerialSettings { port: port.to_owned(), baud, ..Default::default() };
-        return Ok(SessionProfile { protocol, host: port.to_owned(), port: 0, serial, ..Default::default() });
+        return Ok(SessionProfile {
+            protocol,
+            host: port.to_owned(),
+            port: 0,
+            serial,
+            ..SessionProfile::new().map_err(|e| e.to_string())?
+        });
     }
     let (username, hostport) = match rest.rsplit_once('@') {
         Some((user, hp)) => (user.to_owned(), hp),
@@ -67,7 +73,7 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
         return Err(tr!("SSH 주소에는 사용자 이름이 필요합니다: {url}", "An SSH address needs a user name: {url}"));
     }
 
-    Ok(SessionProfile { protocol, host: host.to_owned(), port, username, ..Default::default() })
+    Ok(SessionProfile { protocol, host: host.to_owned(), port, username, ..SessionProfile::new().map_err(|e| e.to_string())? })
 }
 
 /// Expands a leading `~` to the user's home directory.
@@ -607,7 +613,8 @@ pub struct ProfileForm {
 }
 
 impl ProfileForm {
-    pub fn new(profile: SessionProfile, has_saved_password: bool) -> Self {
+    pub fn new(mut profile: SessionProfile, has_saved_password: bool) -> Self {
+        let error = profile.ensure_id().err().map(|e| e.to_string());
         let port = profile.port.to_string();
         let baud = profile.serial.baud.to_string();
         let forwards: Vec<ForwardRow> = profile.forwards.iter().map(ForwardRow::from_rule).collect();
@@ -620,7 +627,7 @@ impl ProfileForm {
             has_saved_password,
             baud,
             serial_ports: None,
-            error: None,
+            error,
             focus_requested: false,
         }
     }
@@ -941,6 +948,7 @@ impl ProfileForm {
 
     fn try_validate(&self) -> Result<(SessionProfile, Option<Zeroizing<String>>), String> {
         let mut p = self.profile.clone();
+        p.ensure_id().map_err(|e| e.to_string())?;
         p.name = p.name.trim().to_owned();
         p.folder = p.folder.trim().to_owned();
         p.host = p.host.trim().to_owned();
@@ -1085,7 +1093,7 @@ mod tests {
 
     #[test]
     fn validation() {
-        let mut form = ProfileForm::new(SessionProfile { host: " web ".into(), ..Default::default() }, false);
+        let mut form = ProfileForm::new(SessionProfile { host: " web ".into(), ..SessionProfile::new().unwrap() }, false);
         assert!(form.validate().is_none(), "SSH needs a user name");
 
         form.profile.username = "me".into();
@@ -1119,7 +1127,7 @@ mod tests {
 
     #[test]
     fn dirty_tracking() {
-        let profile = SessionProfile { host: "h".into(), username: "u".into(), ..Default::default() };
+        let profile = SessionProfile { host: "h".into(), username: "u".into(), ..SessionProfile::new().unwrap() };
         let mut form = ProfileForm::new(profile, false);
         assert!(!form.is_dirty());
         form.port = "2222".into();
@@ -1139,7 +1147,7 @@ mod tests {
             protocol: Protocol::Serial,
             username: "root".into(),
             serial: SerialSettings { port: " com4 ".into(), ..Default::default() },
-            ..Default::default()
+            ..SessionProfile::new().unwrap()
         };
         let mut form = ProfileForm::new(profile, false);
         form.baud = "115200".into();
@@ -1176,7 +1184,7 @@ mod tests {
             host: "h".into(),
             username: "u".into(),
             forwards: vec![rule.clone(), ForwardRule::parse(ForwardKind::Dynamic, "1080").unwrap()],
-            ..Default::default()
+            ..SessionProfile::new().unwrap()
         };
         let mut form = ProfileForm::new(profile, false);
         assert_eq!(form.validate().unwrap().0.forwards[0], rule);

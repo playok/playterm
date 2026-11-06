@@ -314,7 +314,13 @@ mod tests {
     use super::*;
 
     fn site(name: &str, host: &str, folder: &str) -> SessionProfile {
-        SessionProfile { name: name.into(), host: host.into(), username: "u".into(), folder: folder.into(), ..Default::default() }
+        SessionProfile {
+            name: name.into(),
+            host: host.into(),
+            username: "u".into(),
+            folder: folder.into(),
+            ..SessionProfile::new().unwrap()
+        }
     }
 
     fn dialog(sessions: Vec<ImportedSession>, folder: &str) -> ImportDialog {

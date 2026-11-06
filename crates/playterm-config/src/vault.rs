@@ -24,7 +24,7 @@ use playterm_i18n::{t, tr};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::fsutil::write_atomic;
+use crate::fsutil::write_private_atomic;
 
 const FORMAT_VERSION: u32 = 1;
 const KDF_NAME: &str = "argon2id";
@@ -417,7 +417,7 @@ impl Vault {
             ciphertext: B64.encode(ciphertext),
         };
         let text = toml::to_string_pretty(&file).map_err(|e| VaultError::Format(e.to_string()))?;
-        write_atomic(&self.path, text.as_bytes())?;
+        write_private_atomic(&self.path, text.as_bytes())?;
         Ok(())
     }
 }
@@ -608,6 +608,26 @@ mod tests {
         v.lock();
         v.unlock("correct horse").unwrap();
         assert_eq!((v.get("p1"), v.get("p2"), v.target("p1")), (None, None, None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_writes_keep_mode_0600_including_legacy_rehash() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.toml");
+        let mut vault = Vault::new(&path);
+        vault.create("test-master").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        vault.set("site", "ssh://test", "fake-password").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        vault.remove("site").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let (_legacy_dir, mut legacy) = legacy_vault(Kdf { m_cost: 19 * 1024, t_cost: 2, p_cost: 1 });
+        std::fs::set_permissions(legacy.path(), std::fs::Permissions::from_mode(0o666)).unwrap();
+        legacy.unlock("test-master").unwrap();
+        assert_eq!(std::fs::metadata(legacy.path()).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[test]
