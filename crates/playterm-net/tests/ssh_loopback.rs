@@ -1908,10 +1908,10 @@ fn remote_forward_same_port_routes_distinct_bind_addresses_to_distinct_destinati
     let (first, second, port) = (marker_server(&fx, b'A'), marker_server(&fx, b'B'), free_port());
     let mut rules = vec![rule(ForwardKind::Remote, port, first), rule(ForwardKind::Remote, port, second)];
     rules[0].bind_host = "127.0.0.1".into();
-    rules[1].bind_host = "127.0.0.2".into();
+    rules[1].bind_host = "::1".into();
     let handle = fx.connect(ConnectParams { password: Some("secret".into()), forwards: rules, ..fx.params() });
     expect_connected(&handle);
-    for (address, marker) in [("127.0.0.1", b'A'), ("127.0.0.2", b'B')] {
+    for (address, marker) in [("127.0.0.1", b'A'), ("::1", b'B')] {
         let mut tcp = std::net::TcpStream::connect((address, port)).unwrap();
         tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut received = [0];
