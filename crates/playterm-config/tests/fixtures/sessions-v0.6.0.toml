@@ -1,0 +1,36 @@
+folders = ["lab"]
+[[session]]
+id = "v060"
+name = "Legacy profile"
+protocol = "ssh"
+host = "localhost"
+port = 22
+username = "tester"
+[[session.forward]]
+kind = "remote"
+bind_host = "127.0.0.2"
+bind_port = 9000
+dest_host = "db"
+dest_port = 5432
+[session.keepalive]
+mode = "text"
+interval = 300
+text = '\r'
+[session.serial]
+port = "COM3"
+baud = 115200
+data_bits = 7
+parity = "even"
+stop_bits = 2
+flow = "hardware"
+[session.rdp]
+width = 1920
+height = 1080
+clipboard = false
+sound = false
+drive_folder = "test-share"
+drive_read_only = true
+printer = true
+gateway = "gateway.example:8443"
+gateway_user = "gateway-user"
+

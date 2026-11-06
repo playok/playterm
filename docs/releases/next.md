@@ -10,6 +10,7 @@ UNRELEASED — v0.6.0 이후 개발 변경을 여기에 기록합니다.
 ## Fixes
 
 - 연결·재접속·비밀번호 매크로에서 앱이 보관하는 비밀번호 사본을 드롭 시 지우고, 디버그 출력은 계속 가립니다.
+- 프로필 설정 타입을 `playterm-types`로 분리했습니다. `playterm-config`만 빌드·시험할 때 네트워크 런타임과 IronRDP·OpenSSL을 빌드하지 않으며 `sessions.toml` 형식은 유지합니다.
 
 ## Compatibility and update notes
 
