@@ -343,7 +343,7 @@ fn start_test_agent(fx: &Fixture, keys: &[&PrivateKey], label: &str) -> String {
             let next = ServerOptions::new().create(&name).unwrap();
             Some((accepted, (next, name)))
         });
-        tokio::spawn(russh::keys::agent::server::serve(connections.boxed(), TestAgentPolicy { sign: label != "refuse" }));
+        tokio::spawn(russh::keys::agent::server::serve(connections.boxed(), TestAgentPolicy { sign: !label.starts_with("refuse") }));
         let mut client = AgentClient::connect_named_pipe(&pipe).await.unwrap();
         for key in keys {
             client.add_identity(key, &[]).await.unwrap();
@@ -364,7 +364,7 @@ fn start_test_agent(fx: &Fixture, keys: &[&PrivateKey], label: &str) -> String {
             let accepted = listener.accept().await.map(|(stream, _)| stream);
             Some((accepted, listener))
         });
-        tokio::spawn(russh::keys::agent::server::serve(Box::pin(connections), TestAgentPolicy { sign: label != "refuse" }));
+        tokio::spawn(russh::keys::agent::server::serve(Box::pin(connections), TestAgentPolicy { sign: !label.starts_with("refuse") }));
         let mut client = AgentClient::connect_uds(&socket).await.unwrap();
         for key in keys {
             client.add_identity(key, &[]).await.unwrap();
@@ -766,18 +766,196 @@ fn rejected_host_key_closes_session() {
 #[test]
 fn key_files_authenticate_without_prompts() {
     let ed = random_key(Algorithm::Ed25519);
-    let rsa = rsa_key();
-    let fx = Fixture::new("keyfile", &[&ed, &rsa]);
+    let ecdsa = random_key(Algorithm::Ecdsa { curve: russh::keys::EcdsaCurve::NistP256 });
+    let fx = Fixture::new("keyfile", &[&ed, &ecdsa]);
     fx.trust_host();
 
     let ed_path = fx.write_key("id_ed25519", &ed);
     let h = fx.connect(ConnectParams { identity_file: Some(ed_path), ..fx.params() });
     expect_connected(&h);
 
-    // RSA must be signed with rsa-sha2-*, which the client picks from server-sig-algs.
-    let rsa_path = fx.write_key("id_rsa", &rsa);
-    let h = fx.connect(ConnectParams { identity_file: Some(rsa_path), ..fx.params() });
+    let ecdsa_path = fx.write_key("id_ecdsa", &ecdsa);
+    let h = fx.connect(ConnectParams { identity_file: Some(ecdsa_path), ..fx.params() });
     expect_connected(&h);
+}
+
+#[test]
+fn local_rsa_files_are_blocked_by_algorithm_before_explicit_or_default_authentication() {
+    let rsa = rsa_key();
+    let ed = random_key(Algorithm::Ed25519);
+    let wrong = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("rsa-file-policy", &[&rsa, &ed]);
+    fx.trust_host();
+    let wrong_path = fx.write_key("unaccepted-ed", &wrong);
+    for name in ["id_rsa", "id_ed25519", "arbitrary-name"] {
+        let path = fx.write_key(name, &rsa);
+        let before = std::fs::read(&path).unwrap();
+        for explicit in [true, false] {
+            fx.auth_calls.lock().unwrap().clear();
+            let handle = fx.connect(ConnectParams {
+                identity_file: Some(if explicit { path.clone() } else { wrong_path.clone() }),
+                default_identity_files: vec![path.clone()],
+                ..fx.params()
+            });
+            let mut warned = false;
+            loop {
+                match next_event(&handle) {
+                    SessionEvent::Notice(text) => warned |= text.contains("RUSTSEC-2023-0071"),
+                    SessionEvent::AuthPrompt(prompt) => {
+                        assert!(warned);
+                        assert!(prompt.account_password);
+                        let expected = if explicit { 0 } else { 1 };
+                        assert_eq!(
+                            fx.auth_calls.lock().unwrap().iter().filter(|call| call.starts_with("publickey")).count(),
+                            expected,
+                            "no RSA signature reaches the server"
+                        );
+                        prompt.answer(Some(vec!["secret".into()]));
+                        break;
+                    }
+                    other => panic!("RSA file must be skipped before signing: {other:?}"),
+                }
+            }
+            expect_connected(&handle);
+            handle.close();
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+    }
+    // A non-RSA key named id_rsa is still allowed.
+    let path = fx.write_key("id_rsa", &ed);
+    let handle = fx.connect(ConnectParams { identity_file: Some(path), ..fx.params() });
+    expect_connected(&handle);
+    handle.close();
+}
+
+#[test]
+fn partial_success_does_not_fall_back_to_a_local_rsa_signature() {
+    let ed = random_key(Algorithm::Ed25519);
+    let rsa = rsa_key();
+    let fx = Fixture::new("rsa-partial-policy", &[&ed, &rsa]);
+    fx.trust_host();
+    let ed_path = fx.write_key("ed", &ed);
+    let rsa_path = fx.write_key("id_rsa", &rsa);
+    let options =
+        ConnectParams { username: "twokeys".into(), identity_file: Some(ed_path), default_identity_files: vec![rsa_path], ..fx.params() };
+    // A new attempt and a reconnect both preserve the policy and partial-success state.
+    for _ in 0..2 {
+        fx.auth_calls.lock().unwrap().clear();
+        let handle = fx.connect(options.clone());
+        assert!(matches!(skip_notices(&handle), SessionEvent::Closed(Some(_))));
+        assert_eq!(
+            fx.auth_calls.lock().unwrap().as_slice(),
+            [format!("publickey:{}", ed.public_key().fingerprint(russh::keys::HashAlg::Sha256))]
+        );
+    }
+}
+
+#[test]
+fn rsa_agent_paths_keep_local_file_policy() {
+    // Do not consult the developer's real SSH_AUTH_SOCK after a test agent fails.
+    if std::env::var_os("PLAYTERM_RSA_AGENT_WORKER").is_none() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "rsa_agent_paths_keep_local_file_policy", "--nocapture"])
+            .env("PLAYTERM_RSA_AGENT_WORKER", "1")
+            .env_remove("SSH_AUTH_SOCK")
+            .status()
+            .unwrap();
+        assert!(result.success());
+        return;
+    }
+    let rsa = rsa_key();
+    let wrong = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("rsa-agents", &[&rsa]);
+    fx.trust_host();
+    let rsa_path = fx.write_key("renamed-rsa-key", &rsa);
+    for mode in ["accept", "refuse", "wrong", "missing"] {
+        let pipe = match mode {
+            "accept" => start_test_agent(&fx, &[&rsa], "rsa-accept"),
+            "refuse" => start_test_agent(&fx, &[&rsa], "refuse-rsa"),
+            "wrong" => start_test_agent(&fx, &[&wrong], "rsa-wrong"),
+            _ => {
+                #[cfg(windows)]
+                {
+                    format!(r"\\.\pipe\playterm-missing-rsa-agent-{}", std::process::id())
+                }
+                #[cfg(unix)]
+                {
+                    fx.dir.join("missing-agent").to_string_lossy().into_owned()
+                }
+            }
+        };
+        fx.auth_calls.lock().unwrap().clear();
+        let handle = fx.connect(ConnectParams {
+            identity_file: Some(rsa_path.clone()),
+            default_identity_files: vec![rsa_path.clone()],
+            use_agent: true,
+            agent_pipe: Some(pipe),
+            ..fx.params()
+        });
+        if mode == "accept" {
+            expect_connected(&handle);
+            assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["publickey"]);
+        } else {
+            let prompt = expect_prompt(&handle);
+            assert!(prompt.account_password);
+            assert_eq!(
+                fx.auth_calls.lock().unwrap().iter().filter(|call| call.starts_with("publickey")).count(),
+                usize::from(mode == "wrong")
+            );
+            prompt.answer(Some(vec!["secret".into()]));
+            expect_connected(&handle);
+        }
+        handle.close();
+    }
+}
+
+#[test]
+fn rsa_file_policy_applies_to_both_jump_and_target() {
+    let rsa = rsa_key();
+    let ed = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("rsa-jump-policy", &[&rsa, &ed]);
+    fx.trust_host();
+    let rsa_path = fx.write_key("rsa", &rsa);
+    let ed_path = fx.write_key("ed", &ed);
+    for rsa_on_jump in [true, false] {
+        fx.auth_calls.lock().unwrap().clear();
+        let jump = ConnectParams { identity_file: Some(if rsa_on_jump { rsa_path.clone() } else { ed_path.clone() }), ..fx.params() };
+        let target = ConnectParams {
+            identity_file: Some(if rsa_on_jump { ed_path.clone() } else { rsa_path.clone() }),
+            jump: Some(Box::new(jump)),
+            ..fx.params()
+        };
+        let handle = fx.connect(target);
+        let prompt = expect_prompt(&handle);
+        assert!(prompt.account_password);
+        assert_eq!(fx.auth_calls.lock().unwrap().iter().filter(|call| call.starts_with("publickey")).count(), usize::from(!rsa_on_jump));
+        prompt.answer(Some(vec!["secret".into()]));
+        expect_connected(&handle);
+        assert_eq!(
+            fx.auth_calls.lock().unwrap().iter().filter(|call| call.starts_with("publickey") || call.as_str() == "password").count(),
+            2
+        );
+        handle.close();
+    }
+}
+
+#[test]
+fn encrypted_rsa_is_refused_after_decryption_without_signing() {
+    let rsa = rsa_key();
+    let fx = Fixture::new("rsa-encrypted-policy", &[&rsa]);
+    fx.trust_host();
+    let path = fx.dir.join("disguised-encrypted-key");
+    let encrypted = rsa.encrypt(&mut rand::rng(), "test-passphrase").unwrap();
+    std::fs::write(&path, encrypted.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
+    let handle = fx.connect(ConnectParams { identity_file: Some(path), ..fx.params() });
+    let passphrase = expect_prompt(&handle);
+    assert!(!passphrase.account_password);
+    passphrase.answer(Some(vec!["test-passphrase".into()]));
+    let password = expect_prompt(&handle);
+    assert!(password.account_password);
+    assert!(!fx.auth_calls.lock().unwrap().iter().any(|call| call.starts_with("publickey")));
+    password.answer(None);
+    assert!(matches!(skip_notices(&handle), SessionEvent::Closed(Some(_))));
 }
 
 #[test]
@@ -917,7 +1095,10 @@ fn two_public_keys_continue_between_unix_agents() {
             agent_pipe: Some(std::env::var("PLAYTERM_FIRST_AGENT").unwrap()),
             ..fx.params()
         }));
-        assert_eq!(fx.auth_calls.lock().unwrap().len(), 2);
+        assert_eq!(
+            fx.auth_calls.lock().unwrap().iter().filter(|call| call.starts_with("publickey") || call.as_str() == "password").count(),
+            2
+        );
         return;
     }
     let a = random_key(Algorithm::Ed25519);
@@ -977,7 +1158,7 @@ fn second_key_passphrase_cancel_aborts_but_skip_allows_the_next_source() {
     assert!(prompt.can_skip && !prompt.account_password);
     prompt.skip();
     expect_connected(&h);
-    assert_eq!(fx.auth_calls.lock().unwrap().len(), 2);
+    assert_eq!(fx.auth_calls.lock().unwrap().iter().filter(|call| call.starts_with("publickey") || call.as_str() == "password").count(), 2);
 }
 
 #[test]
@@ -1136,7 +1317,7 @@ fn dropped_passphrase_prompt_and_exhausted_retries_abort() {
 fn native_auth_fixture() {
     let dir = PathBuf::from(std::env::var_os("PLAYTERM_GUI_FIXTURE_DIR").expect("set PLAYTERM_GUI_FIXTURE_DIR"));
     std::fs::create_dir_all(&dir).unwrap();
-    let key = random_key(Algorithm::Ed25519);
+    let key = if std::env::var_os("PLAYTERM_GUI_RSA_POLICY").is_some() { rsa_key() } else { random_key(Algorithm::Ed25519) };
     let second_key = random_key(Algorithm::Ed25519);
     let two_keys = std::env::var_os("PLAYTERM_GUI_TWO_KEYS").is_some();
     let gate = Arc::new(common::sftp_fs::TransferGate::default());

@@ -151,6 +151,18 @@ async fn key_file(
     let Some(key) = decode_key(&text, path, sink).await? else {
         return Ok(KeyAttempt::Unusable);
     };
+    // RustCrypto rsa currently has no RustSec-patched version for RUSTSEC-2023-0071.
+    // Apply this to the decoded algorithm, before claiming/offering/signing the key,
+    // so renamed files and every default/partial-success/jump fallback are covered.
+    // Agent keys follow a separate external-signer path and are not claimed here.
+    if key.algorithm().is_rsa() {
+        sink.notice(tr!(
+            "RSA 개인 키 파일의 앱 내부 서명은 RUSTSEC-2023-0071 때문에 차단했습니다 ({}). 비-RSA 키, 외부 SSH 에이전트 또는 서버가 허용하는 비밀번호 인증을 사용하세요. 키 파일은 변경하지 않았습니다.",
+            "Local RSA private-key signing is blocked because of RUSTSEC-2023-0071 ({}). Use a non-RSA key, an external SSH agent, or password authentication if the server allows it. The key file was not changed.",
+            path.display()
+        ));
+        return Ok(KeyAttempt::Unusable);
+    }
     if !state.claim_key(key.public_key()) {
         return Ok(KeyAttempt::Unusable);
     }
