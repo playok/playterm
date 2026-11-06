@@ -1,11 +1,9 @@
 //! Serial (COM port) sessions.
 
-use std::fmt;
 use std::time::Duration;
 
 use anyhow::Context as _;
 use playterm_i18n::{t, tr};
-use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
@@ -15,117 +13,33 @@ use crate::session::{ConnectParams, EventSink, SessionCommand, SessionEvent};
 /// How long the line is held in the break state (devices expect 250–500 ms).
 const BREAK_DURATION: Duration = Duration::from_millis(300);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SerialParity {
-    #[default]
-    None,
-    Odd,
-    Even,
-}
+pub use playterm_types::{SerialFlow, SerialParity, SerialSettings};
 
-impl SerialParity {
-    pub const ALL: [SerialParity; 3] = [SerialParity::None, SerialParity::Odd, SerialParity::Even];
-
-    fn letter(self) -> char {
-        match self {
-            SerialParity::None => 'N',
-            SerialParity::Odd => 'O',
-            SerialParity::Even => 'E',
-        }
-    }
-}
-
-impl fmt::Display for SerialParity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            SerialParity::None => t("없음", "None"),
-            SerialParity::Odd => t("홀수", "Odd"),
-            SerialParity::Even => t("짝수", "Even"),
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SerialFlow {
-    #[default]
-    None,
-    /// RTS/CTS
-    Hardware,
-    /// XON/XOFF
-    Software,
-}
-
-impl SerialFlow {
-    pub const ALL: [SerialFlow; 3] = [SerialFlow::None, SerialFlow::Hardware, SerialFlow::Software];
-}
-
-impl fmt::Display for SerialFlow {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            SerialFlow::None => t("없음", "None"),
-            SerialFlow::Hardware => t("하드웨어 (RTS/CTS)", "Hardware (RTS/CTS)"),
-            SerialFlow::Software => t("소프트웨어 (XON/XOFF)", "Software (XON/XOFF)"),
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SerialSettings {
-    /// Port name, e.g. `COM3`.
-    pub port: String,
-    pub baud: u32,
-    /// 5–8
-    pub data_bits: u8,
-    pub parity: SerialParity,
-    /// 1 or 2
-    pub stop_bits: u8,
-    pub flow: SerialFlow,
-}
-
-impl Default for SerialSettings {
-    /// 9600 8N1, the usual console setting of network equipment.
-    fn default() -> Self {
-        Self { port: String::new(), baud: 9600, data_bits: 8, parity: SerialParity::None, stop_bits: 1, flow: SerialFlow::None }
-    }
-}
-
-impl SerialSettings {
-    pub const COMMON_BAUD_RATES: [u32; 9] = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 921600];
-
-    /// `9600 8N1` style summary.
-    pub fn line_summary(&self) -> String {
-        format!("{} {}{}{}", self.baud, self.data_bits, self.parity.letter(), self.stop_bits)
-    }
-
-    fn builder(&self) -> anyhow::Result<tokio_serial::SerialPortBuilder> {
-        use tokio_serial::{DataBits, FlowControl, Parity, StopBits};
-        let data_bits = match self.data_bits {
-            5 => DataBits::Five,
-            6 => DataBits::Six,
-            7 => DataBits::Seven,
-            8 => DataBits::Eight,
-            n => anyhow::bail!(tr!("데이터 비트는 5~8 이어야 합니다 ({n})", "Data bits must be 5 to 8 ({n})")),
-        };
-        let stop_bits = match self.stop_bits {
-            1 => StopBits::One,
-            2 => StopBits::Two,
-            n => anyhow::bail!(tr!("정지 비트는 1 또는 2 여야 합니다 ({n})", "Stop bits must be 1 or 2 ({n})")),
-        };
-        let parity = match self.parity {
-            SerialParity::None => Parity::None,
-            SerialParity::Odd => Parity::Odd,
-            SerialParity::Even => Parity::Even,
-        };
-        let flow = match self.flow {
-            SerialFlow::None => FlowControl::None,
-            SerialFlow::Hardware => FlowControl::Hardware,
-            SerialFlow::Software => FlowControl::Software,
-        };
-        Ok(tokio_serial::new(&self.port, self.baud).data_bits(data_bits).stop_bits(stop_bits).parity(parity).flow_control(flow))
-    }
+fn serial_builder(settings: &SerialSettings) -> anyhow::Result<tokio_serial::SerialPortBuilder> {
+    use tokio_serial::{DataBits, FlowControl, Parity, StopBits};
+    let data_bits = match settings.data_bits {
+        5 => DataBits::Five,
+        6 => DataBits::Six,
+        7 => DataBits::Seven,
+        8 => DataBits::Eight,
+        n => anyhow::bail!(tr!("데이터 비트는 5~8 이어야 합니다 ({n})", "Data bits must be 5 to 8 ({n})")),
+    };
+    let stop_bits = match settings.stop_bits {
+        1 => StopBits::One,
+        2 => StopBits::Two,
+        n => anyhow::bail!(tr!("정지 비트는 1 또는 2 여야 합니다 ({n})", "Stop bits must be 1 or 2 ({n})")),
+    };
+    let parity = match settings.parity {
+        SerialParity::None => Parity::None,
+        SerialParity::Odd => Parity::Odd,
+        SerialParity::Even => Parity::Even,
+    };
+    let flow = match settings.flow {
+        SerialFlow::None => FlowControl::None,
+        SerialFlow::Hardware => FlowControl::Hardware,
+        SerialFlow::Software => FlowControl::Software,
+    };
+    Ok(tokio_serial::new(&settings.port, settings.baud).data_bits(data_bits).stop_bits(stop_bits).parity(parity).flow_control(flow))
 }
 
 /// A serial port present on this machine.
@@ -180,7 +94,7 @@ pub(crate) async fn run(params: ConnectParams, commands: mpsc::UnboundedReceiver
     }
     let stream = {
         use tokio_serial::SerialPortBuilderExt as _;
-        settings.builder()?.open_native_async().with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", settings.port))?
+        serial_builder(settings)?.open_native_async().with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", settings.port))?
     };
     sink.send(SessionEvent::Connected);
     let idle = IdleTimer::new(&params.keepalive, false, &sink);
@@ -352,8 +266,8 @@ mod tests {
     fn settings_validation_and_summary() {
         let s = SerialSettings { port: "COM3".into(), baud: 115200, ..Default::default() };
         assert_eq!(s.line_summary(), "115200 8N1");
-        assert!(s.builder().is_ok());
-        assert!(SerialSettings { data_bits: 9, ..s.clone() }.builder().is_err());
-        assert!(SerialSettings { stop_bits: 3, ..s }.builder().is_err());
+        assert!(serial_builder(&s).is_ok());
+        assert!(serial_builder(&SerialSettings { data_bits: 9, ..s.clone() }).is_err());
+        assert!(serial_builder(&SerialSettings { stop_bits: 3, ..s }).is_err());
     }
 }

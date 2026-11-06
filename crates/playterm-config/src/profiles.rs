@@ -1,8 +1,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use playterm_net::{ForwardRule, KeepAlive, Protocol, RdpSettings, SerialSettings};
 use playterm_term::Charset;
+use playterm_types::{ForwardRule, KeepAlive, Protocol, RdpSettings, SerialSettings};
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil::{random_id, write_atomic};
@@ -587,6 +587,33 @@ mod tests {
     }
 
     #[test]
+    fn legacy_connection_settings_keep_their_serialized_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        std::fs::write(&path, include_str!("../tests/fixtures/sessions-v0.6.0.toml")).unwrap();
+        let mut store = ProfileStore::load(&path).unwrap();
+        let profile = store.get("v060").unwrap().clone();
+        assert_eq!(profile.protocol, Protocol::Ssh);
+        assert_eq!(profile.forwards[0].kind, playterm_types::ForwardKind::Remote);
+        assert_eq!(profile.forwards[0].bind_host, "127.0.0.2");
+        assert_eq!(profile.keepalive.mode, playterm_types::KeepAliveMode::Text);
+        assert_eq!(profile.keepalive.text, "\\r");
+        assert_eq!(profile.serial.parity, playterm_types::SerialParity::Even);
+        assert_eq!(profile.serial.line_summary(), "115200 7E2");
+        assert_eq!(profile.rdp.gateway(), Some("gateway.example:8443"));
+        assert!(profile.rdp.drive_read_only && profile.rdp.printer);
+        store.upsert(profile.clone()).unwrap();
+        let reloaded = ProfileStore::load(&path).unwrap();
+        assert_eq!(reloaded.get("v060"), Some(&profile));
+        // Every explicitly stored legacy value keeps the same table/key names and representation.
+        let before: toml::Value = toml::from_str(include_str!("../tests/fixtures/sessions-v0.6.0.toml")).unwrap();
+        let after: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for section in ["forward", "keepalive", "serial", "rdp"] {
+            assert_eq!(before["session"][0][section], after["session"][0][section], "{section}");
+        }
+    }
+
+    #[test]
     fn roundtrip_and_remove() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub").join("sessions.toml");
@@ -606,7 +633,7 @@ mod tests {
         let b = SessionProfile {
             host: "web01".into(),
             username: "deploy".into(),
-            forwards: vec![ForwardRule::parse(playterm_net::ForwardKind::Local, "8080:db:5432").unwrap()],
+            forwards: vec![ForwardRule::parse(playterm_types::ForwardKind::Local, "8080:db:5432").unwrap()],
             ..Default::default()
         };
         store.upsert(a.clone()).unwrap();
@@ -614,7 +641,7 @@ mod tests {
 
         let mut a = a;
         a.auto_login = AutoLogin { enabled: true, steps: AutoLogin::standard_steps() };
-        a.keepalive = KeepAlive { mode: playterm_net::KeepAliveMode::Text, interval: 300, text: "\\r".into() };
+        a.keepalive = KeepAlive { mode: playterm_types::KeepAliveMode::Text, interval: 300, text: "\\r".into() };
         a.tab_color = Some(TabColor::Red);
         store.upsert(a.clone()).unwrap();
         assert_eq!(ProfileStore::load(&path).unwrap().get(&a.id), Some(&a), "login steps are saved");

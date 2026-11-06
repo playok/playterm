@@ -38,6 +38,7 @@ x64·ARM64용 실행 파일 하나로 동작하며, 설치나 런타임 설치�
 |---|---|
 | `crates/playterm-term` | 터미널 에뮬레이션(alacritty_terminal), UTF-8/CP949 변환, 색상 팔레트 |
 | `crates/playterm-net` | SSH(russh) / Telnet / 시리얼 / RDP(IronRDP) 전송, 세션 이벤트·명령 채널, ZMODEM 받기·보내기 |
+| `crates/playterm-types` | 설정·전송이 공유하는 프로토콜·포워딩·시리얼·RDP 설정 타입 |
 | `crates/playterm-config` | 세션 목록(`sessions.toml`), 비밀번호 볼트(`vault.toml`), 설정(`settings.toml`) |
 | `crates/playterm-i18n` | 한국어 / 영어 UI 문구 |
 | `crates/playterm` | GUI 앱(eframe/egui): 렌더링, 키보드/IME 입력, 대화상자, 업데이트 |

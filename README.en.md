@@ -40,6 +40,7 @@ The screenshots show the Korean UI; English is one setting away.
 |---|---|
 | `crates/playterm-term` | Terminal emulation (alacritty_terminal), UTF-8/CP949 conversion, color palettes |
 | `crates/playterm-net` | SSH (russh) / Telnet / serial / RDP (IronRDP) transports, session event and command channels, ZMODEM receiving and sending |
+| `crates/playterm-types` | Protocol, forwarding, serial and RDP settings shared by config and transports |
 | `crates/playterm-config` | Site list (`sessions.toml`), password vault (`vault.toml`), settings (`settings.toml`) |
 | `crates/playterm-i18n` | Korean / English UI strings |
 | `crates/playterm` | GUI app (eframe/egui): rendering, keyboard/IME input, dialogs, updates |
