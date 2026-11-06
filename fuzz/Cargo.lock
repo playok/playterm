@@ -408,11 +408,11 @@ dependencies = [
 
 [[package]]
 name = "playterm-i18n"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "playterm-term"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "alacritty_terminal",
  "chrono",
