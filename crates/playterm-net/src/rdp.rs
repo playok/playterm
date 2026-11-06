@@ -1572,4 +1572,3 @@ mod tests {
         assert_eq!(r, Some(7));
     }
 }
-
