@@ -22,6 +22,8 @@ cp fuzz/seeds/vt_input/* fuzz/corpus/vt_input/
 cargo +nightly fuzz run vt_input -- -max_total_time=10 -max_len=65536 -timeout=5 -rss_limit_mb=1024
 ```
 
+Ubuntu의 사전 빌드 도구에서는 sanitizer용 GNU 타깃을 명시한다: `cargo +nightly fuzz run --target x86_64-unknown-linux-gnu vt_input -- -max_total_time=10 -max_len=65536 -timeout=5 -rss_limit_mb=1024`.
+
 [cargo-fuzz 설치 요구사항](https://rust-fuzz.github.io/book/cargo-fuzz/setup.html)에 맞는 C++ 컴파일러와 sanitizer가 필요하다. Windows는 [별도 MSVC/AddressSanitizer 준비](https://rust-fuzz.github.io/book/cargo-fuzz/windows/setup.html)를 따른다. 현재 Windows ARM64 개발 머신의 네이티브 퍼징 실행을 검증한 것은 아니며, 위 명령은 Ubuntu의 `Quality tools` CI에서 직접 실행한다. CI의 퍼징 시간은 10초로 제한하며 장시간 퍼징을 필수 검사로 두지 않는다.
 
 ANSI, OSC/클립보드, 잘린 시퀀스, 한글, 바이너리 입력을 seed로 제공한다. 새 코퍼스와 충돌 입력은 각각 무시되는 `fuzz/corpus/`, `fuzz/artifacts/`에 생긴다. 실패하면 해당 입력으로 `cargo +nightly fuzz run vt_input fuzz/artifacts/vt_input/<input>`을 실행해 재현하고, 원인을 고친 뒤 필요한 회귀 사례만 커밋한다. 10초 통과는 장시간 안정성이나 무결점의 증명이 아니다.

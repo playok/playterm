@@ -28,7 +28,7 @@ jobs:
         run: |
           mkdir -p fuzz/corpus/vt_input
           cp fuzz/seeds/vt_input/* fuzz/corpus/vt_input/
-          cargo +nightly fuzz run vt_input -- -max_total_time=10 -max_len=65536 -timeout=5 -rss_limit_mb=1024
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu vt_input -- -max_total_time=10 -max_len=65536 -timeout=5 -rss_limit_mb=1024
 
   coverage-smoke:
     runs-on: ubuntu-latest
