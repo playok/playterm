@@ -15,6 +15,7 @@ UNRELEASED — v0.6.0 이후 개발 변경을 여기에 기록합니다.
 ## Compatibility and update notes
 
 - `{password}` 매크로는 실행할 때마다 대상과 에코·로그 노출 위험을 확인해야 합니다. 연결 후 자동 실행은 중단되며, 도구 → 매크로에서 확인 후 직접 실행할 수 있습니다. 프롬프트를 기다리는 자동 로그인은 유지합니다.
+- 소스 빌드 최소 Rust 버전은 1.95입니다. GUI 의존성인 egui/eframe 0.37도 이 버전을 요구합니다. CI에서 Rust 1.95.0으로 Linux 전체 워크스페이스를 빌드합니다.
 
 ## Known limitations
 

@@ -52,7 +52,7 @@ The screenshots show the Korean UI; English is one setting away.
 cargo build --release
 ```
 
-- Needs Rust 1.90+ and the MSVC build tools (Visual Studio 2022).
+- Needs Rust 1.95+ and the MSVC build tools (Visual Studio 2022).
 - **On Windows ARM64 you also need clang** (to build the crypto library `ring`):
   `winget install LLVM.LLVM`, then add `C:\Program Files\LLVM\bin` to PATH.
 
