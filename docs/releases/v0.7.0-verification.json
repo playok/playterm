@@ -1,0 +1,85 @@
+{
+  "release": "v0.7.0",
+  "source": "13bae39c82fb95ed10c943ed384774e842ce1762",
+  "published_utc": "2026-11-07T00:41:25Z",
+  "release_workflow": "https://github.com/playok/playterm/actions/runs/42314652619",
+  "windows_checksum_ed25519": "verified",
+  "packages": [
+    {
+      "package": "playterm-0.7.0-windows-arm64.zip",
+      "sha256": "1ad145b5528792b2be1d70256bcccf563d87ef83846216d6f26d3a40f2e83658",
+      "version": "0.7.0",
+      "machine": 43620,
+      "signature": "NotSigned",
+      "publisher": null
+    },
+    {
+      "package": "playterm-0.7.0-windows-arm64-upx.zip",
+      "sha256": "23fdd9d8176e23c0527333de5297a0afb9d12c119e2d325d8860b682526464f9",
+      "version": "0.7.0",
+      "machine": 43620,
+      "signature": "NotSigned",
+      "publisher": null
+    },
+    {
+      "package": "playterm-0.7.0-windows-x64.zip",
+      "sha256": "ee08ff3ad6625d8d71342e495dc69034d774513e353c4d814bd55c36e4b19672",
+      "version": "0.7.0",
+      "machine": 34404,
+      "signature": "NotSigned",
+      "publisher": null
+    },
+    {
+      "package": "playterm-0.7.0-windows-x64-upx.zip",
+      "sha256": "b7d828d9d715cf953ab8cf2faf7e0d5b7316dd9f828f7a570dec344330bbcd2e",
+      "version": "0.7.0",
+      "machine": 34404,
+      "signature": "NotSigned",
+      "publisher": null
+    },
+    {
+      "package": "playterm-0.7.0-macos-arm64.dmg",
+      "sha256": "88287b668c9f29a6c436e5c9c8bfb704e50b30f1ac85e774a666d98b87a6f12c",
+      "app_signature": "ad-hoc, CI verified after ZIP extraction and DMG mount",
+      "notarized": false,
+      "ci_artifact_public_sha256_match": true
+    },
+    {
+      "package": "playterm-0.7.0-macos-arm64.zip",
+      "sha256": "064ddf96c7e178db76b2987bbfbb74b346a76655f9f8ba2e8d1467a6eb345f84",
+      "app_signature": "ad-hoc, CI verified after ZIP extraction and DMG mount",
+      "notarized": false,
+      "ci_artifact_public_sha256_match": true,
+      "version": "0.7.0",
+      "cpu_type": 16777228
+    },
+    {
+      "package": "playterm-0.7.0-macos-x64.dmg",
+      "sha256": "ec563daf227db2d7ce7f1a328036b79c49094ef5ed3efbd67cc22f861ba96acd",
+      "app_signature": "ad-hoc, CI verified after ZIP extraction and DMG mount",
+      "notarized": false,
+      "ci_artifact_public_sha256_match": true
+    },
+    {
+      "package": "playterm-0.7.0-macos-x64.zip",
+      "sha256": "837eedad3a440a481028896d59e443bbad247083398bf2adce9aaada827b35b4",
+      "app_signature": "ad-hoc, CI verified after ZIP extraction and DMG mount",
+      "notarized": false,
+      "ci_artifact_public_sha256_match": true,
+      "version": "0.7.0",
+      "cpu_type": 16777223
+    }
+  ],
+  "runtime_token_permissions": {
+    "publish": "contents: write",
+    "macos": "contents: read",
+    "windows": "contents: read"
+  },
+  "checkout_persist_credentials": false,
+  "native_gui": {
+    "actual_updater_from_v060": "not run, Windows locked",
+    "macos": "not run",
+    "published_windows_login": "not run, Windows locked",
+    "pre_tag_windows_about": "passed, version 0.7.0"
+  }
+}
