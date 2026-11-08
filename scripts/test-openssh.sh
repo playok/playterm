@@ -5,7 +5,7 @@ set -eu
 fixture=$(mktemp -d)
 test_agent_pid=
 cleanup() {
-    for pid_file in sshd.pid sshd-mfa.pid sshd-two.pid sshd-two-mfa.pid sshd-cert.pid; do
+    for pid_file in sshd.pid sshd-mfa.pid sshd-two.pid sshd-two-mfa.pid sshd-cert.pid sshd-user-cert.pid; do
         if [ -f "$fixture/$pid_file" ]; then sudo kill "$(cat "$fixture/$pid_file")" 2>/dev/null || true; fi
     done
     if [ -n "$test_agent_pid" ]; then kill "$test_agent_pid" 2>/dev/null || true; fi
@@ -106,4 +106,22 @@ sudo /usr/sbin/sshd -f "$fixture/sshd_cert_config" -E "$fixture/sshd-cert.log"
 export PLAYTERM_OPENSSH_CERT_PORT="$cert_port" PLAYTERM_OPENSSH_HOST_CA="$fixture/host-ca.pub"
 cargo test --locked -p playterm-net --test openssh_interop openssh_trusted_host_certificate_without_tofu -- --ignored --nocapture || {
     sudo cat "$fixture/sshd-cert.log"; exit 1;
+}
+
+# User certificates and real ssh-agent forwarding. No authorized bare keys are accepted here.
+ssh-keygen -q -t ed25519 -N '' -f "$fixture/user-ca"
+ssh-keygen -q -s "$fixture/user-ca" -I playterm-ci-user -n playterm-ci -V -1m:+1h "$fixture/client.pub"
+chmod 644 "$fixture/user-ca.pub"
+user_cert_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+sed -e "s/^Port .*/Port $user_cert_port/" \
+    -e "s|^PidFile .*|PidFile $fixture/sshd-user-cert.pid|" \
+    -e 's|^AuthorizedKeysFile .*|AuthorizedKeysFile none|' "$fixture/sshd_config" > "$fixture/sshd_user_cert_config"
+printf '\nTrustedUserCAKeys %s/user-ca.pub\nAllowAgentForwarding yes\n' "$fixture" >> "$fixture/sshd_user_cert_config"
+sudo /usr/sbin/sshd -t -f "$fixture/sshd_user_cert_config"
+sudo /usr/sbin/sshd -f "$fixture/sshd_user_cert_config" -E "$fixture/sshd-user-cert.log"
+ssh-add -D
+ssh-add "$fixture/client"
+export PLAYTERM_OPENSSH_USER_CERT_PORT="$user_cert_port"
+cargo test --locked -p playterm-net --test openssh_interop openssh_user_certificates_and_forwarded_agent -- --ignored --nocapture || {
+    sudo cat "$fixture/sshd-user-cert.log"; exit 1;
 }

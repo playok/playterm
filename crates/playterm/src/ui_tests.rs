@@ -376,12 +376,49 @@ fn opening_site_manager_refreshes_sites_saved_by_another_process() {
     harness.state_mut().test_run(&ctx, Command::EditSite(site.id.clone()));
     harness.run_steps(4);
     assert_eq!(harness.state().test_store().get(&site.id), Some(&site));
+    harness.get_by_role_and_label(Role::CheckBox, "이전 SSH 장비 호환").scroll_to_me();
+    harness.run_steps(3);
     let checkbox = harness.get_by_role_and_label(Role::CheckBox, "이전 SSH 장비 호환");
     assert!(checkbox.accesskit_node().toggled().is_some());
     checkbox.click();
     harness.run_steps(2);
     click(&mut harness, "저장");
     assert!(!playterm_config::ProfileStore::load(&path).unwrap().get(&site.id).unwrap().ssh_legacy_algorithms);
+}
+
+#[test]
+fn ssh_certificate_and_forwarding_options_are_saved_and_warn() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = app(dir.path());
+    let path = dir.path().join("sessions.toml");
+    let mut store = playterm_config::ProfileStore::load(&path).unwrap();
+    let site = playterm_config::SessionProfile {
+        name: "인증서 사이트".into(),
+        host: "example.test".into(),
+        username: "tester".into(),
+        certificate_file: "~/.ssh/work-cert.pub".into(),
+        ..playterm_config::SessionProfile::new().unwrap()
+    };
+    store.upsert(site.clone()).unwrap();
+    let ctx = harness.ctx.clone();
+    harness.state_mut().test_run(&ctx, Command::EditSite(site.id.clone()));
+    harness.run_steps(4);
+    assert!(
+        harness.query_all_by_role(Role::TextInput).any(|node| node.accesskit_node().value().as_deref() == Some("~/.ssh/work-cert.pub"))
+    );
+    harness.get_by_role_and_label(Role::CheckBox, "SSH 에이전트 포워딩 (-A)").scroll_to_me();
+    harness.run_steps(3);
+    harness.get_by_role_and_label(Role::CheckBox, "SSH 에이전트 포워딩 (-A)").click();
+    harness.run_steps(3);
+    assert!(has_label_text(
+        &harness,
+        "원격 서버가 이 PC의 에이전트로 인증 서명을 요청할 수 있습니다. 신뢰하는 서버에만 켜세요. 점프 호스트에는 전달하지 않습니다."
+    ));
+    click(&mut harness, "저장");
+    let saved = playterm_config::ProfileStore::load(&path).unwrap();
+    let saved = saved.get(&site.id).unwrap();
+    assert!(saved.agent_forwarding);
+    assert_eq!(saved.certificate_file, site.certificate_file);
 }
 
 #[test]

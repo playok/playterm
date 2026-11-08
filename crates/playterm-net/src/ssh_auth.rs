@@ -12,11 +12,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::bail;
+use base64::Engine as _;
 use playterm_i18n::{t, tr};
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
-use russh::keys::{self, Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
+use russh::keys::{self, Algorithm, Certificate, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use russh::{MethodKind, MethodSet};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
 use zeroize::Zeroizing;
@@ -30,6 +31,7 @@ struct AuthState {
     methods: MethodSet,
     second_factor: bool,
     attempted_keys: HashSet<String>,
+    accepted_keys: HashSet<String>,
 }
 
 impl AuthState {
@@ -39,12 +41,30 @@ impl AuthState {
 
     /// One completed attempt per public key across files and every agent, per connection.
     fn claim_key(&mut self, key: &PublicKey) -> bool {
-        self.attempted_keys.insert(key.fingerprint(HashAlg::Sha256).to_string())
+        let id = key.fingerprint(HashAlg::Sha256).to_string();
+        !self.accepted_keys.contains(&id) && self.attempted_keys.insert(id)
+    }
+
+    fn claim_certificate(&mut self, cert: &Certificate) -> anyhow::Result<bool> {
+        let key = PublicKey::new(cert.public_key().clone(), "");
+        Ok(!self.accepted_keys.contains(&key.fingerprint(HashAlg::Sha256).to_string()) && self.attempted_keys.insert(certificate_id(cert)?))
+    }
+
+    fn record_key(&mut self, result: &AuthResult, key: &PublicKey) {
+        if matches!(result, AuthResult::Failure { partial_success: true, .. }) {
+            self.accepted_keys.insert(key.fingerprint(HashAlg::Sha256).to_string());
+        }
     }
 }
 
 const MAX_AUTH_ROUNDS: usize = 3;
 const MAX_PASSPHRASE_TRIES: usize = 3;
+
+fn certificate_id(cert: &Certificate) -> anyhow::Result<String> {
+    // Comments are not part of the identity; a file and an agent may describe it differently.
+    Ok(format!("certificate:{}", base64::engine::general_purpose::STANDARD.encode(cert.to_bytes()?)))
+}
+
 /// Pipe served by the Windows OpenSSH `ssh-agent` service.
 #[cfg(windows)]
 const OPENSSH_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
@@ -61,9 +81,12 @@ pub(crate) async fn authenticate(session: &mut Session, params: &ConnectParams, 
 
     let mut state = match session.authenticate_none(user).await? {
         AuthResult::Success => return Ok(()),
-        AuthResult::Failure { remaining_methods, partial_success } => {
-            AuthState { methods: remaining_methods, second_factor: partial_success, attempted_keys: HashSet::new() }
-        }
+        AuthResult::Failure { remaining_methods, partial_success } => AuthState {
+            methods: remaining_methods,
+            second_factor: partial_success,
+            attempted_keys: HashSet::new(),
+            accepted_keys: HashSet::new(),
+        },
     };
 
     if allows(&state.methods, MethodKind::PublicKey) && public_keys(session, params, sink, &mut state).await? {
@@ -87,15 +110,19 @@ enum KeyAttempt {
 }
 
 async fn public_keys(session: &mut Session, params: &ConnectParams, sink: &EventSink, state: &mut AuthState) -> anyhow::Result<bool> {
+    let certificate = match &params.certificate_file {
+        Some(path) => Some(read_certificate(path).await?),
+        None => None,
+    };
     if let Some(path) = &params.identity_file {
-        match key_file(session, params, sink, path, true, state).await? {
+        match key_file(session, params, sink, path, true, certificate.as_ref(), state).await? {
             KeyAttempt::Accepted => return Ok(true),
             KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
             _ => {}
         }
     }
 
-    if params.use_agent && agents(session, params, state).await? {
+    if params.use_agent && agents(session, params, certificate.as_ref(), state).await? {
         return Ok(true);
     }
     if !state.allows_keys() {
@@ -103,7 +130,7 @@ async fn public_keys(session: &mut Session, params: &ConnectParams, sink: &Event
     }
 
     for path in &params.default_identity_files {
-        match key_file(session, params, sink, path, false, state).await? {
+        match key_file(session, params, sink, path, false, certificate.as_ref(), state).await? {
             KeyAttempt::Accepted => return Ok(true),
             KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
             _ => {}
@@ -131,12 +158,27 @@ fn record(result: AuthResult, state: &mut AuthState) -> KeyAttempt {
     }
 }
 
+async fn read_certificate(path: &Path) -> anyhow::Result<Certificate> {
+    use anyhow::Context as _;
+    let text = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| tr!("사용자 인증서를 읽을 수 없습니다: {}", "Cannot read user certificate: {}", path.display()))?;
+    let cert = Certificate::from_openssh(&text)
+        .with_context(|| tr!("사용자 인증서를 해석할 수 없습니다: {}", "Cannot parse user certificate: {}", path.display()))?;
+    if cert.cert_type() != keys::ssh_key::certificate::CertType::User {
+        bail!(t("SSH 사용자 인증서가 아닙니다", "This is not an SSH user certificate"));
+    }
+    Ok(cert)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn key_file(
     session: &mut Session,
     params: &ConnectParams,
     sink: &EventSink,
     path: &Path,
     explicit: bool,
+    certificate: Option<&Certificate>,
     state: &mut AuthState,
 ) -> anyhow::Result<KeyAttempt> {
     let read = async {
@@ -180,11 +222,49 @@ async fn key_file(
         ));
         return Ok(KeyAttempt::Unusable);
     }
-    if !state.claim_key(key.public_key()) {
+    let discovered;
+    let certificate = if certificate.is_some() {
+        certificate
+    } else {
+        let mut cert_path = path.as_os_str().to_owned();
+        cert_path.push("-cert.pub");
+        discovered = match read_certificate(Path::new(&cert_path)).await {
+            Ok(cert) => Some(cert),
+            Err(e) => {
+                if tokio::fs::try_exists(&cert_path).await.unwrap_or(false) {
+                    sink.notice(format!("{e:#}"));
+                }
+                None
+            }
+        };
+        discovered.as_ref()
+    };
+    if let Some(cert) = certificate {
+        if cert.public_key() != key.public_key().key_data() {
+            sink.notice(tr!(
+                "사용자 인증서와 개인 키가 일치하지 않습니다: {}",
+                "User certificate does not match private key: {}",
+                path.display()
+            ));
+            if params.certificate_file.is_some() {
+                return Ok(KeyAttempt::Unusable);
+            }
+        } else if state.claim_certificate(cert)? {
+            let result = session.authenticate_openssh_cert(params.username.as_str(), Arc::new(key.clone()), cert.clone()).await?;
+            state.record_key(&result, key.public_key());
+            let attempt = record(result, state);
+            if matches!(attempt, KeyAttempt::Accepted | KeyAttempt::Rejected { keep_trying: false }) || params.certificate_file.is_some() {
+                return Ok(attempt);
+            }
+        }
+    }
+    if params.certificate_file.is_some() || !state.claim_key(key.public_key()) {
         return Ok(KeyAttempt::Unusable);
     }
     let hash = rsa_hash(session, key.algorithm()).await?;
+    let public = key.public_key().clone();
     let result = session.authenticate_publickey(params.username.as_str(), PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await?;
+    state.record_key(&result, &public);
     Ok(record(result, state))
 }
 
@@ -238,7 +318,12 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> anyhow::Result
 }
 
 /// Tries every key of the reachable agents. Returns `true` on success.
-async fn agents(session: &mut Session, params: &ConnectParams, state: &mut AuthState) -> anyhow::Result<bool> {
+async fn agents(
+    session: &mut Session,
+    params: &ConnectParams,
+    certificate: Option<&Certificate>,
+    state: &mut AuthState,
+) -> anyhow::Result<bool> {
     #[cfg(windows)]
     {
         // An explicitly configured pipe (or SSH_AUTH_SOCK naming a pipe, as set by e.g.
@@ -252,7 +337,7 @@ async fn agents(session: &mut Session, params: &ConnectParams, state: &mut AuthS
                     // destination-constrained keys, so the error is ignored.
                     let _ = agent.bind_session(binding, false).await;
                 }
-                if agent_keys(session, params, agent, state).await? {
+                if agent_keys(session, params, agent, certificate, state).await? {
                     return Ok(true);
                 }
             }
@@ -262,7 +347,7 @@ async fn agents(session: &mut Session, params: &ConnectParams, state: &mut AuthS
         if params.agent_pipe.is_none() && state.allows_keys() {
             match AgentClient::connect_pageant().await {
                 Ok(agent) => {
-                    if agent_keys(session, params, agent, state).await? {
+                    if agent_keys(session, params, agent, certificate, state).await? {
                         return Ok(true);
                     }
                 }
@@ -280,7 +365,7 @@ async fn agents(session: &mut Session, params: &ConnectParams, state: &mut AuthS
                 if let Some(binding) = session.agent_session_binding() {
                     let _ = agent.bind_session(binding, false).await;
                 }
-                if agent_keys(session, params, agent, state).await? {
+                if agent_keys(session, params, agent, certificate, state).await? {
                     return Ok(true);
                 }
             }
@@ -314,6 +399,7 @@ async fn agent_keys<S>(
     session: &mut Session,
     params: &ConnectParams,
     mut agent: AgentClient<S>,
+    certificate: Option<&Certificate>,
     state: &mut AuthState,
 ) -> anyhow::Result<bool>
 where
@@ -326,20 +412,44 @@ where
             return Ok(false);
         }
     };
+    // Certificates precede bare identities, even when the agent lists the bare key first.
+    let mut identities = identities;
+    identities.sort_by_key(|id| matches!(id, AgentIdentity::PublicKey { .. }));
     for identity in identities {
-        // Certificates need a different auth request; plain keys cover the common case.
-        let AgentIdentity::PublicKey { key, comment } = identity else { continue };
-        let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
-        if !state.claim_key(&key) {
-            continue;
-        }
+        let key = identity.public_key().into_owned();
+        let comment = identity.comment().to_owned();
+        let cert = certificate.or(match &identity {
+            AgentIdentity::Certificate { certificate, .. } => Some(certificate),
+            _ => None,
+        });
         let hash = rsa_hash(session, key.algorithm()).await?;
-        match session.authenticate_publickey_with(params.username.as_str(), key, hash, &mut agent).await {
-            Ok(result) => match record(result, state) {
-                KeyAttempt::Accepted => return Ok(true),
-                KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
-                _ => {}
-            },
+        let (fingerprint, result) = if let Some(cert) = cert {
+            if cert.cert_type() != keys::ssh_key::certificate::CertType::User
+                || cert.public_key() != key.key_data()
+                || !state.claim_certificate(cert)?
+            {
+                continue;
+            }
+            let mut signer = IdentitySigner { agent: &mut agent, identity: &identity };
+            (certificate_id(cert)?, session.authenticate_certificate_with(params.username.as_str(), cert.clone(), hash, &mut signer).await)
+        } else {
+            if !state.claim_key(&key) {
+                continue;
+            }
+            (
+                key.fingerprint(HashAlg::Sha256).to_string(),
+                session.authenticate_publickey_with(params.username.as_str(), key.clone(), hash, &mut agent).await,
+            )
+        };
+        match result {
+            Ok(result) => {
+                state.record_key(&result, &key);
+                match record(result, state) {
+                    KeyAttempt::Accepted => return Ok(true),
+                    KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
+                    _ => {}
+                }
+            }
             Err(e) => {
                 // A signer failure submitted no signed authentication: another source may
                 // still hold the usable private key. The finite source lists bound retries.
@@ -349,6 +459,21 @@ where
         }
     }
     Ok(false)
+}
+
+/// An explicitly selected certificate may have only its bare private key in the agent.
+/// Keep the certificate in the SSH auth payload, but address the identity the agent listed.
+struct IdentitySigner<'a, S: AsyncRead + AsyncWrite> {
+    agent: &'a mut AgentClient<S>,
+    identity: &'a AgentIdentity,
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> russh::Signer for IdentitySigner<'_, S> {
+    type Error = russh::AgentAuthError;
+
+    async fn auth_sign(&mut self, _key: &AgentIdentity, hash: Option<HashAlg>, data: Vec<u8>) -> Result<Vec<u8>, Self::Error> {
+        Ok(self.agent.sign_request(self.identity, hash, data).await?)
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -518,8 +643,12 @@ mod tests {
 
     #[test]
     fn key_partial_success_survives_later_failures() {
-        let mut state =
-            AuthState { methods: MethodSet::from(&[MethodKind::PublicKey][..]), second_factor: false, attempted_keys: HashSet::new() };
+        let mut state = AuthState {
+            methods: MethodSet::from(&[MethodKind::PublicKey][..]),
+            second_factor: false,
+            attempted_keys: HashSet::new(),
+            accepted_keys: HashSet::new(),
+        };
         let result = record(
             AuthResult::Failure { remaining_methods: MethodSet::from(&[MethodKind::KeyboardInteractive][..]), partial_success: true },
             &mut state,
@@ -531,8 +660,12 @@ mod tests {
 
     #[test]
     fn partial_success_allows_another_public_key_until_the_server_changes_methods() {
-        let mut state =
-            AuthState { methods: MethodSet::from(&[MethodKind::PublicKey][..]), second_factor: false, attempted_keys: HashSet::new() };
+        let mut state = AuthState {
+            methods: MethodSet::from(&[MethodKind::PublicKey][..]),
+            second_factor: false,
+            attempted_keys: HashSet::new(),
+            accepted_keys: HashSet::new(),
+        };
         for partial_success in [true, false] {
             let result = record(
                 AuthResult::Failure { remaining_methods: MethodSet::from(&[MethodKind::PublicKey][..]), partial_success },

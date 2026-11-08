@@ -134,6 +134,8 @@ impl PlaytermApp {
                     username: address.user.unwrap_or_else(|| profile.username.clone()),
                     use_agent: true,
                     ssh_legacy_algorithms: false,
+                    certificate_file: String::new(),
+                    agent_forwarding: false,
                     ..SessionProfile::default()
                 };
                 self.connect_params(&bastion, None)
@@ -142,6 +144,7 @@ impl PlaytermApp {
         // The jump host only carries the connection: no forwardings of its own.
         params.forwards.clear();
         params.x11 = None;
+        params.agent_forwarding = false;
         Some(Box::new(params))
     }
 
@@ -161,6 +164,8 @@ impl PlaytermApp {
             username: profile.username.clone(),
             password,
             identity_file,
+            certificate_file: (!profile.certificate_file.is_empty()).then(|| expand_home(&profile.certificate_file)),
+            agent_forwarding: profile.agent_forwarding,
             default_identity_files,
             use_agent: profile.use_agent,
             ssh_legacy_algorithms: profile.ssh_legacy_algorithms,

@@ -449,6 +449,31 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
         });
         ui.end_row();
 
+        ui.label(t("사용자 인증서", "User certificate"));
+        ui.horizontal(|ui| {
+            let cert = ui.add(
+                egui::TextEdit::singleline(&mut p.certificate_file)
+                    .hint_text(t("자동: 키 경로 + -cert.pub", "Auto: key path + -cert.pub"))
+                    .desired_width(220.0),
+            );
+            submit |= enter(ui, &cert);
+            if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
+                && let Some(path) =
+                    crate::picker::Picker::new(crate::picker::Kind::File, t("SSH 사용자 인증서 선택", "Choose an SSH user certificate"))
+                        .directory(expand_home("~/.ssh"))
+                        .filter("OpenSSH (*.pub)", &["pub"])
+                        .pick_one()
+            {
+                p.certificate_file = path.display().to_string();
+            }
+        })
+        .response
+        .on_hover_text(t(
+            "일치하는 개인 키 또는 SSH 에이전트로 서명합니다. 서버가 사용자 인증서의 CA와 권한을 검증합니다.",
+            "Signed with the matching private key or SSH agent. The server validates the certificate CA and permissions.",
+        ));
+        ui.end_row();
+
         ui.label(t("점프 호스트", "Jump host"));
         let jump = ui.add(
             egui::TextEdit::singleline(&mut p.jump_host)
@@ -484,8 +509,27 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
         ui.end_row();
 
         ui.label("");
-        ui.checkbox(&mut p.use_agent, tr!("SSH 에이전트 사용 ({})", "Use the SSH agent ({})", crate::platform::ssh_agents()));
+        ui.checkbox(&mut p.use_agent, tr!("SSH 에이전트 사용 ({})", "Use the SSH agent ({})", crate::platform::ssh_agents()))
+            .on_hover_text(t(
+                "로그인할 때 에이전트의 키와 인증서를 사용합니다. 에이전트 포워딩은 별도 옵션입니다.",
+                "Use agent keys and certificates to log in. Agent forwarding is a separate option.",
+            ));
         ui.end_row();
+
+        ui.label("");
+        ui.checkbox(&mut p.agent_forwarding, t("SSH 에이전트 포워딩 (-A)", "SSH agent forwarding (-A)"));
+        ui.end_row();
+        if p.agent_forwarding {
+            ui.label("");
+            ui.vertical(|ui| {
+                ui.set_max_width(400.0);
+                ui.add(egui::Label::new(egui::RichText::new(t(
+                    "원격 서버가 이 PC의 에이전트로 인증 서명을 요청할 수 있습니다. 신뢰하는 서버에만 켜세요. 점프 호스트에는 전달하지 않습니다.",
+                    "The remote server can request authentication signatures from this PC's agent. Enable only for trusted servers. Not forwarded to jump hosts."
+                )).color(egui::Color32::YELLOW)).wrap());
+            });
+            ui.end_row();
+        }
 
         ui.label("");
         ui.checkbox(&mut p.ssh_legacy_algorithms, t("이전 SSH 장비 호환", "Legacy SSH equipment compatibility"));
@@ -973,6 +1017,11 @@ impl ProfileForm {
         p.host = p.host.trim().to_owned();
         p.username = p.username.trim().to_owned();
         p.identity_file = p.identity_file.trim().trim_matches('"').to_owned();
+        p.certificate_file = p.certificate_file.trim().trim_matches('"').to_owned();
+        if p.protocol != Protocol::Ssh {
+            p.certificate_file.clear();
+            p.agent_forwarding = false;
+        }
         p.log.dir = p.log.dir.trim().trim_matches('"').to_owned();
         p.auto_login = validate_auto_login(&p.auto_login)?;
         p.keepalive = validate_keepalive(&p.keepalive)?;
