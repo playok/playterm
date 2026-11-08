@@ -133,6 +133,7 @@ impl PlaytermApp {
                     port: address.port.unwrap_or(22),
                     username: address.user.unwrap_or_else(|| profile.username.clone()),
                     use_agent: true,
+                    ssh_legacy_algorithms: false,
                     ..SessionProfile::default()
                 };
                 self.connect_params(&bastion, None)
@@ -162,6 +163,7 @@ impl PlaytermApp {
             identity_file,
             default_identity_files,
             use_agent: profile.use_agent,
+            ssh_legacy_algorithms: profile.ssh_legacy_algorithms,
             agent_pipe: None,
             forwards: profile.forwards.clone(),
             serial: profile.serial.clone(),

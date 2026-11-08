@@ -18,7 +18,7 @@ use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{self, Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use russh::{MethodKind, MethodSet};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
 use zeroize::Zeroizing;
 
 use crate::session::{ConnectParams, EventSink, PromptField, PromptResponse};
@@ -139,8 +139,25 @@ async fn key_file(
     explicit: bool,
     state: &mut AuthState,
 ) -> anyhow::Result<KeyAttempt> {
-    let text = match tokio::fs::read_to_string(path).await {
-        Ok(text) => Zeroizing::new(text),
+    let read = async {
+        let mut file = tokio::fs::File::open(path).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            if file.metadata().await?.permissions().mode() & 0o077 != 0 {
+                sink.notice(tr!(
+                    "개인 키 파일을 다른 사용자가 읽거나 쓸 수 있습니다 ({}). chmod 600으로 제한하세요.",
+                    "Other users may read or write the private key file ({}). Restrict it with chmod 600.",
+                    path.display()
+                ));
+            }
+        }
+        let mut text = Zeroizing::new(String::new());
+        file.read_to_string(&mut text).await?;
+        Ok::<_, std::io::Error>(text)
+    };
+    let text = match read.await {
+        Ok(text) => text,
         Err(e) => {
             if explicit {
                 sink.notice(tr!("키 파일을 읽을 수 없습니다 ({}): {e}", "Cannot read the key file ({}): {e}", path.display()));

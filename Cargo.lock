@@ -5116,6 +5116,7 @@ version = "0.7.0"
 dependencies = [
  "ring",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

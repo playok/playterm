@@ -214,13 +214,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<SessionProfile>,
                 forwards.push(ForwardRule::parse(kind, &spec)?);
             }
             "-h" | "--help" => return Err(String::new()),
-            // Used by "open in new window": a profile file written by the other window.
-            "--open" => {
-                let path = args.next().ok_or(t("--open 다음에 파일 경로가 필요합니다", "Missing file path after --open"))?;
-                let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"));
-                let _ = std::fs::remove_file(&path);
-                requests.push(SessionProfile::from_toml(&text?).map_err(|e| format!("{path}: {e}"))?);
-            }
+            option if option.starts_with('-') => return Err(tr!("알 수 없는 옵션: {option}", "Unknown option: {option}")),
             url => {
                 let mut profile = profile_form::parse_url(url)?;
                 profile.charset = charset;
@@ -231,4 +225,17 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<SessionProfile>,
         }
     }
     Ok(requests)
+}
+
+#[cfg(test)]
+mod cli_tests {
+    #[test]
+    fn removed_open_option_never_reads_or_deletes_the_named_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profile.toml");
+        std::fs::write(&path, "host = 'example.test'").unwrap();
+        assert!(super::parse_args(["--open".into(), path.to_string_lossy().into_owned()].into_iter()).is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "host = 'example.test'");
+        assert!(super::parse_args(["--unknown".into()].into_iter()).is_err());
+    }
 }

@@ -32,7 +32,7 @@ impl Authorities {
         if cert.cert_type() != CertType::Host {
             bail!(t("SSH 호스트 인증서가 아닙니다", "This is not an SSH host certificate"));
         }
-        if !cert.valid_principals().iter().any(|principal| principal.eq_ignore_ascii_case(host)) {
+        if !cert.valid_principals().iter().any(|principal| wildcard_match(principal, host)) {
             bail!(t("SSH 인증서의 호스트 이름이 일치하지 않습니다", "The SSH certificate hostname does not match"));
         }
         // No critical options are defined for OpenSSH host certificates. Unknown ones
@@ -170,6 +170,21 @@ mod tests {
         )
         .unwrap();
         assert!(revoked.verify(&valid, "db.example", 15).is_err());
+    }
+
+    #[test]
+    fn wildcard_principals_remain_scoped_and_require_a_trusted_ca() {
+        let ca = key();
+        let trust = parse(&format!("@cert-authority *.example {}", ca.public_key().to_openssh().unwrap()), "db.example", 22).unwrap();
+        for principal in ["*.example", "d?.example", "DB.EXAMPLE"] {
+            let cert = certificate(&ca, principal, 10, 20, CertType::Host, false);
+            trust.verify(&cert, "db.example", 15).unwrap();
+            assert!(trust.verify(&cert, "db.example.attacker", 15).is_err());
+            assert!(trust.verify(&cert, "example", 15).is_err());
+            assert!(Authorities::default().verify(&cert, "db.example", 15).is_err());
+        }
+        let wrong_ca = certificate(&key(), "*.example", 10, 20, CertType::Host, false);
+        assert!(trust.verify(&wrong_ca, "db.example", 15).is_err());
     }
 
     #[test]

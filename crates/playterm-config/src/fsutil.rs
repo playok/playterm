@@ -1,6 +1,35 @@
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
+/// Locks a stable sibling across a read/modify/atomic-replace transaction. Never unlink
+/// the lock file: a second process may already have opened the same inode.
+pub(crate) fn lock_config(path: &Path) -> io::Result<std::fs::File> {
+    use std::time::{Duration, Instant};
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(name)?;
+    let deadline = Instant::now() + Duration::from_millis(750);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    playterm_i18n::t(
+                        "다른 창에서 설정을 사용 중입니다. 다시 시도하세요",
+                        "The configuration is busy in another window. Try again",
+                    ),
+                ));
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(e),
+        }
+    }
+}
+
 /// Writes `contents` to `path` via a temporary file and rename, so a crash, power loss or full
 /// disk never leaves a half-written config behind. The data is flushed to disk before the
 /// rename, and each write has its own temporary file (two windows may save at once).

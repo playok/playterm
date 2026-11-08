@@ -486,6 +486,21 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
         ui.label("");
         ui.checkbox(&mut p.use_agent, tr!("SSH 에이전트 사용 ({})", "Use the SSH agent ({})", crate::platform::ssh_agents()));
         ui.end_row();
+
+        ui.label("");
+        ui.checkbox(&mut p.ssh_legacy_algorithms, t("이전 SSH 장비 호환", "Legacy SSH equipment compatibility"));
+        ui.end_row();
+        if p.ssh_legacy_algorithms {
+            ui.label("");
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                t(
+                    "SHA-1 키 교환/MAC와 AES-CBC를 허용합니다. 필요한 구형 장비에만 사용하세요.",
+                    "Allows SHA-1 key exchange/MAC and AES-CBC. Enable only for older equipment that needs it.",
+                ),
+            );
+            ui.end_row();
+        }
     }
 
     if rdp {
@@ -841,6 +856,10 @@ impl ProfileForm {
             if ui.checkbox(&mut a.enabled, label).changed() && a.enabled && a.steps.is_empty() {
                 a.steps = AutoLogin::standard_steps();
             }
+            ui.colored_label(ui.visuals().warn_fg_color, t(
+                "보낼 내용은 sessions.toml에 평문으로 저장됩니다. 비밀번호는 직접 입력하지 말고 {password}를 사용하세요.",
+                "Send text is saved as plain text in sessions.toml. Use {password} instead of typing a password here.",
+            ));
             ui.add_enabled_ui(a.enabled, |ui| {
                 ui.weak(t(
                     "화면의 줄이 [기다릴 문자열] 로 끝나면 [보낼 내용] 과 Enter 를 입력합니다.\n{user}, {password} 는 위의 사용자 이름과 저장된 비밀번호로 바뀝니다.",

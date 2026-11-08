@@ -22,7 +22,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **Split view**: drag tabs to the edges to see several sessions at once
 - **Connect many at once**: Ctrl/Shift+click sites to open them together, or save them as a **template** (tabs, columns, rows or grid) and open it with a double-click
 - **SSH extras**: key authentication (OpenSSH / PuTTY `.ppk`, Pageant, Windows OpenSSH agent), `-L` / `-R` / `-D` port forwarding, and an SFTP explorer panel beside the terminal
-- **Remote Desktop**: resolution that follows the tab size, shared clipboard, sound, folder and printer sharing, Unicode/IME input, and certificate pinning
+- **Remote Desktop**: resolution that follows the tab size, sound, Unicode/IME input, and certificate pinning. Clipboard, folder and printer sharing are Windows only
 - **Password vault**: saved passwords are encrypted with a master password (Argon2id + XChaCha20-Poly1305)
 - **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads and uploads (`sz`/`rz`)
 - **Site manager**: folders, per-site tab colors, PuTTY, Xshell and SecureCRT session import, and a `playterm>` command prompt in unconnected tabs
@@ -202,8 +202,8 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 - **Tab color**: give each site a color (red, orange, yellow, green, teal, blue, purple, pink, gray) under "Tab color" in the Site Manager. Its tabs
   are tinted (a bar at the bottom and a light background) and the site list shows the color too — handy for marking production servers red, say.
   An open tab can be recolored by itself: right-click the tab → **Tab color** (or Tab menu → Tab color).
-- **Open in new window**: right-click a tab (or the Tab menu) → Open in new window. A second playterm opens that tab's connection in a new window (the original tab stays).
-  Passwords are not passed along: a saved site unlocks the vault in the new window and uses its saved password; other connections ask again.
+- **Open in new window**: right-click a tab (or the Tab menu) → Open in new window. Moves the tab into a new window in the same process, keeping its connection and session state. The tab leaves its original window.
+  Windows share the site list and vault. Detaching a tab does not isolate passwords or create a security boundary.
   File → **New window** opens an empty window (local prompt).
 - **Docking (split view)**: drag a tab onto the left, right, top or bottom edge of another tab group to split the view and see several sessions together.
   Drop it in a tab strip to make it a tab of that group. Drag the border between panes to resize them; the pane you click becomes the current tab
@@ -311,6 +311,8 @@ The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing U
   - Raw: the bytes exactly as received
   - Default folder: `Documents\playterm-logs`, file name: `SessionName_YYYYMMDD_HHMMSS.log`
 
+Session logs append to unencrypted files without automatic rotation or retention limits. Output may contain passwords, tokens or other sensitive information; manage file access, retention and deletion accordingly.
+
 ## SFTP and port forwarding
 
 - **SFTP explorer (side panel)**: Tools → SFTP explorer, [SFTP] in the tab bar, or **Ctrl+Shift+X** (Ctrl+Shift+E works too). A panel slides out from the right of the window, beside the terminal, and shows
@@ -397,11 +399,11 @@ Choose protocol **RDP** in the Site Manager, type `rdp [user@]host[:port]` at th
 - **Keyboard**: characters (including Korean IME input) are sent as Unicode, so they arrive as typed whatever the remote keyboard layout; Enter, arrows,
   F1–F12 and Ctrl/Alt combinations are sent as keys (scan codes). playterm shortcuts (Ctrl+Shift+…, Ctrl+Tab, Alt+←/→, F11) are not sent to the remote side.
 - **Mouse**: movement, left/right/middle buttons, wheel. The remote cursor is drawn on the screen.
-- **Shared clipboard** (site setting, on by default): the Windows clipboard and the remote clipboard are kept in step, so copy and paste work both ways.
+- **Shared clipboard (Windows only)** (site setting, on by default): the Windows clipboard and the remote clipboard are kept in step, so copy and paste work both ways.
 - Text sent from the command input bar or by typing into all tabs reaches RDP tabs too.
 - **Sound** (site setting, on by default): the remote computer's sound plays on this PC's default output (mstsc's "Play on this computer"). Off, the server is told not to send it.
-- **Shared folder** (site setting): the chosen folder shows up as a drive in "This PC" of the remote desktop (mstsc's "Local Resources → Drives"). With **Read-only** on, the remote side cannot change or delete files. Only the folder itself is reachable: `..`, device paths, and links or junctions pointing outside it are never opened. A folder that is missing (an unplugged USB drive, say) is left out and the desktop connects without it.
-- **Printer** (site setting, off by default): print from the remote desktop on this PC's default printer. The printer appears only if the remote computer has a driver of the same name (no Easy Print yet).
+- **Shared folder (Windows only)** (site setting): the chosen folder shows up as a drive in "This PC" of the remote desktop (mstsc's "Local Resources → Drives"). With **Read-only** on, the remote side cannot change or delete files. Only the folder itself is reachable: `..`, device paths, and links or junctions pointing outside it are never opened. A folder that is missing (an unplugged USB drive, say) is left out and the desktop connects without it.
+- **Printer (Windows only)** (site setting, off by default): print from the remote desktop on this PC's default printer. The printer appears only if the remote computer has a driver of the same name (no Easy Print yet).
 - **RD Gateway** (site setting): connect through a company RD Gateway (HTTPS, 443 by default), given as `gateway.example.com` or `gateway.example.com:8443`. With the gateway user left blank it logs on with the site's user and password; with one filled in, that account's password is asked when connecting. The gateway's certificate must be one Windows trusts (as with mstsc; self-signed ones are refused). The remote desktop's own certificate is still pinned in `known_rdp_hosts`. When the gateway's policy forbids clipboard, folder or printer sharing, those are turned off with a notice. A gateway consent message is accepted without being shown.
 - Not supported yet: microphone input, Kerberos (domain accounts authenticate with NTLM).
 
@@ -420,6 +422,7 @@ prompt: `ssh -J bastion db01`.
 
 Turn on **X11 forwarding** in an SSH site's settings (advanced), or connect with `ssh -X host` at the local prompt, and X programs run on the
 server (xterm, installers…) show on the X server of this PC.
+- On Windows, set `PLAYTERM_XAUTH` to the absolute path of a trusted `xauth.exe` to read or generate cookies. The working directory and PATH are not searched. macOS/Linux also accept an absolute path through this variable.
 - An X server must be running here: VcXsrv or Xming on Windows (by default `localhost:0.0`), XQuartz on macOS. Without one, a notice says so.
 - Where they show is the site's DISPLAY field (empty: this PC's `DISPLAY`, else `localhost:0.0`).
 - The server gets a made-up cookie, and only connections carrying it reach the X server (only this session's programs).
@@ -428,6 +431,8 @@ server (xterm, installers…) show on the X server of this PC.
   connections are refused, with a notice.
 - **Trusted (-Y)** in the site's settings (or `ssh -Y`) passes the real cookie (or none), and the server's X programs can reach the whole
   display of this PC, keyboard included. Turn it on only for servers you trust.
+
+Turn on **Legacy SSH equipment compatibility** in a site's advanced settings to allow `diffie-hellman-group14-sha1`, `diffie-hellman-group1-sha1`, AES-CBC and HMAC-SHA1 for that site. It is off by default and modern algorithms remain preferred. Enable only for older equipment that needs it. 3DES is not supported. A jump host needs its own saved-site opt-in.
 
 ## SSH authentication order
 

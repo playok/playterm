@@ -1228,6 +1228,7 @@ mod tests {
             identity_file: None,
             default_identity_files: Vec::new(),
             use_agent: false,
+            ssh_legacy_algorithms: false,
             agent_pipe: None,
             forwards: Vec::new(),
             serial: Default::default(),
