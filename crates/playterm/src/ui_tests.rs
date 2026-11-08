@@ -21,6 +21,10 @@ type App = Harness<'static, PlaytermApp>;
 /// The app with its own settings folder (Korean, no update check).
 fn app(dir: &Path) -> App {
     std::fs::write(dir.join("settings.toml"), "check_updates = false\nlanguage = \"ko\"\n").unwrap();
+    app_from_config(dir)
+}
+
+fn app_from_config(dir: &Path) -> App {
     let dir = dir.to_owned();
     // The window's fonts come from the system through eframe, which the harness does not run:
     // Hangul is drawn as boxes here (widgets are found by their labels, not pixels).
@@ -748,4 +752,52 @@ fn rz_on_the_device_asks_for_files_and_sends_them() {
     assert_eq!(asked.len(), 1, "asked once");
     assert_eq!(asked[0].0, crate::picker::Kind::Files);
     assert!(asked[0].1.contains("ZMODEM"), "{:?}", asked[0].1);
+}
+
+/// Run by scripts/test-readonly-config.ps1 with a directory protected by an actual Windows ACL.
+#[test]
+#[ignore = "requires PLAYTERM_READONLY_TEST_DIR with write-denying permissions"]
+fn readonly_config_starts_lists_sites_and_rejects_save() {
+    let dir = std::path::PathBuf::from(std::env::var_os("PLAYTERM_READONLY_TEST_DIR").expect("read-only fixture directory"));
+    let path = dir.join("sessions.toml");
+    let original = std::fs::read(&path).unwrap();
+    assert!(std::fs::write(dir.join("write-probe"), "probe").is_err());
+    let mut harness = app_from_config(&dir);
+    assert_eq!(harness.state().test_settings().font_size, 23.0);
+    assert_eq!(harness.state().test_store().profiles().len(), 1);
+    assert_eq!(harness.state().test_store().get("readonly-test").unwrap().name, "읽기 전용 테스트 사이트");
+    harness.get_by_label("읽기 전용 테스트 사이트");
+    let ctx = harness.ctx.clone();
+    harness.state_mut().test_run(&ctx, Command::EditSite("readonly-test".into()));
+    harness.run_steps(4);
+    let fields = site_fields(&harness);
+    type_into(&harness, &fields[1], "저장 실패 후 남아야 하는 초안");
+    harness.run_steps(2);
+    click(&mut harness, "저장");
+    assert!(harness.state().test_site_manager_open());
+    assert_eq!(site_fields(&harness)[1].accesskit_node().value().as_deref(), Some("저장 실패 후 남아야 하는 초안"));
+    assert_eq!(harness.state().test_store().get("readonly-test").unwrap().name, "읽기 전용 테스트 사이트");
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert!(harness.state().test_settings().save(&dir.join("settings.toml")).is_err());
+    assert!(!dir.join("settings.toml.lock").exists());
+    assert!(!dir.join("sessions.toml.lock").exists());
+}
+
+#[test]
+fn malformed_sessions_start_with_preserved_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sessions.toml");
+    let original = b"session = [invalid";
+    std::fs::write(&path, original).unwrap();
+    let harness = app(dir.path());
+    assert!(harness.state().test_store().profiles().is_empty());
+    assert_eq!(harness.state().test_store().path(), path);
+    assert!(!path.exists());
+    let backups: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "broken"))
+        .collect();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(std::fs::read(&backups[0]).unwrap(), original);
 }

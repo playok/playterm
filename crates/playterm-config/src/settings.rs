@@ -243,6 +243,12 @@ impl AppSettings {
     /// Uses defaults for malformed settings only after preserving the original bytes.
     /// Read/backup errors are returned so the caller cannot overwrite an unpreserved file.
     pub fn load_preserving(path: &Path) -> io::Result<(Self, Option<std::path::PathBuf>)> {
+        match Self::load(path) {
+            Ok(settings) => return Ok((settings, None)),
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {}
+            Err(e) => return Err(e),
+        }
+        // The writer may have repaired the file while we waited for the lock.
         let _lock = crate::fsutil::lock_config(path)?;
         match Self::load(path) {
             Ok(settings) => Ok((settings, None)),
