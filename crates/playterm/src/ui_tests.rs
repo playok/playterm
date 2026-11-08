@@ -336,6 +336,55 @@ fn site_manager_saves_asks_and_closes_with_escape() {
 }
 
 #[test]
+fn failed_site_save_keeps_the_draft_for_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = app(dir.path());
+    click(&mut harness, "새 사이트");
+    let fields = site_fields(&harness);
+    type_into(&harness, &fields[1], "다시 저장할 사이트");
+    type_into(&harness, &fields[4], "example.test");
+    type_into(&harness, &fields[6], "tester");
+    harness.run_steps(2);
+    let path = dir.path().join("sessions.toml");
+    std::fs::write(&path, "invalid = [").unwrap();
+    click(&mut harness, "저장");
+    assert!(harness.state().test_store().profiles().is_empty());
+    assert!(harness.state().test_site_manager_open());
+    assert_eq!(site_fields(&harness)[1].accesskit_node().value().as_deref(), Some("다시 저장할 사이트"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "invalid = [");
+    std::fs::write(&path, "").unwrap();
+    click(&mut harness, "저장");
+    assert_eq!(harness.state().test_store().profiles()[0].name, "다시 저장할 사이트");
+}
+
+#[test]
+fn opening_site_manager_refreshes_sites_saved_by_another_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = app(dir.path());
+    assert!(harness.state().test_store().profiles().is_empty());
+    let path = dir.path().join("sessions.toml");
+    let mut other = playterm_config::ProfileStore::load(&path).unwrap();
+    let site = playterm_config::SessionProfile {
+        name: "다른 창의 사이트".into(),
+        host: "example.test".into(),
+        username: "tester".into(),
+        ssh_legacy_algorithms: true,
+        ..playterm_config::SessionProfile::new().unwrap()
+    };
+    other.upsert(site.clone()).unwrap();
+    let ctx = harness.ctx.clone();
+    harness.state_mut().test_run(&ctx, Command::EditSite(site.id.clone()));
+    harness.run_steps(4);
+    assert_eq!(harness.state().test_store().get(&site.id), Some(&site));
+    let checkbox = harness.get_by_role_and_label(Role::CheckBox, "이전 SSH 장비 호환");
+    assert!(checkbox.accesskit_node().toggled().is_some());
+    checkbox.click();
+    harness.run_steps(2);
+    click(&mut harness, "저장");
+    assert!(!playterm_config::ProfileStore::load(&path).unwrap().get(&site.id).unwrap().ssh_legacy_algorithms);
+}
+
+#[test]
 fn settings_preview_then_cancel_or_keep() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = app(dir.path());

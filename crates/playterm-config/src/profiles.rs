@@ -113,7 +113,8 @@ impl TabColor {
     }
 }
 
-/// A saved connection. Passwords are never stored here, only in the [`crate::Vault`].
+/// A saved connection. The password field lives in [`crate::Vault`]; automatic-login
+/// literals are plain text, so credentials in steps must use `{password}`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SessionProfile {
@@ -133,6 +134,8 @@ pub struct SessionProfile {
     pub identity_file: String,
     /// Offer keys from a running SSH agent (Pageant, Windows OpenSSH agent).
     pub use_agent: bool,
+    /// Append SHA-1 KEX/MAC and AES-CBC for this site's older SSH equipment only.
+    pub ssh_legacy_algorithms: bool,
     /// Port forwardings started with the session.
     #[serde(rename = "forward")]
     pub forwards: Vec<ForwardRule>,
@@ -178,6 +181,7 @@ impl Default for SessionProfile {
             save_password: false,
             identity_file: String::new(),
             use_agent: true,
+            ssh_legacy_algorithms: false,
             forwards: Vec::new(),
             serial: SerialSettings::default(),
             log: LogSettings::default(),
@@ -221,8 +225,7 @@ impl SessionProfile {
         }
     }
 
-    /// The profile as a TOML document (no password: profiles never hold one), to hand it to
-    /// another playterm window.
+    /// The profile as TOML. Automatic-login literals are included as plain text.
     pub fn to_toml(&self) -> Result<String, String> {
         toml::to_string(self).map_err(|e| e.to_string())
     }
@@ -345,6 +348,11 @@ impl ProfileStore {
     /// Loads profiles from `path`; a missing file is an empty store.
     pub fn load(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
+        let _lock = crate::fsutil::lock_config(&path)?;
+        Self::load_locked(path)
+    }
+
+    fn load_locked(path: PathBuf) -> io::Result<Self> {
         let file = match std::fs::read_to_string(&path) {
             Ok(text) => toml::from_str::<ProfileFile>(&text)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display())))?,
@@ -352,6 +360,7 @@ impl ProfileStore {
             Err(e) => return Err(e),
         };
         let folders = file.folders.iter().map(|f| normalize_folder(f)).filter(|f| !f.is_empty()).collect();
+        let needs_ids = file.sessions.iter().any(|p| p.id.is_empty()) || file.templates.iter().any(|t| t.id.is_empty());
         let mut profiles = file.sessions;
         for p in &mut profiles {
             p.ensure_id()?;
@@ -361,7 +370,12 @@ impl ProfileStore {
         for template in &mut templates {
             template.ensure_id()?;
         }
-        Ok(Self { path, profiles, templates, folders })
+        let store = Self { path, profiles, templates, folders };
+        // Assign legacy IDs once under the lock so other processes see the same IDs.
+        if needs_ids {
+            store.save()?;
+        }
+        Ok(store)
     }
 
     /// An empty store that will be written to `path` on the first change.
@@ -382,7 +396,11 @@ impl ProfileStore {
     }
 
     /// Inserts or replaces (by id) and saves.
-    pub fn upsert(&mut self, mut profile: SessionProfile) -> io::Result<()> {
+    pub fn upsert(&mut self, profile: SessionProfile) -> io::Result<()> {
+        self.update(|store| store.upsert_in_memory(profile))
+    }
+
+    fn upsert_in_memory(&mut self, mut profile: SessionProfile) -> io::Result<()> {
         if profile.id.is_empty() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "The site has no identifier; create it with SessionProfile::new"));
         }
@@ -391,16 +409,20 @@ impl ProfileStore {
             Some(existing) => *existing = profile,
             None => self.profiles.push(profile),
         }
-        self.save()
+        Ok(())
     }
 
     /// Removes a site (from the templates too) and saves.
     pub fn remove(&mut self, id: &str) -> io::Result<()> {
+        self.update(|store| store.remove_in_memory(id))
+    }
+
+    fn remove_in_memory(&mut self, id: &str) -> io::Result<()> {
         self.profiles.retain(|p| p.id != id);
         for template in &mut self.templates {
             template.sites.retain(|s| s != id);
         }
-        self.save()
+        Ok(())
     }
 
     pub fn templates(&self) -> &[SiteTemplate] {
@@ -413,6 +435,10 @@ impl ProfileStore {
 
     /// Inserts or replaces (by id) a template and saves.
     pub fn upsert_template(&mut self, template: SiteTemplate) -> io::Result<()> {
+        self.update(|store| store.upsert_template_in_memory(template))
+    }
+
+    fn upsert_template_in_memory(&mut self, template: SiteTemplate) -> io::Result<()> {
         if template.id.is_empty() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "The template has no identifier; create it with SiteTemplate::new"));
         }
@@ -420,12 +446,16 @@ impl ProfileStore {
             Some(existing) => *existing = template,
             None => self.templates.push(template),
         }
-        self.save()
+        Ok(())
     }
 
     pub fn remove_template(&mut self, id: &str) -> io::Result<()> {
+        self.update(|store| store.remove_template_in_memory(id))
+    }
+
+    fn remove_template_in_memory(&mut self, id: &str) -> io::Result<()> {
         self.templates.retain(|t| t.id != id);
-        self.save()
+        Ok(())
     }
 
     /// Every folder path, sorted, the top level ("") first: folders made on their own, folders
@@ -447,17 +477,25 @@ impl ProfileStore {
 
     /// Makes folder `path` (inside its parent folder, made too if needed) and saves.
     pub fn create_folder(&mut self, path: &str) -> io::Result<()> {
+        self.update(|store| store.create_folder_in_memory(path))
+    }
+
+    fn create_folder_in_memory(&mut self, path: &str) -> io::Result<()> {
         let path = normalize_folder(path);
         if path.is_empty() || self.folders().contains(&path) {
             return Ok(());
         }
         self.folders.push(path);
-        self.save()
+        Ok(())
     }
 
     /// Renames or moves folder `from` to `to`: its sites and the folders inside it go along.
     /// Into an existing folder, the contents are merged.
     pub fn rename_folder(&mut self, from: &str, to: &str) -> io::Result<()> {
+        self.update(|store| store.rename_folder_in_memory(from, to))
+    }
+
+    fn rename_folder_in_memory(&mut self, from: &str, to: &str) -> io::Result<()> {
         let (from, to) = (normalize_folder(from), normalize_folder(to));
         if from.is_empty() || to.is_empty() || from == to || in_folder(&to, &from) {
             return Ok(());
@@ -474,12 +512,16 @@ impl ProfileStore {
         }
         self.folders.sort();
         self.folders.dedup();
-        self.save()
+        Ok(())
     }
 
     /// Removes folder `path`; nothing in it is deleted: its sites and the folders inside it move
     /// up to its parent folder.
     pub fn delete_folder(&mut self, path: &str) -> io::Result<()> {
+        self.update(|store| store.delete_folder_in_memory(path))
+    }
+
+    fn delete_folder_in_memory(&mut self, path: &str) -> io::Result<()> {
         let path = normalize_folder(path);
         if path.is_empty() {
             return Ok(());
@@ -499,7 +541,7 @@ impl ProfileStore {
         self.folders.retain(|f| !f.is_empty());
         self.folders.sort();
         self.folders.dedup();
-        self.save()
+        Ok(())
     }
 
     /// The sites in folder `path` and the folders inside it.
@@ -510,14 +552,34 @@ impl ProfileStore {
 
     /// Moves site `id` into `folder` and saves.
     pub fn move_site(&mut self, id: &str, folder: &str) -> io::Result<()> {
+        self.update(|store| store.move_site_in_memory(id, folder))
+    }
+
+    fn move_site_in_memory(&mut self, id: &str, folder: &str) -> io::Result<()> {
         let folder = normalize_folder(folder);
         match self.profiles.iter_mut().find(|p| p.id == id) {
             Some(p) if p.folder != folder => {
                 p.folder = folder;
-                self.save()
+                Ok(())
             }
             _ => Ok(()),
         }
+    }
+
+    /// Publish memory only after the complete transaction succeeds.
+    fn update(&mut self, change: impl FnOnce(&mut Self) -> io::Result<()>) -> io::Result<()> {
+        let _lock = crate::fsutil::lock_config(&self.path)?;
+        let mut latest = Self::load_locked(self.path.clone())?;
+        change(&mut latest)?;
+        latest.save()?;
+        *self = latest;
+        Ok(())
+    }
+
+    /// Refreshes cached lists without discarding them on a read error.
+    pub fn reload(&mut self) -> io::Result<()> {
+        *self = Self::load(self.path.clone())?;
+        Ok(())
     }
 
     fn save(&self) -> io::Result<()> {
@@ -529,6 +591,107 @@ impl ProfileStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stale_stores_preserve_other_sites_templates_and_folder_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        let mut a = ProfileStore::load(&path).unwrap();
+        let mut b = ProfileStore::load(&path).unwrap();
+        let first = SessionProfile { folder: "lab/sub".into(), ..SessionProfile::new().unwrap() };
+        let second = SessionProfile::new().unwrap();
+        a.upsert(first.clone()).unwrap();
+        b.upsert(second.clone()).unwrap();
+        assert_eq!(b.profiles().len(), 2);
+        let template = SiteTemplate { sites: vec![first.id.clone(), second.id.clone()], ..SiteTemplate::new().unwrap() };
+        a.upsert_template(template.clone()).unwrap();
+        b.rename_folder("lab", "prod").unwrap();
+        a.remove(&first.id).unwrap();
+        b.create_folder("empty").unwrap();
+        a.reload().unwrap();
+        assert_eq!(a.profiles(), &[second]);
+        assert_eq!(a.template(&template.id).unwrap().sites.len(), 1);
+        assert!(a.folders().contains(&"empty".into()));
+        b.remove_template(&template.id).unwrap();
+        a.delete_folder("empty").unwrap();
+        assert!(a.templates().is_empty());
+        assert!(!a.folders().contains(&"empty".into()));
+    }
+
+    #[test]
+    fn failed_transactions_preserve_file_and_cached_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        let mut store = ProfileStore::load(&path).unwrap();
+        let site = SessionProfile::new().unwrap();
+        store.upsert(site.clone()).unwrap();
+        let guard = crate::fsutil::lock_config(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(store.remove(&site.id).unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert_eq!(store.profiles(), std::slice::from_ref(&site));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        drop(guard);
+        std::fs::write(&path, "invalid = [").unwrap();
+        assert!(store.remove(&site.id).is_err());
+        assert!(store.reload().is_err());
+        assert_eq!(store.profiles(), &[site]);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "invalid = [");
+    }
+
+    #[test]
+    fn legacy_ids_are_persisted_once_for_all_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        std::fs::write(&path, "[[session]]\nhost = 'legacy'\n[[template]]\nname = 'old'\n").unwrap();
+        let a = ProfileStore::load(&path).unwrap();
+        let b = ProfileStore::load(&path).unwrap();
+        assert_eq!(a.profiles(), b.profiles());
+        assert_eq!(a.templates(), b.templates());
+    }
+
+    fn wait_file(path: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !path.exists() {
+            assert!(std::time::Instant::now() < deadline, "timeout: {}", path.display());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn process_worker() {
+        let Some(dir) = std::env::var_os("PLAYTERM_PROFILES_TEST_DIR") else { return };
+        let dir = PathBuf::from(dir);
+        let name = std::env::var("PLAYTERM_PROFILES_TEST_NAME").unwrap();
+        let mut store = ProfileStore::load(dir.join("sessions.toml")).unwrap();
+        std::fs::write(dir.join(format!("ready-{name}")), "").unwrap();
+        wait_file(&dir.join("start"));
+        for i in 0..10 {
+            store.upsert(SessionProfile { name: format!("{name}-{i}"), ..SessionProfile::new().unwrap() }).unwrap();
+        }
+    }
+
+    #[test]
+    fn concurrent_processes_keep_all_additions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut workers: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "profiles::tests::process_worker"])
+                    .env("PLAYTERM_PROFILES_TEST_DIR", dir.path())
+                    .env("PLAYTERM_PROFILES_TEST_NAME", name)
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for name in ["a", "b"] {
+            wait_file(&dir.path().join(format!("ready-{name}")));
+        }
+        std::fs::write(dir.path().join("start"), "").unwrap();
+        for worker in &mut workers {
+            assert!(worker.wait().unwrap().success());
+        }
+        assert_eq!(ProfileStore::load(dir.path().join("sessions.toml")).unwrap().profiles().len(), 20);
+    }
 
     #[test]
     fn tab_label_is_saved_and_optional() {

@@ -40,6 +40,8 @@ pub struct ConnectParams {
     pub default_identity_files: Vec<PathBuf>,
     /// Offer keys from running SSH agents (Windows OpenSSH agent, Pageant; `SSH_AUTH_SOCK` on Unix).
     pub use_agent: bool,
+    /// Opt in to legacy KEX/ciphers/MACs for this connection only; modern ones stay first.
+    pub ssh_legacy_algorithms: bool,
     /// Agent to use instead of `SSH_AUTH_SOCK` / the OpenSSH service pipe: a named pipe on
     /// Windows (Pageant is then not consulted), a Unix socket path elsewhere.
     pub agent_pipe: Option<String>,
@@ -84,6 +86,7 @@ impl fmt::Debug for ConnectParams {
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("identity_file", &self.identity_file)
             .field("use_agent", &self.use_agent)
+            .field("ssh_legacy_algorithms", &self.ssh_legacy_algorithms)
             .field("forwards", &self.forwards)
             .field("keepalive", &self.keepalive)
             .field("rdp", &self.rdp)
@@ -550,6 +553,7 @@ mod tests {
             identity_file: None,
             default_identity_files: Vec::new(),
             use_agent: false,
+            ssh_legacy_algorithms: false,
             agent_pipe: None,
             forwards: Vec::new(),
             serial: Default::default(),

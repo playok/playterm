@@ -16,6 +16,7 @@ fn params(port: &str) -> ConnectParams {
         identity_file: None,
         default_identity_files: Vec::new(),
         use_agent: false,
+        ssh_legacy_algorithms: false,
         agent_pipe: None,
         forwards: Vec::new(),
         serial: SerialSettings { port: port.into(), baud: 115200, ..Default::default() },

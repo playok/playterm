@@ -240,6 +240,33 @@ impl AppSettings {
         write_atomic(path, text.as_bytes())
     }
 
+    /// Uses defaults for malformed settings only after preserving the original bytes.
+    /// Read/backup errors are returned so the caller cannot overwrite an unpreserved file.
+    pub fn load_preserving(path: &Path) -> io::Result<(Self, Option<std::path::PathBuf>)> {
+        let _lock = crate::fsutil::lock_config(path)?;
+        match Self::load(path) {
+            Ok(settings) => Ok((settings, None)),
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                let mut name = path.as_os_str().to_owned();
+                name.push(format!(".{}.broken", crate::fsutil::random_id()?));
+                let backup = std::path::PathBuf::from(name);
+                let mut source = std::fs::File::open(path)?;
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt as _;
+                    options.mode(0o600);
+                }
+                let mut dest = options.open(&backup)?;
+                std::io::copy(&mut source, &mut dest)?;
+                dest.sync_all()?;
+                Ok((Self::default(), Some(backup)))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Values brought into their valid ranges (hand-edited files).
     pub fn clamped(mut self) -> Self {
         self.font_size = if self.font_size.is_finite() {
@@ -285,6 +312,32 @@ impl Default for AppSettings {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn malformed_settings_are_preserved_before_defaults_can_be_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let original = b"font_size = [invalid";
+        std::fs::write(&path, original).unwrap();
+        let (settings, backup) = super::AppSettings::load_preserving(&path).unwrap();
+        let backup = backup.unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+        let (_, second) = super::AppSettings::load_preserving(&path).unwrap();
+        assert_ne!(second.as_ref(), Some(&backup));
+        settings.save(&path).unwrap();
+        assert_eq!(std::fs::read(backup).unwrap(), original);
+        assert!(super::AppSettings::load_preserving(&path).unwrap().1.is_none());
+    }
+
+    #[test]
+    fn recovery_failure_does_not_authorize_default_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(&path, "invalid = [").unwrap();
+        crate::fsutil::with_id_entropy_failure(|| {
+            assert!(super::AppSettings::load_preserving(&path).is_err());
+        });
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "invalid = [");
+    }
 
     #[test]
     fn recent_sites_newest_first_without_repeats() {

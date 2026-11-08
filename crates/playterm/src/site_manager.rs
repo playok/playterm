@@ -237,13 +237,15 @@ impl SiteManager {
         }
     }
 
-    /// Validates the form. On success the form is reset to the saved state and the
-    /// returned result asks the app to store it.
-    fn save(&mut self, connect: bool, close: bool, has_secret: SecretCheck<'_>) -> Option<SiteManagerResult> {
+    /// Keep the draft until the app acknowledges a successful disk transaction.
+    fn save(&mut self, connect: bool, close: bool, _has_secret: SecretCheck<'_>) -> Option<SiteManagerResult> {
         let (profile, password) = self.form.as_mut()?.validate()?;
-        let secret = profile.save_password && (password.is_some() || has_secret(&profile));
-        self.select(&profile, secret);
         Some(SiteManagerResult::Save { profile: Box::new(profile), password, connect, close })
+    }
+
+    /// A failed save must not navigate away from the still-unsaved form.
+    pub fn save_failed(&mut self) {
+        self.pending = None;
     }
 
     /// Shows the window. `keys_free`: no terminal has the keyboard, so Escape is for this window.
@@ -723,7 +725,7 @@ impl SiteManager {
                 let close = matches!(next, Next::Close);
                 let saved = self.save(false, close, has_secret)?;
                 if let Next::Select(selection) = next {
-                    self.set_selection(selection, Some(store), has_secret);
+                    self.pending = Some(Next::Select(selection));
                 }
                 Some(saved)
             }

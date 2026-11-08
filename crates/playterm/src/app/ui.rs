@@ -185,11 +185,10 @@ impl PlaytermApp {
                 match dialogs::confirm(ctx, t("사이트 삭제", "Delete site"), &text, t("삭제", "Delete")) {
                     None => self.modal = Some(Modal::ConfirmDelete(id)),
                     Some(false) => {}
-                    Some(true) => {
-                        let r = self.store.remove(&id);
-                        self.report(t("사이트 삭제 실패", "Could not delete the site"), r);
-                        self.forget_secret(&id);
-                    }
+                    Some(true) => match self.store.remove(&id) {
+                        Ok(()) => self.forget_secret(&id),
+                        Err(e) => self.report(t("사이트 삭제 실패", "Could not delete the site"), Err(e)),
+                    },
                 }
             }
         }

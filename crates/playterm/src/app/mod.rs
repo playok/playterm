@@ -267,15 +267,16 @@ impl PlaytermApp {
 
         // Settings first: they choose the language of the messages below.
         let settings_path = config_dir.join("settings.toml");
-        let mut settings_error = None;
-        let settings = AppSettings::load(&settings_path).unwrap_or_else(|e| {
-            settings_error = Some(e);
-            AppSettings::default()
-        });
+        let (settings, settings_backup) = AppSettings::load_preserving(&settings_path)
+            .context(t("설정 파일을 안전하게 읽거나 보존할 수 없습니다", "Cannot safely read or preserve the settings file"))?;
         apply_ui(&cc.egui_ctx, &settings);
         let (store, mut status) = load_profiles(&config_dir.join("sessions.toml"));
-        if let Some(e) = settings_error {
-            status = Some(tr!("설정 파일을 읽을 수 없어 기본값을 씁니다: {e}", "Cannot read the settings file, using the defaults: {e}"));
+        if let Some(backup) = settings_backup {
+            status = Some(tr!(
+                "손상된 설정 파일을 {}에 보존하고 기본값을 씁니다",
+                "Preserved malformed settings at {} and using defaults",
+                backup.display()
+            ));
         }
         if let Err(e) = fonts::install(&cc.egui_ctx, &settings.font) {
             status = Some(e);
@@ -359,7 +360,8 @@ pub fn config_dir() -> Option<PathBuf> {
 fn load_profiles(path: &Path) -> (ProfileStore, Option<String>) {
     let err = match ProfileStore::load(path) {
         Ok(store) => return (store, None),
-        Err(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => e,
+        Err(e) => return (ProfileStore::empty(path), Some(format!("{}: {e}", path.display()))),
     };
     let mut backup = path.as_os_str().to_owned();
     backup.push(".broken");

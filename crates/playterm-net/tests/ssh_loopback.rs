@@ -390,8 +390,20 @@ impl Fixture {
         host_key: PrivateKey,
         certificates: Vec<russh::keys::Certificate>,
     ) -> Self {
+        Self::with_preferences(name, client_keys, sftp_gate, host_key, certificates, russh::Preferred::default())
+    }
+
+    fn with_preferences(
+        name: &str,
+        client_keys: &[&PrivateKey],
+        sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>,
+        host_key: PrivateKey,
+        certificates: Vec<russh::keys::Certificate>,
+        preferred: russh::Preferred,
+    ) -> Self {
         let server_rt = tokio::runtime::Runtime::new().unwrap();
         let config = Arc::new(server::Config {
+            preferred,
             keys: vec![host_key.clone()],
             certificates,
             auth_rejection_time: Duration::from_millis(10),
@@ -439,6 +451,7 @@ impl Fixture {
             identity_file: None,
             default_identity_files: Vec::new(),
             use_agent: false,
+            ssh_legacy_algorithms: false,
             agent_pipe: None,
             forwards: Vec::new(),
             serial: Default::default(),
@@ -463,6 +476,31 @@ impl Fixture {
         let path = self.dir.join(file);
         std::fs::write(&path, key.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
         path
+    }
+}
+
+#[test]
+fn legacy_algorithms_require_site_opt_in_and_exchange_data() {
+    use std::borrow::Cow;
+    for (name, kex) in [("legacy-g14", russh::kex::DH_G14_SHA1), ("legacy-g1", russh::kex::DH_G1_SHA1)] {
+        let preferred = russh::Preferred {
+            kex: Cow::Owned(vec![kex]),
+            cipher: Cow::Owned(vec![russh::cipher::AES_128_CBC]),
+            mac: Cow::Owned(vec![russh::mac::HMAC_SHA1]),
+            ..Default::default()
+        };
+        let fx = Fixture::with_preferences(name, &[], None, random_key(Algorithm::Ed25519), Vec::new(), preferred);
+        fx.trust_host();
+        let mut params = fx.params();
+        params.password = Some("secret".into());
+        let rejected = fx.connect(params.clone());
+        assert!(matches!(skip_notices(&rejected), SessionEvent::Closed(Some(_))));
+        params.ssh_legacy_algorithms = true;
+        let accepted = fx.connect(params);
+        assert!(matches!(skip_notices(&accepted), SessionEvent::Connected));
+        accepted.send(b"legacy-echo\r\n".to_vec());
+        assert!(read_until(&accepted, "legacy-echo").contains("legacy-echo"));
+        accepted.close();
     }
 }
 
@@ -531,8 +569,12 @@ fn host_certificate_fixture(name: &str, principal: &str, expired: bool) -> (Fixt
 
 #[test]
 fn host_certificate_negotiates_and_never_falls_back_to_tofu() {
-    for scenario in ["valid", "wrong-ca", "expired", "wrong-host", "no-ca"] {
-        let principal = if scenario == "wrong-host" { "wrong.example" } else { "127.0.0.1" };
+    for scenario in ["valid", "wildcard", "wrong-ca", "expired", "wrong-host", "no-ca"] {
+        let principal = match scenario {
+            "wrong-host" => "wrong.example",
+            "wildcard" => "127.0.*.?",
+            _ => "127.0.0.1",
+        };
         let (fx, ca) = host_certificate_fixture(&format!("host-cert-{scenario}"), principal, scenario == "expired");
         let ca = if scenario == "wrong-ca" { random_key(Algorithm::Ed25519) } else { ca };
         let trust = if scenario == "no-ca" {
@@ -542,7 +584,7 @@ fn host_certificate_negotiates_and_never_falls_back_to_tofu() {
         };
         std::fs::write(&fx.known_hosts, &trust).unwrap();
         let handle = fx.connect(ConnectParams { password: Some("secret".into()), ..fx.params() });
-        if scenario == "valid" {
+        if matches!(scenario, "valid" | "wildcard") {
             expect_connected(&handle);
             handle.close();
         } else {
@@ -889,6 +931,7 @@ fn rsa_agent_paths_keep_local_file_policy() {
             identity_file: Some(rsa_path.clone()),
             default_identity_files: vec![rsa_path.clone()],
             use_agent: true,
+            ssh_legacy_algorithms: false,
             agent_pipe: Some(pipe),
             ..fx.params()
         });
@@ -1050,6 +1093,7 @@ fn two_public_keys_continue_within_agents_and_across_file_agent_sources() {
             username: "twokeys".into(),
             identity_file,
             use_agent: true,
+            ssh_legacy_algorithms: false,
             agent_pipe: Some(agent.clone()),
             default_identity_files: defaults,
             ..fx.params()
@@ -1066,6 +1110,7 @@ fn two_public_keys_continue_within_agents_and_across_file_agent_sources() {
         username: "twokeys".into(),
         identity_file: Some(a_path.clone()),
         use_agent: true,
+        ssh_legacy_algorithms: false,
         agent_pipe: Some(only_a),
         default_identity_files: vec![a_path],
         ..fx.params()
@@ -1074,6 +1119,7 @@ fn two_public_keys_continue_within_agents_and_across_file_agent_sources() {
     answer_key_otp(&fx.connect(ConnectParams {
         username: "twokeysotp".into(),
         use_agent: true,
+        ssh_legacy_algorithms: false,
         agent_pipe: Some(both),
         password: Some("123456".into()),
         ..fx.params()
@@ -1092,6 +1138,7 @@ fn two_public_keys_continue_between_unix_agents() {
         expect_connected(&fx.connect(ConnectParams {
             username: "twokeys".into(),
             use_agent: true,
+            ssh_legacy_algorithms: false,
             agent_pipe: Some(std::env::var("PLAYTERM_FIRST_AGENT").unwrap()),
             ..fx.params()
         }));
@@ -1271,6 +1318,7 @@ fn encrypted_key_asks_for_passphrase() {
         identity_file: Some(path),
         default_identity_files: vec![default],
         use_agent: true,
+        ssh_legacy_algorithms: false,
         password: Some("secret".into()),
         ..fx.params()
     };

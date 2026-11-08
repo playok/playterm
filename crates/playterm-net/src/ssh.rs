@@ -206,13 +206,23 @@ type Hops = Vec<client::Handle<ClientHandler>>;
 /// A connection being made: the session and the jump hosts it goes through.
 type Connecting<'a> = Pin<Box<dyn Future<Output = anyhow::Result<(client::Handle<ClientHandler>, Hops)>> + Send + 'a>>;
 
+fn algorithm_preferences(legacy: bool) -> russh::Preferred {
+    let mut preferred = russh::Preferred::default();
+    if legacy {
+        preferred.kex.to_mut().extend([russh::kex::DH_G14_SHA1, russh::kex::DH_G1_SHA1]);
+        preferred.cipher.to_mut().extend([russh::cipher::AES_128_CBC, russh::cipher::AES_192_CBC, russh::cipher::AES_256_CBC]);
+        preferred.mac.to_mut().extend([russh::mac::HMAC_SHA1_ETM, russh::mac::HMAC_SHA1]);
+    }
+    preferred
+}
+
 /// An authenticated SSH session with `params.host`: over TCP, or through `params.jump` (a
 /// direct-tcpip channel of the jump host's session, which may itself go through another).
 /// Returns the session and the jump hosts' sessions, outermost last.
 fn connect_ssh<'a>(params: &'a ConnectParams, sink: &'a EventSink, x11: Option<Arc<X11Forward>>) -> Connecting<'a> {
     Box::pin(async move {
         // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
-        let mut preferred = russh::Preferred::default();
+        let mut preferred = algorithm_preferences(params.ssh_legacy_algorithms);
         preferred.key = Cow::Owned(prefer_known_host_keys(&preferred.key, &params.host, params.port, &params.known_hosts));
         // Prefer the certificate when offered. Missing CA trust then rejects the
         // certificate instead of silently falling back to bare-key TOFU.
@@ -404,6 +414,18 @@ async fn open_sftp(session: &client::Handle<ClientHandler>, sink: &EventSink) ->
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_preferences_append_without_weakening_defaults() {
+        let safe = super::algorithm_preferences(false);
+        let legacy = super::algorithm_preferences(true);
+        assert!(!safe.kex.contains(&russh::kex::DH_G14_SHA1));
+        assert!(!safe.kex.contains(&russh::kex::DH_G1_SHA1));
+        assert!(!safe.cipher.contains(&russh::cipher::AES_128_CBC));
+        assert!(!safe.mac.contains(&russh::mac::HMAC_SHA1));
+        assert!(legacy.kex.starts_with(&safe.kex));
+        assert!(legacy.cipher.starts_with(&safe.cipher));
+        assert!(legacy.mac.starts_with(&safe.mac));
+    }
     use super::*;
     use russh::keys::EcdsaCurve;
 

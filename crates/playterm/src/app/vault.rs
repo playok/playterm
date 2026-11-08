@@ -9,11 +9,13 @@ impl PlaytermApp {
         }
     }
 
-    pub(super) fn save_profile(&mut self, profile: SessionProfile, password: Option<Zeroizing<String>>, connect: bool) {
+    pub(super) fn save_profile(&mut self, profile: SessionProfile, password: Option<Zeroizing<String>>, connect: bool) -> bool {
         let id = profile.id.clone();
         let save_password = profile.save_password;
-        let r = self.store.upsert(profile);
-        self.report(t("사이트 저장 실패", "Could not save the site"), r);
+        if let Err(e) = self.store.upsert(profile) {
+            self.report(t("사이트 저장 실패", "Could not save the site"), Err(e));
+            return false;
+        }
 
         if !save_password {
             self.forget_secret(&id);
@@ -38,6 +40,7 @@ impl PlaytermApp {
             _ if connect => self.connect_saved(&id),
             _ => {}
         }
+        true
     }
 
     /// Saves the password typed at a successful login for site `id`, unlocking (or creating)
@@ -193,8 +196,10 @@ impl PlaytermApp {
             }
         };
         copy.save_password &= secret.is_some();
-        let r = self.store.upsert(copy.clone());
-        self.report(t("사이트 저장 실패", "Could not save the site"), r);
+        if let Err(e) = self.store.upsert(copy.clone()) {
+            self.report(t("사이트 저장 실패", "Could not save the site"), Err(e));
+            return None;
+        }
         if let Some(secret) = secret {
             let r = self.vault.set(&copy.id, &vault_target(&copy), &secret);
             self.report(t("비밀번호 복사 실패", "Could not copy the password"), r);
@@ -213,6 +218,8 @@ impl PlaytermApp {
             }
             return;
         }
+        let result = self.store.reload();
+        self.report(t("사이트 목록을 읽을 수 없습니다", "Could not reload the sites"), result);
         let mut manager = SiteManager::default();
         manager.view = self.settings.site_view;
         if new_site {
@@ -297,10 +304,17 @@ impl PlaytermApp {
             SiteManagerResult::Open => self.site_manager = Some(manager),
             SiteManagerResult::Close => {}
             SiteManagerResult::Save { profile, password, connect, close } => {
-                if !connect && !close {
+                let saved_profile = profile.clone();
+                let mut saved = false;
+                self.connect_in(target, |app| saved = app.save_profile(*profile, password, connect));
+                if saved {
+                    manager.select(&saved_profile, has_secret(&self.vault, &saved_profile));
+                } else {
+                    manager.save_failed();
+                }
+                if !saved || (!connect && !close) {
                     self.site_manager = Some(manager);
                 }
-                self.connect_in(target, |app| app.save_profile(*profile, password, connect));
             }
             SiteManagerResult::Connect(id) => self.connect_in(target, |app| app.connect_saved(&id)),
             SiteManagerResult::Duplicate(id) => {

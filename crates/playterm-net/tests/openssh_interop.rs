@@ -15,6 +15,7 @@ fn params(known_hosts: PathBuf, port_variable: &str) -> ConnectParams {
         password: None,
         default_identity_files: vec![],
         use_agent: false,
+        ssh_legacy_algorithms: false,
         agent_pipe: None,
         forwards: vec![],
         serial: Default::default(),
