@@ -132,6 +132,10 @@ pub struct SessionProfile {
     pub save_password: bool,
     /// Private key file (OpenSSH or PuTTY .ppk); empty for none. `~` expands to the home dir.
     pub identity_file: String,
+    /// Optional OpenSSH user certificate; empty discovers `<identity_file>-cert.pub`.
+    pub certificate_file: String,
+    /// Allow the remote shell to use the local SSH agent. Opt-in per site.
+    pub agent_forwarding: bool,
     /// Offer keys from a running SSH agent (Pageant, Windows OpenSSH agent).
     pub use_agent: bool,
     /// Append SHA-1 KEX/MAC and AES-CBC for this site's older SSH equipment only.
@@ -180,6 +184,8 @@ impl Default for SessionProfile {
             term_type: "xterm-256color".into(),
             save_password: false,
             identity_file: String::new(),
+            certificate_file: String::new(),
+            agent_forwarding: false,
             use_agent: true,
             ssh_legacy_algorithms: false,
             forwards: Vec::new(),
@@ -917,6 +923,7 @@ mod tests {
         let p = &store.profiles()[0];
         assert_eq!((p.id.as_str(), p.port, p.protocol), ("x", 22, Protocol::Ssh));
         assert!(p.use_agent && p.identity_file.is_empty(), "files from older versions keep agent auth on");
+        assert!(!p.agent_forwarding && p.certificate_file.is_empty(), "older sites never enable agent forwarding");
         assert_eq!(p.keepalive, KeepAlive::default(), "and get protocol keep-alives");
     }
 
@@ -926,6 +933,8 @@ mod tests {
             name: "core".into(),
             host: "10.0.0.1".into(),
             username: "admin".into(),
+            certificate_file: "~/.ssh/work-cert.pub".into(),
+            agent_forwarding: true,
             tab_color: Some(TabColor::Blue),
             auto_login: AutoLogin { enabled: true, steps: AutoLogin::standard_steps() },
             ..SessionProfile::new().unwrap()

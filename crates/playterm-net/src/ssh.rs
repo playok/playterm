@@ -30,10 +30,34 @@ pub(crate) struct ClientHandler {
     remote_forwards: Vec<ForwardRule>,
     /// X11 forwarding asked for: where the server's `x11` channels go.
     x11: Option<Arc<X11Forward>>,
+    agent_forward: crate::agent_forward::Shared,
+    /// Dropping the SSH handler aborts every relay, including a stalled local agent.
+    agent_tasks: JoinSet<()>,
 }
 
 impl client::Handler for ClientHandler {
     type Error = anyhow::Error;
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        while self.agent_tasks.try_join_next().is_some() {}
+        let forward = self.agent_forward.lock().unwrap().clone();
+        let Some(forward) = forward.filter(|_| self.agent_tasks.len() < 16) else {
+            reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
+            return Ok(());
+        };
+        let sink = self.sink.clone();
+        self.agent_tasks.spawn(async move {
+            if let Err(e) = forward.relay(channel, reply).await {
+                sink.notice(tr!("SSH 에이전트 포워딩: {e:#}", "SSH agent forwarding: {e:#}"));
+            }
+        });
+        Ok(())
+    }
 
     async fn check_server_key(&mut self, server_key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
         let authorities = crate::host_certificate::load(&self.known_hosts, &self.host, self.port)?;
@@ -219,7 +243,12 @@ fn algorithm_preferences(legacy: bool) -> russh::Preferred {
 /// An authenticated SSH session with `params.host`: over TCP, or through `params.jump` (a
 /// direct-tcpip channel of the jump host's session, which may itself go through another).
 /// Returns the session and the jump hosts' sessions, outermost last.
-fn connect_ssh<'a>(params: &'a ConnectParams, sink: &'a EventSink, x11: Option<Arc<X11Forward>>) -> Connecting<'a> {
+fn connect_ssh<'a>(
+    params: &'a ConnectParams,
+    sink: &'a EventSink,
+    x11: Option<Arc<X11Forward>>,
+    agent_forward: crate::agent_forward::Shared,
+) -> Connecting<'a> {
     Box::pin(async move {
         // keepalive@openssh.com requests also notice a dead connection (no reply 3 times).
         let mut preferred = algorithm_preferences(params.ssh_legacy_algorithms);
@@ -239,6 +268,8 @@ fn connect_ssh<'a>(params: &'a ConnectParams, sink: &'a EventSink, x11: Option<A
             sink: sink.clone(),
             remote_forwards: params.forwards.iter().filter(|r| r.kind == ForwardKind::Remote).cloned().collect(),
             x11,
+            agent_forward,
+            agent_tasks: JoinSet::new(),
         };
         let (mut session, hops) = match &params.jump {
             None => {
@@ -249,7 +280,7 @@ fn connect_ssh<'a>(params: &'a ConnectParams, sink: &'a EventSink, x11: Option<A
                 (client::connect_stream(config, stream, handler).await?, Hops::new())
             }
             Some(jump) => {
-                let (bastion, mut hops) = connect_ssh(jump, sink, None).await?;
+                let (bastion, mut hops) = connect_ssh(jump, sink, None, Arc::default()).await?;
                 let channel = bastion
                     .channel_open_direct_tcpip(params.host.as_str(), params.port.into(), "127.0.0.1", 0)
                     .await
@@ -282,13 +313,31 @@ async fn open(
         Some(request) => Some(Arc::new(X11Forward::new(&request.display, request.trusted).await?)),
         None => None,
     };
-    let (session, hops) = connect_ssh(params, sink, x11.clone()).await?;
+    let agent_forward = crate::agent_forward::Shared::default();
+    let (session, hops) = connect_ssh(params, sink, x11.clone(), agent_forward.clone()).await?;
     // Shared with forwarding listeners and SFTP, which open their own channels.
     let session = Arc::new(session);
     let mut tasks = JoinSet::new();
     forward::start(&session, &params.forwards, sink, &mut tasks).await;
 
-    let channel = session.channel_open_session().await?;
+    let mut channel = session.channel_open_session().await?;
+    if params.agent_forwarding {
+        let binding = session
+            .agent_session_binding()
+            .cloned()
+            .context(t("SSH 에이전트의 세션 바인딩을 만들 수 없습니다", "Cannot bind the SSH agent to this session"))?;
+        let forward = crate::agent_forward::Forward::prepare(params, binding).await?;
+        // The server may open channels immediately after acknowledging this request.
+        *agent_forward.lock().unwrap() = Some(forward);
+        channel.agent_forward(true).await?;
+        match channel.wait().await {
+            Some(ChannelMsg::Success) => sink.notice(t("SSH 에이전트 포워딩을 허용했습니다", "SSH agent forwarding enabled")),
+            _ => {
+                *agent_forward.lock().unwrap() = None;
+                bail!(t("서버가 SSH 에이전트 포워딩을 거부했습니다", "The server refused SSH agent forwarding"));
+            }
+        }
+    }
     channel.request_pty(false, &params.term_type, params.cols.into(), params.rows.into(), 0, 0, &[]).await?;
     if let Some(x11) = &x11 {
         channel.request_x11(false, false, x11::AUTH_PROTOCOL, x11.fake_cookie_hex(), x11.screen).await?;

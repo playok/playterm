@@ -436,6 +436,16 @@ Turn on **Legacy SSH equipment compatibility** in a site's advanced settings to 
 
 ## SSH authentication order
 
+In a site's advanced settings, **User certificate** selects an OpenSSH user certificate (`*-cert.pub`) signed with the matching private key file or agent identity. Leave it blank to discover the private-key path plus `-cert.pub`. Certificates listed by the agent precede bare keys. The SSH server validates the CA, principals, validity and permissions.
+
+An unreadable or malformed explicit certificate causes a connection error. Rejection of an explicit certificate does not retry that key as a bare identity. Automatically discovered or agent-listed certificates may fall back to bare keys. Additional authentication such as OTP remains supported, as does the local RSA private-key signing restriction.
+
+**SSH agent forwarding (-A)** is off by default. Enabling it lets the remote server request authentication signatures from this PC's agent: use it only for trusted sites. It is independent of agent login and applies only to the interactive destination, never to jump hosts. Windows uses the named pipe in `SSH_AUTH_SOCK`, or the OpenSSH agent and Pageant; Unix uses `SSH_AUTH_SOCK`. The endpoint is selected per connection and relay connections are released when the SSH session ends. An unavailable agent or server refusal causes a connection error.
+
+At the local prompt, `ssh -A user@host` enables agent forwarding and `-a` disables it. Select a user certificate in site settings, or place the `-cert.pub` file alongside the private key passed with `-i`.
+
+Native GSSAPI/Kerberos, PKCS#11 and FIDO2 integration is not yet implemented. Device compatibility through an external agent needs validation with that agent and actual hardware (#247).
+
 SSH host certificates require an explicitly trusted CA in `known_hosts`. See [configuration and validation](docs/ssh-host-certificates.md) for CA scope, validity, hostname and revocation checks. Manage stored SSH keys and RDP fingerprints from Tools → Remembered host keys and certificates.
 
 1. The key file set for the session (OpenSSH format / PuTTY `.ppk`; asks for the passphrase if it has one)

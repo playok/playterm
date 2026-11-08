@@ -22,7 +22,8 @@ pub fn help() -> &'static str {
 
 const HELP_KO: &str = "\
 \x1b[1m사용할 수 있는 명령\x1b[0m
-  ssh [-p 포트] [-l 사용자] [-i 키파일] [-J 점프호스트] [-X|-Y] [-L|-R 포트:호스트:포트] [-D 포트] [--cp949] [사용자@]호스트[:포트]
+  ssh [-p 포트] [-l 사용자] [-i 키파일] [-J 점프호스트] [-A|-a] [-X|-Y] [-L|-R 포트:호스트:포트] [-D 포트] [--cp949] [사용자@]호스트[:포트]
+                                    -A: 에이전트 포워딩 (신뢰하는 서버에만), -a: 끔
   telnet 호스트 [포트]              Telnet 접속 (--cp949: 한글 구형 장비)
   serial COM3 [속도]                시리얼 콘솔 (기본 9600 8N1)
   rdp [사용자@]호스트[:포트]         원격 데스크톱 (Windows RDP)
@@ -45,7 +46,8 @@ const HELP_KO: &str = "\
 
 const HELP_EN: &str = "\
 \x1b[1mAvailable commands\x1b[0m
-  ssh [-p port] [-l user] [-i keyfile] [-J jumphost] [-X|-Y] [-L|-R port:host:port] [-D port] [--cp949] [user@]host[:port]
+  ssh [-p port] [-l user] [-i keyfile] [-J jumphost] [-A|-a] [-X|-Y] [-L|-R port:host:port] [-D port] [--cp949] [user@]host[:port]
+                                    -A: forward the agent (trusted servers only), -a: disable
   telnet host [port]                Telnet connection (--cp949: older Korean devices)
   serial COM3 [speed]               Serial console (default 9600 8N1)
   rdp [user@]host[:port]            Remote desktop (Windows RDP)
@@ -144,6 +146,7 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
     let mut jump = String::new();
     let mut x11 = false;
     let mut x11_trusted = false;
+    let mut agent_forwarding = false;
     let mut forwards = Vec::new();
     let mut charset = Charset::Auto;
     let mut target = None;
@@ -158,6 +161,8 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
             "-J" => jump = value(t("점프 호스트", "jump host"))?,
             "-X" => x11 = true,
             "-Y" => (x11, x11_trusted) = (true, true),
+            "-A" => agent_forwarding = true,
+            "-a" => agent_forwarding = false,
             "-L" | "-R" | "-D" => {
                 let kind = match arg.as_str() {
                     "-L" => ForwardKind::Local,
@@ -186,6 +191,7 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
     profile.jump_host = jump;
     profile.x11_forwarding = x11;
     profile.x11_trusted = x11_trusted;
+    profile.agent_forwarding = agent_forwarding;
     profile.forwards = forwards;
     profile.charset = charset;
     Ok(profile)
@@ -651,6 +657,10 @@ mod tests {
         assert!(p.x11_forwarding && !p.x11_trusted, "-X is untrusted");
         let p = connect("ssh -Y -p 2222 web");
         assert!(p.x11_forwarding && p.x11_trusted);
+        assert!(!connect("ssh web").agent_forwarding);
+        assert!(connect("ssh -A web").agent_forwarding);
+        assert!(!connect("ssh -A -a web").agent_forwarding);
+        assert!(connect("ssh -a -A web").agent_forwarding);
         assert!(matches!(parse("ssh -J"), Parsed::Error(_)), "-J needs a host");
 
         let p = connect("ssh me@host:2200 -L 8080:db:5432 -D 1080");

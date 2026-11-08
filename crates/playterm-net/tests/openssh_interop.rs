@@ -16,6 +16,8 @@ fn params(known_hosts: PathBuf, port_variable: &str) -> ConnectParams {
         default_identity_files: vec![],
         use_agent: false,
         ssh_legacy_algorithms: false,
+        certificate_file: None,
+        agent_forwarding: false,
         agent_pipe: None,
         forwards: vec![],
         serial: Default::default(),
@@ -60,6 +62,55 @@ fn openssh_trusted_host_certificate_without_tofu() {
     assert!(verified, "the certificate validation notice must precede authentication");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), trust);
     handle.close();
+}
+
+#[test]
+#[ignore = "requires an isolated OpenSSH user-certificate server and ssh-agent; see scripts/test-openssh.sh"]
+fn openssh_user_certificates_and_forwarded_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let net = NetRuntime::new().unwrap();
+    for (agent, forwarding) in [(false, false), (true, false), (true, true)] {
+        let mut options = params(dir.path().join("known_hosts"), "PLAYTERM_OPENSSH_USER_CERT_PORT");
+        options.use_agent = agent;
+        options.agent_forwarding = forwarding;
+        options.agent_pipe = Some(std::env::var("SSH_AUTH_SOCK").unwrap());
+        if agent {
+            options.identity_file = None;
+        }
+        let port = options.port;
+        let user = options.username.clone();
+        let handle = net.connect(options, Arc::new(|| {}));
+        let deadline = Instant::now() + Duration::from_secs(25);
+        let mut output = String::new();
+        let expected = if forwarding { "forward-signed" } else { "agent-disabled" };
+        loop {
+            assert!(Instant::now() < deadline, "agent={agent}, forwarding={forwarding}: {output}");
+            match handle.try_recv() {
+                Some(SessionEvent::HostKeyCheck(check)) => check.answer(true), // disposable loopback server only
+                Some(SessionEvent::Connected) => {
+                    let command = if forwarding {
+                        // The second SSH client must sign through the forwarded agent; it has no key files.
+                        format!(
+                            "ssh -F /dev/null -p {port} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=publickey {user}@127.0.0.1 printf forward-%s signed\r"
+                        )
+                    } else {
+                        "if [ -z \"$SSH_AUTH_SOCK\" ]; then printf 'agent-%s\\n' disabled; fi\r".into()
+                    };
+                    handle.send(command.into_bytes());
+                }
+                Some(SessionEvent::Data(data)) => {
+                    output.push_str(&String::from_utf8_lossy(&data));
+                    if output.contains(expected) {
+                        break;
+                    }
+                }
+                Some(SessionEvent::Closed(error)) => panic!("OpenSSH user certificate failed: {error:?}; {output}"),
+                Some(SessionEvent::AuthPrompt(_)) => panic!("certificate authentication unexpectedly prompted"),
+                _ => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        handle.close();
+    }
 }
 
 #[test]

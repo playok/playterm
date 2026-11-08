@@ -1,5 +1,7 @@
 //! End-to-end SSH tests against an in-process russh server on 127.0.0.1.
 
+#[path = "common/certificate_agent.rs"]
+mod certificate_agent;
 mod common;
 
 use std::collections::HashMap;
@@ -21,6 +23,9 @@ use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct TestServer {
+    user_ca: Arc<Mutex<Option<PublicKey>>>,
+    agent_events: Arc<Mutex<Vec<String>>>,
+    allow_agent: Arc<std::sync::atomic::AtomicBool>,
     forward_address: Arc<Mutex<Option<String>>>,
     accepted_keys: Vec<PublicKey>,
     sftp_gate: Option<Arc<common::sftp_fs::TransferGate>>,
@@ -74,6 +79,30 @@ fn reject() -> Auth {
 
 impl server::Handler for TestServer {
     type Error = russh::Error;
+
+    async fn auth_openssh_certificate(&mut self, user: &str, cert: &russh::keys::Certificate) -> Result<Auth, Self::Error> {
+        use russh::keys::HashAlg;
+        self.auth_calls.lock().unwrap().push("certificate".into());
+        let ca = self.user_ca.lock().unwrap().clone();
+        let Some(ca) = ca else { return Ok(reject()) };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        if cert.cert_type() != russh::keys::ssh_key::certificate::CertType::User
+            || !cert.valid_principals().iter().any(|p| p == user)
+            || cert.validate_at(now, &[ca.fingerprint(HashAlg::Sha256)]).is_err()
+        {
+            return Ok(reject());
+        }
+        Ok(if user == "keyotp" {
+            Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])), partial_success: true }
+        } else {
+            Auth::Accept
+        })
+    }
+
+    async fn agent_request(&mut self, _channel: ChannelId, _session: &mut Session) -> Result<bool, Self::Error> {
+        self.agent_events.lock().unwrap().push("requested".into());
+        Ok(self.allow_agent.load(std::sync::atomic::Ordering::SeqCst))
+    }
 
     async fn auth_none(&mut self, user: &str) -> Result<Auth, Self::Error> {
         Ok(if user.starts_with("twokeys") {
@@ -179,6 +208,9 @@ impl server::Handler for TestServer {
         reply: server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        // An unsolicited agent channel on a bastion must be rejected even if the
+        // destination enabled forwarding, or the jump profile contained that option.
+        probe_agent(_session.handle(), self.agent_events.clone());
         let Ok(mut tcp) = tokio::net::TcpStream::connect((host, port as u16)).await else {
             reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
             return Ok(());
@@ -282,6 +314,24 @@ impl server::Handler for TestServer {
         if !self.shells.lock().unwrap().contains(&channel) {
             return Ok(());
         }
+        if data == b"probe-agent" {
+            probe_agent(session.handle(), self.agent_events.clone());
+            return Ok(());
+        }
+        if data == b"hold-agent" {
+            let handle = session.handle();
+            let events = self.agent_events.clone();
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt as _;
+                let channel = handle.channel_open_agent().await.unwrap();
+                let mut agent = russh::keys::agent::client::AgentClient::connect(channel.into_stream());
+                assert_eq!(agent.request_identities().await.unwrap().len(), 1);
+                events.lock().unwrap().push("holding".into());
+                let _ = agent.into_inner().read(&mut [0u8; 1]).await;
+                events.lock().unwrap().push("relay-closed".into());
+            });
+            return Ok(());
+        }
         session.data(channel, [b"echo:".as_slice(), data].concat())
     }
 
@@ -299,6 +349,9 @@ impl server::Handler for TestServer {
 }
 
 struct Fixture {
+    user_ca: Arc<Mutex<Option<PublicKey>>>,
+    agent_events: Arc<Mutex<Vec<String>>>,
+    allow_agent: Arc<std::sync::atomic::AtomicBool>,
     forward_address: Arc<Mutex<Option<String>>>,
     auth_calls: Arc<Mutex<Vec<String>>>,
     server_rt: tokio::runtime::Runtime,
@@ -316,6 +369,271 @@ fn random_key(alg: Algorithm) -> PrivateKey {
 fn rsa_key() -> PrivateKey {
     let key = russh::keys::ssh_key::private::RsaKeypair::random(&mut rand::rng(), 2048).unwrap();
     PrivateKey::from(key)
+}
+
+fn probe_agent(handle: server::Handle, events: Arc<Mutex<Vec<String>>>) {
+    tokio::spawn(async move {
+        let result = match handle.channel_open_agent().await {
+            Err(_) => "rejected",
+            Ok(channel) => {
+                let mut agent = russh::keys::agent::client::AgentClient::connect(channel.into_stream());
+                let ids = agent.request_identities().await.unwrap();
+                assert_eq!(ids.len(), 1);
+                let signed = agent.sign_request(&ids[0], None, b"forwarded-signature".to_vec()).await.unwrap();
+                assert!(signed.len() > b"forwarded-signature".len());
+                "signed"
+            }
+        };
+        events.lock().unwrap().push(result.into());
+    });
+}
+
+fn wait_agent_event(fx: &Fixture, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if fx.agent_events.lock().unwrap().iter().any(|event| event == expected) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "waiting for {expected}: {:?}", fx.agent_events.lock().unwrap());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn user_certificate(ca: &PrivateKey, key: &PrivateKey, user: &str, expired: bool) -> russh::keys::Certificate {
+    use russh::keys::ssh_key::certificate::{Builder, CertType};
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let mut builder =
+        Builder::new_with_random_nonce(&mut rand::rng(), key.public_key(), now - 60, if expired { now - 1 } else { now + 3600 }).unwrap();
+    builder.cert_type(CertType::User).unwrap().valid_principal(user).unwrap();
+    builder.sign(ca).unwrap()
+}
+
+#[test]
+fn user_certificate_files_authenticate_and_preserve_otp_and_rsa_policy() {
+    let key = random_key(Algorithm::Ed25519);
+    let ca = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("user-certificate", &[]);
+    fx.trust_host();
+    *fx.user_ca.lock().unwrap() = Some(ca.public_key().clone());
+    let key_path = fx.write_key("identity", &key);
+    let cert_path = fx.dir.join("identity-cert.pub");
+    for explicit in [false, true] {
+        std::fs::write(&cert_path, user_certificate(&ca, &key, "tester", false).to_openssh().unwrap()).unwrap();
+        fx.auth_calls.lock().unwrap().clear();
+        let h = fx.connect(ConnectParams {
+            identity_file: Some(key_path.clone()),
+            certificate_file: explicit.then(|| cert_path.clone()),
+            ..fx.params()
+        });
+        expect_connected(&h);
+        assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["certificate"]);
+        h.close();
+    }
+    std::fs::write(&cert_path, user_certificate(&ca, &key, "keyotp", false).to_openssh().unwrap()).unwrap();
+    fx.auth_calls.lock().unwrap().clear();
+    let h = fx.connect(ConnectParams {
+        username: "keyotp".into(),
+        identity_file: Some(key_path),
+        certificate_file: Some(cert_path.clone()),
+        password: Some("secret".into()),
+        ..fx.params()
+    });
+    answer_key_otp(&h);
+    assert!(!fx.auth_calls.lock().unwrap().iter().any(|v| v == "password"));
+    h.close();
+
+    let rsa = rsa_key();
+    let rsa_path = fx.write_key("rsa", &rsa);
+    std::fs::write(&cert_path, user_certificate(&ca, &rsa, "tester", false).to_openssh().unwrap()).unwrap();
+    fx.auth_calls.lock().unwrap().clear();
+    let h = fx.connect(ConnectParams {
+        identity_file: Some(rsa_path),
+        certificate_file: Some(cert_path),
+        password: Some("secret".into()),
+        ..fx.params()
+    });
+    expect_connected(&h);
+    assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["password"]);
+}
+
+#[test]
+fn user_certificate_rejection_does_not_hide_bare_key_or_explicit_errors() {
+    let key = random_key(Algorithm::Ed25519);
+    let ca = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("certificate-rejection", &[&key]);
+    fx.trust_host();
+    *fx.user_ca.lock().unwrap() = Some(ca.public_key().clone());
+    let key_path = fx.write_key("identity", &key);
+    let cert_path = fx.dir.join("identity-cert.pub");
+    for (user, expired) in [("wrong-principal", false), ("tester", true)] {
+        std::fs::write(&cert_path, user_certificate(&ca, &key, user, expired).to_openssh().unwrap()).unwrap();
+        fx.auth_calls.lock().unwrap().clear();
+        let h = fx.connect(ConnectParams { identity_file: Some(key_path.clone()), ..fx.params() });
+        expect_connected(&h);
+        assert_eq!(fx.auth_calls.lock().unwrap().last().unwrap(), "publickey");
+        h.close();
+    }
+    // An explicit rejected certificate must not silently submit the same key as a bare identity.
+    fx.auth_calls.lock().unwrap().clear();
+    let h = fx.connect(ConnectParams {
+        identity_file: Some(key_path.clone()),
+        certificate_file: Some(cert_path.clone()),
+        password: Some("secret".into()),
+        ..fx.params()
+    });
+    expect_connected(&h);
+    assert!(!fx.auth_calls.lock().unwrap().iter().any(|v| v == "publickey"));
+    h.close();
+    // Parse failures are actionable connection errors, not unnoticed password fallback.
+    std::fs::write(&cert_path, "not a certificate").unwrap();
+    let h = fx.connect(ConnectParams {
+        identity_file: Some(key_path),
+        certificate_file: Some(cert_path),
+        password: Some("secret".into()),
+        ..fx.params()
+    });
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+}
+
+#[test]
+fn explicit_user_certificate_can_use_a_bare_agent_identity() {
+    let key = random_key(Algorithm::Ed25519);
+    let ca = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("certificate-agent-bare", &[]);
+    fx.trust_host();
+    *fx.user_ca.lock().unwrap() = Some(ca.public_key().clone());
+    let pipe = start_test_agent(&fx, &[&key], "certificate-agent-bare");
+    let path = fx.dir.join("user-cert.pub");
+    std::fs::write(&path, user_certificate(&ca, &key, "tester", false).to_openssh().unwrap()).unwrap();
+    let h = fx.connect(ConnectParams { certificate_file: Some(path), use_agent: true, agent_pipe: Some(pipe), ..fx.params() });
+    expect_connected(&h);
+    assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["certificate"]);
+}
+
+#[test]
+fn agent_certificate_identities_precede_bare_keys_and_deduplicate_certificates() {
+    // A rejected fixture must never fall back to the developer's real Unix agent.
+    #[cfg(unix)]
+    if std::env::var_os("PLAYTERM_CERT_AGENT_ISOLATED").is_none() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "agent_certificate_identities_precede_bare_keys_and_deduplicate_certificates", "--nocapture"])
+            .env("PLAYTERM_CERT_AGENT_ISOLATED", "1")
+            .env_remove("SSH_AUTH_SOCK")
+            .status()
+            .unwrap();
+        assert!(result.success());
+        return;
+    }
+    let key = random_key(Algorithm::Ed25519);
+    let ca = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("agent-cert-identities", &[&key]);
+    fx.trust_host();
+    *fx.user_ca.lock().unwrap() = Some(ca.public_key().clone());
+    let wrong = user_certificate(&ca, &key, "wrong-user", false);
+    let good = user_certificate(&ca, &key, "tester", false);
+    for (label, certs, expected) in [
+        ("accepted", vec![wrong.clone(), wrong.clone(), good], vec!["certificate", "certificate"]),
+        ("bare-fallback", vec![wrong.clone(), wrong], vec!["certificate", "publickey"]),
+    ] {
+        fx.auth_calls.lock().unwrap().clear();
+        let pipe = certificate_agent::start(&fx, &key, certs, label, false);
+        let h = fx.connect(ConnectParams { use_agent: true, agent_pipe: Some(pipe), ..fx.params() });
+        expect_connected(&h);
+        assert_eq!(*fx.auth_calls.lock().unwrap(), expected);
+        h.close();
+    }
+    let otp = user_certificate(&ca, &key, "keyotp", false);
+    let pipe = certificate_agent::start(&fx, &key, vec![otp], "otp", false);
+    fx.auth_calls.lock().unwrap().clear();
+    let h = fx.connect(ConnectParams {
+        username: "keyotp".into(),
+        use_agent: true,
+        agent_pipe: Some(pipe),
+        password: Some("secret".into()),
+        ..fx.params()
+    });
+    answer_key_otp(&h);
+    assert!(!fx.auth_calls.lock().unwrap().iter().any(|v| v == "password" || v == "publickey"));
+    h.close();
+
+    let pipe = certificate_agent::start(&fx, &key, vec![user_certificate(&ca, &key, "tester", false)], "refused", true);
+    fx.auth_calls.lock().unwrap().clear();
+    let h = fx.connect(ConnectParams {
+        use_agent: true,
+        agent_pipe: Some(pipe),
+        default_identity_files: vec![fx.write_key("fallback-key", &key)],
+        ..fx.params()
+    });
+    expect_connected(&h);
+    assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["publickey"]);
+}
+
+#[test]
+fn agent_forwarding_requires_opt_in_and_isolated_destination() {
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("agent-forwarding", &[]);
+    fx.trust_host();
+    let pipe = start_test_agent(&fx, &[&key], "forwarding");
+    for enabled in [false, true] {
+        fx.agent_events.lock().unwrap().clear();
+        let h = fx.connect(ConnectParams {
+            password: Some("secret".into()),
+            agent_forwarding: enabled,
+            agent_pipe: Some(pipe.clone()),
+            ..fx.params()
+        });
+        expect_connected(&h);
+        h.send(b"probe-agent".to_vec());
+        wait_agent_event(&fx, if enabled { "signed" } else { "rejected" });
+        assert_eq!(fx.agent_events.lock().unwrap().iter().filter(|v| *v == "requested").count(), usize::from(enabled));
+        h.close();
+    }
+    fx.agent_events.lock().unwrap().clear();
+    let jump = Fixture::new("agent-forwarding-jump", &[]);
+    jump.trust_host();
+    let h = fx.connect(ConnectParams {
+        password: Some("secret".into()),
+        agent_forwarding: true,
+        agent_pipe: Some(pipe.clone()),
+        jump: Some(Box::new(ConnectParams {
+            password: Some("secret".into()),
+            agent_forwarding: true,
+            agent_pipe: Some(pipe.clone()),
+            ..jump.params()
+        })),
+        ..fx.params()
+    });
+    expect_connected(&h);
+    wait_agent_event(&jump, "rejected");
+    h.send(b"probe-agent".to_vec());
+    wait_agent_event(&fx, "signed");
+    assert!(!jump.agent_events.lock().unwrap().iter().any(|v| v == "requested"));
+    h.close();
+
+    fx.allow_agent.store(false, std::sync::atomic::Ordering::SeqCst);
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), agent_forwarding: true, agent_pipe: Some(pipe), ..fx.params() });
+    assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
+}
+
+#[test]
+fn closing_ssh_aborts_idle_agent_relays() {
+    use std::sync::atomic::Ordering;
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("agent-forwarding-close", &[]);
+    fx.trust_host();
+    let (pipe, active) = certificate_agent::start_counted(&fx, &key, vec![], "forward-close", false);
+    let h = fx.connect(ConnectParams { password: Some("secret".into()), agent_forwarding: true, agent_pipe: Some(pipe), ..fx.params() });
+    expect_connected(&h);
+    h.send(b"hold-agent".to_vec());
+    wait_agent_event(&fx, "holding");
+    assert!(active.load(Ordering::SeqCst) > 0);
+    h.close();
+    wait_agent_event(&fx, "relay-closed");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while active.load(Ordering::SeqCst) != 0 {
+        assert!(Instant::now() < deadline, "local agent connection leaked after SSH close");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[derive(Clone)]
@@ -418,8 +736,14 @@ impl Fixture {
         let known_hosts = dir.join("known_hosts");
 
         let auth_calls = Arc::new(Mutex::new(Vec::new()));
+        let user_ca = Arc::default();
+        let agent_events = Arc::default();
+        let allow_agent = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let forward_address = Arc::default();
         let server = TestServer {
+            user_ca: Arc::clone(&user_ca),
+            agent_events: Arc::clone(&agent_events),
+            allow_agent: Arc::clone(&allow_agent),
             forward_address: Arc::clone(&forward_address),
             accepted_keys: Vec::new(),
             sftp_gate,
@@ -434,7 +758,19 @@ impl Fixture {
             let _ = { server }.run_on_socket(config, &listener).await;
         });
 
-        Self { forward_address, auth_calls, server_rt, port, host_key, dir, known_hosts, net: NetRuntime::new().unwrap() }
+        Self {
+            user_ca,
+            agent_events,
+            allow_agent,
+            forward_address,
+            auth_calls,
+            server_rt,
+            port,
+            host_key,
+            dir,
+            known_hosts,
+            net: NetRuntime::new().unwrap(),
+        }
     }
 
     fn trust_host(&self) {
@@ -452,6 +788,8 @@ impl Fixture {
             default_identity_files: Vec::new(),
             use_agent: false,
             ssh_legacy_algorithms: false,
+            certificate_file: None,
+            agent_forwarding: false,
             agent_pipe: None,
             forwards: Vec::new(),
             serial: Default::default(),
@@ -932,6 +1270,8 @@ fn rsa_agent_paths_keep_local_file_policy() {
             default_identity_files: vec![rsa_path.clone()],
             use_agent: true,
             ssh_legacy_algorithms: false,
+            certificate_file: None,
+            agent_forwarding: false,
             agent_pipe: Some(pipe),
             ..fx.params()
         });
@@ -1094,6 +1434,8 @@ fn two_public_keys_continue_within_agents_and_across_file_agent_sources() {
             identity_file,
             use_agent: true,
             ssh_legacy_algorithms: false,
+            certificate_file: None,
+            agent_forwarding: false,
             agent_pipe: Some(agent.clone()),
             default_identity_files: defaults,
             ..fx.params()
@@ -1111,6 +1453,8 @@ fn two_public_keys_continue_within_agents_and_across_file_agent_sources() {
         identity_file: Some(a_path.clone()),
         use_agent: true,
         ssh_legacy_algorithms: false,
+        certificate_file: None,
+        agent_forwarding: false,
         agent_pipe: Some(only_a),
         default_identity_files: vec![a_path],
         ..fx.params()
@@ -1120,6 +1464,8 @@ fn two_public_keys_continue_within_agents_and_across_file_agent_sources() {
         username: "twokeysotp".into(),
         use_agent: true,
         ssh_legacy_algorithms: false,
+        certificate_file: None,
+        agent_forwarding: false,
         agent_pipe: Some(both),
         password: Some("123456".into()),
         ..fx.params()
@@ -1139,6 +1485,8 @@ fn two_public_keys_continue_between_unix_agents() {
             username: "twokeys".into(),
             use_agent: true,
             ssh_legacy_algorithms: false,
+            certificate_file: None,
+            agent_forwarding: false,
             agent_pipe: Some(std::env::var("PLAYTERM_FIRST_AGENT").unwrap()),
             ..fx.params()
         }));
@@ -1319,6 +1667,8 @@ fn encrypted_key_asks_for_passphrase() {
         default_identity_files: vec![default],
         use_agent: true,
         ssh_legacy_algorithms: false,
+        certificate_file: None,
+        agent_forwarding: false,
         password: Some("secret".into()),
         ..fx.params()
     };

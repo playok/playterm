@@ -36,6 +36,10 @@ pub struct ConnectParams {
     pub password: Option<crate::Password>,
     /// Private key chosen for this connection; tried first.
     pub identity_file: Option<PathBuf>,
+    /// Explicit OpenSSH user certificate, signed using a matching file or agent key.
+    pub certificate_file: Option<PathBuf>,
+    /// Forward the local agent to the interactive destination, never to jump hosts.
+    pub agent_forwarding: bool,
     /// Keys tried after the agent if they exist (`~/.ssh/id_ed25519`, ...).
     pub default_identity_files: Vec<PathBuf>,
     /// Offer keys from running SSH agents (Windows OpenSSH agent, Pageant; `SSH_AUTH_SOCK` on Unix).
@@ -85,6 +89,8 @@ impl fmt::Debug for ConnectParams {
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("identity_file", &self.identity_file)
+            .field("certificate_file", &self.certificate_file)
+            .field("agent_forwarding", &self.agent_forwarding)
             .field("use_agent", &self.use_agent)
             .field("ssh_legacy_algorithms", &self.ssh_legacy_algorithms)
             .field("forwards", &self.forwards)
@@ -554,6 +560,8 @@ mod tests {
             default_identity_files: Vec::new(),
             use_agent: false,
             ssh_legacy_algorithms: false,
+            certificate_file: None,
+            agent_forwarding: false,
             agent_pipe: None,
             forwards: Vec::new(),
             serial: Default::default(),

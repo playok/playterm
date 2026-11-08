@@ -401,6 +401,8 @@ mod tests {
                 default_identity_files: Vec::new(),
                 use_agent: false,
                 ssh_legacy_algorithms: false,
+                certificate_file: None,
+                agent_forwarding: false,
                 agent_pipe: None,
                 forwards: Vec::new(),
                 serial: Default::default(),
