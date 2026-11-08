@@ -49,24 +49,15 @@ pub(crate) struct Forward {
 impl Forward {
     pub(crate) async fn prepare(params: &ConnectParams, binding: AgentSessionBinding) -> anyhow::Result<Self> {
         // Resolve once. A later channel must not silently switch agents or reread the environment.
-        let configured = params.agent_pipe.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let env = std::env::var("SSH_AUTH_SOCK").ok();
+        let path = platform_agent_path(params.agent_pipe.as_deref(), env.as_deref(), cfg!(windows));
         #[cfg(windows)]
-        let endpoints = {
-            let env = std::env::var("SSH_AUTH_SOCK").ok().filter(|s| s.starts_with(r"\\.\pipe\"));
-            match configured.or(env.as_deref()) {
-                Some(path) => vec![Endpoint::Pipe(path.to_owned())],
-                None => vec![Endpoint::Pipe(r"\\.\pipe\openssh-ssh-agent".into()), Endpoint::Pageant],
-            }
+        let endpoints = match path {
+            Some(path) => vec![Endpoint::Pipe(path.to_owned())],
+            None => vec![Endpoint::Pipe(r"\\.\pipe\openssh-ssh-agent".into()), Endpoint::Pageant],
         };
         #[cfg(unix)]
-        let endpoints = {
-            let env = std::env::var("SSH_AUTH_SOCK").ok();
-            configured
-                .or(env.as_deref())
-                .filter(|s| !s.starts_with(r"\\"))
-                .map(|path| vec![Endpoint::Socket(path.to_owned())])
-                .unwrap_or_default()
-        };
+        let endpoints = path.map(|path| vec![Endpoint::Socket(path.to_owned())]).unwrap_or_default();
         for endpoint in endpoints {
             let forward = Self { endpoint, binding: binding.clone() };
             match forward.connect().await {
@@ -103,5 +94,43 @@ impl Forward {
         reply.accept().await;
         tokio::io::copy_bidirectional(&mut agent.into_inner(), &mut channel.into_stream()).await?;
         Ok(())
+    }
+}
+
+/// Skip paths from another platform before selecting the configured agent or environment.
+/// A usable explicit path remains authoritative; connection errors must not switch agents.
+fn platform_agent_path<'a>(configured: Option<&'a str>, env: Option<&'a str>, windows: bool) -> Option<&'a str> {
+    [configured, env]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|path| !path.is_empty() && if windows { path.starts_with(r"\\.\pipe\") } else { !path.starts_with(r"\\") })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::platform_agent_path;
+
+    #[test]
+    fn foreign_platform_paths_do_not_hide_environment_agents() {
+        let pipe = r"\\.\pipe\openssh-ssh-agent";
+        let socket = "/tmp/test-agent.sock";
+        assert_eq!(platform_agent_path(Some(pipe), Some(socket), false), Some(socket));
+        assert_eq!(platform_agent_path(Some(socket), Some(pipe), true), Some(pipe));
+        assert_eq!(platform_agent_path(Some(pipe), None, false), None);
+        assert_eq!(platform_agent_path(Some(socket), None, true), None);
+    }
+
+    #[test]
+    fn explicit_agents_take_priority_and_blank_or_foreign_paths_are_skipped() {
+        for (windows, first, second) in [(false, "/tmp/first.sock", "/tmp/second.sock"), (true, r"\\.\pipe\first", r"\\.\pipe\second")] {
+            assert_eq!(platform_agent_path(Some(first), Some(second), windows), Some(first));
+            assert_eq!(platform_agent_path(Some("  "), Some(second), windows), Some(second));
+            assert_eq!(platform_agent_path(None, Some(&format!(" {second} ")), windows), Some(second));
+            assert_eq!(platform_agent_path(None, Some("  "), windows), None);
+            assert_eq!(platform_agent_path(None, None, windows), None);
+        }
+        assert_eq!(platform_agent_path(None, Some(r"\\.\pipe\agent"), false), None);
+        assert_eq!(platform_agent_path(None, Some("/tmp/agent.sock"), true), None);
     }
 }

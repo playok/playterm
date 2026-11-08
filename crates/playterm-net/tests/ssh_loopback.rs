@@ -2606,3 +2606,35 @@ fn forward_to_unreachable_target_reports_notice() {
         }
     }
 }
+
+#[test]
+fn agent_forwarding_foreign_platform_path_uses_environment_agent() {
+    const CHILD: &str = "PLAYTERM_FORWARD_PLATFORM_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let fx = Fixture::new("forward-platform-child", &[]);
+        fx.trust_host();
+        let foreign = if cfg!(windows) { "/tmp/foreign-agent.sock" } else { r"\\.\pipe\openssh-ssh-agent" };
+        let h = fx.connect(ConnectParams {
+            password: Some("secret".into()),
+            agent_forwarding: true,
+            agent_pipe: Some(foreign.into()),
+            ..fx.params()
+        });
+        expect_connected(&h);
+        h.send(b"probe-agent".to_vec());
+        wait_agent_event(&fx, "signed");
+        h.close();
+        return;
+    }
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("forward-platform-parent", &[]);
+    let agent = start_test_agent(&fx, &[&key], "platform");
+    // Isolate SSH_AUTH_SOCK from parallel tests and the user's real agent.
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "agent_forwarding_foreign_platform_path_uses_environment_agent", "--nocapture"])
+        .env(CHILD, "1")
+        .env("SSH_AUTH_SOCK", agent)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+}
