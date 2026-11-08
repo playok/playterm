@@ -354,11 +354,38 @@ impl ProfileStore {
     /// Loads profiles from `path`; a missing file is an empty store.
     pub fn load(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
+        match crate::fsutil::lock_config(&path) {
+            Ok(_lock) => Self::load_locked(path),
+            Err(e) if matches!(e.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem) => {
+                Self::load_inner(path, false)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Rechecks a malformed file under the writer lock before moving it aside.
+    /// A concurrent repair is loaded instead. Failure leaves the source untouched.
+    pub fn recover_invalid(path: impl Into<PathBuf>) -> io::Result<(Self, Option<PathBuf>)> {
+        let path = path.into();
         let _lock = crate::fsutil::lock_config(&path)?;
-        Self::load_locked(path)
+        match Self::load_locked(path.clone()) {
+            Ok(store) => Ok((store, None)),
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                let mut name = path.as_os_str().to_owned();
+                name.push(format!(".{}.broken", crate::fsutil::random_id()?));
+                let backup = PathBuf::from(name);
+                std::fs::rename(&path, &backup)?;
+                Ok((Self::empty(path), Some(backup)))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn load_locked(path: PathBuf) -> io::Result<Self> {
+        Self::load_inner(path, true)
+    }
+
+    fn load_inner(path: PathBuf, persist_ids: bool) -> io::Result<Self> {
         let file = match std::fs::read_to_string(&path) {
             Ok(text) => toml::from_str::<ProfileFile>(&text)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display())))?,
@@ -378,7 +405,7 @@ impl ProfileStore {
         }
         let store = Self { path, profiles, templates, folders };
         // Assign legacy IDs once under the lock so other processes see the same IDs.
-        if needs_ids {
+        if needs_ids && persist_ids {
             store.save()?;
         }
         Ok(store)
@@ -597,6 +624,31 @@ impl ProfileStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recovery_rechecks_repairs_and_preserves_each_malformed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.toml");
+        std::fs::write(&path, "invalid = [").unwrap();
+        assert!(ProfileStore::load(&path).is_err());
+        // Another writer repairs the file before recovery acquires the lock.
+        std::fs::write(&path, "[[session]]\nid = 'fixed'\nhost = 'example'\n").unwrap();
+        let (store, backup) = ProfileStore::recover_invalid(&path).unwrap();
+        assert!(backup.is_none());
+        assert!(store.get("fixed").is_some());
+        let mut backups = Vec::new();
+        for text in ["invalid = [", "another = ["] {
+            std::fs::write(&path, text).unwrap();
+            let (store, backup) = ProfileStore::recover_invalid(&path).unwrap();
+            assert!(store.profiles().is_empty());
+            let backup = backup.unwrap();
+            assert_eq!(std::fs::read_to_string(&backup).unwrap(), text);
+            assert!(!path.exists());
+            backups.push(backup);
+        }
+        assert_ne!(backups[0], backups[1]);
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), "invalid = [");
+    }
+
     #[test]
     fn stale_stores_preserve_other_sites_templates_and_folder_changes() {
         let dir = tempfile::tempdir().unwrap();

@@ -363,22 +363,23 @@ fn load_profiles(path: &Path) -> (ProfileStore, Option<String>) {
         Err(e) if e.kind() == std::io::ErrorKind::InvalidData => e,
         Err(e) => return (ProfileStore::empty(path), Some(format!("{}: {e}", path.display()))),
     };
-    let mut backup = path.as_os_str().to_owned();
-    backup.push(".broken");
-    let backup = PathBuf::from(backup);
-    if std::fs::rename(path, &backup).is_ok() {
-        let msg = tr!(
-            "세션 파일을 읽을 수 없어 {} 로 옮겼습니다: {err}",
-            "Cannot read the sessions file, moved it to {}: {err}",
-            backup.display()
-        );
-        (ProfileStore::empty(path), Some(msg))
-    } else {
-        // Could not move it: keep working in memory but write elsewhere.
-        let mut fallback = path.as_os_str().to_owned();
-        fallback.push(".recovered");
-        let msg = tr!("세션 파일을 읽을 수 없습니다: {err}", "Cannot read the sessions file: {err}");
-        (ProfileStore::empty(PathBuf::from(fallback)), Some(msg))
+    match ProfileStore::recover_invalid(path) {
+        Ok((store, None)) => (store, None),
+        Ok((store, Some(backup))) => {
+            let msg = tr!(
+                "세션 파일을 읽을 수 없어 {} 로 옮겼습니다: {err}",
+                "Cannot read the sessions file, moved it to {}: {err}",
+                backup.display()
+            );
+            (store, Some(msg))
+        }
+        Err(recovery_err) => {
+            // Could not preserve it: keep working in memory but write elsewhere.
+            let mut fallback = path.as_os_str().to_owned();
+            fallback.push(".recovered");
+            let msg = tr!("세션 파일을 읽을 수 없습니다: {err}", "Cannot read the sessions file: {err}");
+            (ProfileStore::empty(PathBuf::from(fallback)), Some(format!("{msg}: {recovery_err}")))
+        }
     }
 }
 

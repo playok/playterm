@@ -119,6 +119,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn valid_config_loads_when_lock_is_read_only_but_mutation_fails() {
+        use crate::{AppSettings, ProfileStore};
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.toml");
+        let sessions = dir.path().join("sessions.toml");
+        std::fs::write(&settings, "font_size = 23\n").unwrap();
+        let original = "[[session]]\nid = 'site'\nhost = 'example'\n";
+        std::fs::write(&sessions, original).unwrap();
+        let lock_path = dir.path().join("sessions.toml.lock");
+        std::fs::write(&lock_path, "").unwrap();
+        let permissions = std::fs::metadata(&lock_path).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&lock_path, readonly).unwrap();
+        #[allow(unused_labels)]
+        'check: {
+            // Privileged Unix runners can bypass filesystem permissions.
+            if lock_config(&sessions).is_ok() {
+                #[cfg(not(unix))]
+                panic!("read-only lock must reject writes on Windows");
+                #[cfg(unix)]
+                break 'check;
+            }
+            let (loaded, backup) = AppSettings::load_preserving(&settings).unwrap();
+            assert_eq!(loaded.font_size, 23.0);
+            assert!(backup.is_none());
+            assert!(!dir.path().join("settings.toml.lock").exists());
+            let mut store = ProfileStore::load(&sessions).unwrap();
+            assert_eq!(store.get("site").unwrap().host, "example");
+            assert!(store.remove("site").is_err());
+            assert!(store.get("site").is_some());
+            assert_eq!(std::fs::read_to_string(&sessions).unwrap(), original);
+            // Legacy IDs may be assigned in memory without writing during fallback.
+            std::fs::write(&sessions, "[[session]]\nhost = 'legacy'\n").unwrap();
+            assert!(!ProfileStore::load(&sessions).unwrap().profiles()[0].id.is_empty());
+            assert!(!std::fs::read_to_string(&sessions).unwrap().contains("id ="));
+        }
+        std::fs::set_permissions(lock_path, permissions).unwrap();
+    }
+
+    #[test]
     fn entropy_failure_is_an_error_without_an_id_or_panic() {
         let result = random_id_with(|_| Err(io::Error::other("injected entropy failure")));
         assert_eq!(result.unwrap_err().to_string(), "injected entropy failure");
