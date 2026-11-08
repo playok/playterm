@@ -97,14 +97,25 @@ impl Forward {
     }
 }
 
+/// Windows named-pipe prefix, compared without case because Windows paths are case-insensitive.
+const WINDOWS_PIPE_PREFIX: &str = r"\\.\pipe\";
+
+fn is_windows_pipe_path(path: &str) -> bool {
+    path.get(..WINDOWS_PIPE_PREFIX.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(WINDOWS_PIPE_PREFIX))
+}
+
+/// `C:\...` or `C:/...`: a Windows path that cannot be a Unix agent socket.
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/')
+}
+
 /// Skip paths from another platform before selecting the configured agent or environment.
 /// A usable explicit path remains authoritative; connection errors must not switch agents.
 fn platform_agent_path<'a>(configured: Option<&'a str>, env: Option<&'a str>, windows: bool) -> Option<&'a str> {
-    [configured, env]
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .find(|path| !path.is_empty() && if windows { path.starts_with(r"\\.\pipe\") } else { !path.starts_with(r"\\") })
+    [configured, env].into_iter().flatten().map(str::trim).find(|path| {
+        !path.is_empty() && if windows { is_windows_pipe_path(path) } else { !path.starts_with(r"\\") && !is_windows_drive_path(path) }
+    })
 }
 
 #[cfg(test)]
@@ -114,11 +125,17 @@ mod tests {
     #[test]
     fn foreign_platform_paths_do_not_hide_environment_agents() {
         let pipe = r"\\.\pipe\openssh-ssh-agent";
+        let upper_pipe = r"\\.\PIPE\openssh-ssh-agent";
         let socket = "/tmp/test-agent.sock";
         assert_eq!(platform_agent_path(Some(pipe), Some(socket), false), Some(socket));
+        assert_eq!(platform_agent_path(Some(upper_pipe), Some(socket), false), Some(socket));
         assert_eq!(platform_agent_path(Some(socket), Some(pipe), true), Some(pipe));
-        assert_eq!(platform_agent_path(Some(pipe), None, false), None);
+        assert_eq!(platform_agent_path(Some(upper_pipe), Some(pipe), true), Some(upper_pipe));
+        assert_eq!(platform_agent_path(Some(upper_pipe), None, true), Some(upper_pipe));
         assert_eq!(platform_agent_path(Some(socket), None, true), None);
+        assert_eq!(platform_agent_path(Some(r"C:\agent.sock"), Some(socket), false), Some(socket));
+        assert_eq!(platform_agent_path(Some(r"C:/agent.sock"), None, false), None);
+        assert_eq!(platform_agent_path(Some(r"C:\agent.sock"), None, true), None);
     }
 
     #[test]
