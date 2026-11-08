@@ -127,10 +127,13 @@ pub(super) fn start_counted(
     }
     #[cfg(unix)]
     {
-        let path = fx.dir.join(format!("cert-{label}.sock"));
+        // Keep the full socket path below the macOS sockaddr_un limit even with a long TMPDIR.
+        let socket_dir = tempfile::Builder::new().prefix("ptc-").tempdir_in("/tmp").unwrap();
+        let path = socket_dir.path().join("agent");
         fx.server_rt.block_on(async {
             let listener = tokio::net::UnixListener::bind(&path).unwrap();
             tokio::spawn(async move {
+                let _socket_dir = socket_dir;
                 while let Ok((stream, _)) = listener.accept().await {
                     let client = AgentClient::connect_uds(&backend).await.unwrap();
                     let guard = ConnectionCount::new(active.clone());

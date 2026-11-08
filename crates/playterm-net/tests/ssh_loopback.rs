@@ -675,14 +675,21 @@ fn start_test_agent(fx: &Fixture, keys: &[&PrivateKey], label: &str) -> String {
     use russh::keys::agent::client::AgentClient;
     use tokio::net::UnixListener;
 
-    let socket = fx.dir.join(format!("{label}.sock"));
+    // macOS TMPDIR plus the fixture/label can exceed sockaddr_un.sun_path.
+    // A private short directory also avoids predictable shared /tmp socket names.
+    let socket_dir = tempfile::Builder::new().prefix("pta-").tempdir_in("/tmp").unwrap();
+    let socket = socket_dir.path().join("agent");
+    let policy = TestAgentPolicy { sign: !label.starts_with("refuse") };
     fx.server_rt.block_on(async {
         let listener = UnixListener::bind(&socket).unwrap();
         let connections = futures::stream::unfold(listener, |listener| async move {
             let accepted = listener.accept().await.map(|(stream, _)| stream);
             Some((accepted, listener))
         });
-        tokio::spawn(russh::keys::agent::server::serve(Box::pin(connections), TestAgentPolicy { sign: !label.starts_with("refuse") }));
+        tokio::spawn(async move {
+            let _socket_dir = socket_dir;
+            russh::keys::agent::server::serve(Box::pin(connections), policy).await
+        });
         let mut client = AgentClient::connect_uds(&socket).await.unwrap();
         for key in keys {
             client.add_identity(key, &[]).await.unwrap();
