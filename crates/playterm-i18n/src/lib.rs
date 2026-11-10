@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_phase_one_locales_without_claiming_traditional_chinese() {
+    fn resolves_japanese_and_distinguishes_chinese_scripts() {
         let japanese = Language::from_locale("ja");
         assert_eq!(japanese.code(), "ja");
         assert_eq!(japanese.name(), "日本語");
@@ -181,8 +181,30 @@ mod tests {
         for locale in ["zh_CN.UTF-8", "ZH_cn", "zh-Hans", "zh-Hans-CN", "zh-SG", "zh_Hans_SG"] {
             assert_eq!(Language::from_locale(locale), simplified);
         }
-        for locale in ["zh", "zh-TW", "zh_Hant_TW.UTF-8", "zh-Hant", "zh-HK", "zh-MO", "de", "fr"] {
+        let traditional = Language::from_locale("zh-TW");
+        assert_eq!(traditional.code(), "zh-tw");
+        assert_eq!(traditional.name(), "繁體中文");
+        assert_ne!(traditional, simplified);
+        for locale in ["zh_TW.UTF-8", "ZH_tw@variant", "zh-Hant", "zh_Hant_TW.UTF-8", "zh-Hant-HK", "zh-Hant-MO"] {
+            assert_eq!(Language::from_locale(locale), traditional, "{locale}");
+        }
+        for locale in ["zh", "zh-HK", "zh-MO"] {
             assert_eq!(Language::from_locale(locale), Language::ENGLISH, "{locale}");
+        }
+    }
+
+    #[test]
+    fn resolves_german_and_french_regions() {
+        for (code, name, variants) in [
+            ("de", "Deutsch", ["de-DE", "de-AT", "de-CH", "DE_de.UTF-8", "de_LU@variant"]),
+            ("fr", "Français", ["fr-FR", "fr-CA", "fr-BE", "FR_ch.UTF-8", "fr_LU@variant"]),
+        ] {
+            let language = Language::from_locale(code);
+            assert_eq!(language.code(), code);
+            assert_eq!(language.name(), name);
+            for locale in variants {
+                assert_eq!(Language::from_locale(locale), language, "{locale}");
+            }
         }
     }
 
@@ -214,6 +236,9 @@ mod tests {
                 include_str!("../locales/zh-cn.toml"),
                 include_str!("../locales/es.toml"),
                 include_str!("../locales/pt-br.toml"),
+                include_str!("../locales/de.toml"),
+                include_str!("../locales/fr.toml"),
+                include_str!("../locales/zh-tw.toml"),
             ]
             .map(|text| toml::from_str(text).unwrap()),
         );
@@ -271,6 +296,9 @@ mod tests {
             ("zh-cn", "关闭", "正在向所有标签页输入 · 另有 3 个"),
             ("es", "Cerrar", "Escribiendo en todas las pestañas · otras: 3"),
             ("pt-br", "Fechar", "Digitando em todas as abas · outras: 3"),
+            ("de", "Schließen", "Eingabe in alle Tabs · weitere: 3"),
+            ("fr", "Fermer", "Saisie dans tous les onglets · autres : 3"),
+            ("zh-tw", "關閉", "正在向所有分頁輸入 · 另有 3 個"),
         ] {
             set_language(Language::from_locale(code));
             assert_eq!(t!("common.close"), close);
