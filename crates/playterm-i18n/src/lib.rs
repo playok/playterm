@@ -168,6 +168,43 @@ mod tests {
     }
 
     #[test]
+    fn resolves_phase_one_locales_without_claiming_traditional_chinese() {
+        let japanese = Language::from_locale("ja");
+        assert_eq!(japanese.code(), "ja");
+        assert_eq!(japanese.name(), "日本語");
+        for locale in ["ja-JP", "ja_JP.UTF-8", "JA_jp@variant"] {
+            assert_eq!(Language::from_locale(locale), japanese);
+        }
+        let simplified = Language::from_locale("zh-CN");
+        assert_eq!(simplified.code(), "zh-cn");
+        assert_eq!(simplified.name(), "简体中文");
+        for locale in ["zh_CN.UTF-8", "ZH_cn", "zh-Hans", "zh-Hans-CN", "zh-SG", "zh_Hans_SG"] {
+            assert_eq!(Language::from_locale(locale), simplified);
+        }
+        for locale in ["zh", "zh-TW", "zh_Hant_TW.UTF-8", "zh-Hant", "zh-HK", "zh-MO", "es", "pt-BR", "de", "fr"] {
+            assert_eq!(Language::from_locale(locale), Language::ENGLISH, "{locale}");
+        }
+    }
+
+    #[test]
+    fn shipped_catalogs_are_complete_and_preserve_terminal_controls() {
+        let mut values = catalogs();
+        values
+            .extend([include_str!("../locales/ja.toml"), include_str!("../locales/zh-cn.toml")].map(|text| toml::from_str(text).unwrap()));
+        catalog::generate(&values).unwrap();
+        let english = &values[0];
+        for translated in &values[1..] {
+            for (source, target) in [(&english.text, &translated.text), (&english.format, &translated.format)] {
+                assert_eq!(source.keys().collect::<Vec<_>>(), target.keys().collect::<Vec<_>>(), "{}", translated.locale.code);
+                for (key, text) in source {
+                    let controls = |s: &str| s.chars().filter(|c| c.is_control()).collect::<String>();
+                    assert_eq!(controls(text), controls(&target[key]), "{}: {key}", translated.locale.code);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn renders_reordered_repeated_arguments_without_reinterpreting_values() {
         let args = ["{arg1} 🐱".into(), "서울".into()];
         let parts = [Part::Argument(1), Part::Text(" / "), Part::Argument(0), Part::Text(" / "), Part::Argument(1)];
@@ -203,6 +240,13 @@ mod tests {
             }
         );
         assert_eq!(count.get(), 1);
+        for (code, close, broadcast) in
+            [("ja", "閉じる", "すべてのタブに入力中 · 他 3 個"), ("zh-cn", "关闭", "正在向所有标签页输入 · 另有 3 个")]
+        {
+            set_language(Language::from_locale(code));
+            assert_eq!(t!("common.close"), close);
+            assert_eq!(tr!("app.broadcast.typing_into_all_tabs_other", others = 3), broadcast);
+        }
         set_language(Language::KOREAN);
         assert_eq!(t!("common.close"), "닫기");
     }
