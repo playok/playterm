@@ -6,7 +6,7 @@
 
 O playterm é um aplicativo de terminal nativo escrito em Rust (egui, alacritty_terminal, russh e IronRDP). No Windows x64 e ARM64, é distribuído como um executável portátil, sem instalação de runtime. Também oferece um aplicativo para macOS em Apple silicon e Intel.
 
-Este guia em português brasileiro descreve a branch de desenvolvimento `master`. Para os recursos já publicados, consulte as [mudanças da v0.7.0](docs/releases/v0.7.0.md) e as [notas de versão](https://github.com/playok/playterm/releases). A [referência detalhada em inglês](README.en.md) apresenta todas as configurações e os procedimentos de desenvolvimento e distribuição.
+Este guia em português brasileiro descreve a branch de desenvolvimento `master`. Para os recursos já publicados, consulte as [mudanças da v0.8.0](docs/releases/v0.8.0.md) e as [notas de versão](https://github.com/playok/playterm/releases). A [referência detalhada em inglês](README.en.md) apresenta todas as configurações e os procedimentos de desenvolvimento e distribuição.
 
 ## Principais recursos
 

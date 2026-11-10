@@ -6,7 +6,7 @@
 
 playterm は Rust（egui、alacritty_terminal、russh、IronRDP）で開発されたネイティブ端末アプリです。Windows x64・ARM64 ではインストール不要の単一実行ファイルとして動作し、macOS では Apple silicon・Intel 向けのアプリを提供します。
 
-この文書は開発中の `master` を対象とした日本語の利用ガイドです。配布済みの機能は [v0.7.0 の変更点](docs/releases/v0.7.0.md)と[リリースノート](https://github.com/playok/playterm/releases)を参照してください。[詳細リファレンス（英語）](README.en.md)には、各設定と開発・配布手順を掲載しています。
+この文書は開発中の `master` を対象とした日本語の利用ガイドです。配布済みの機能は [v0.8.0 の変更点](docs/releases/v0.8.0.md)と[リリースノート](https://github.com/playok/playterm/releases)を参照してください。[詳細リファレンス（英語）](README.en.md)には、各設定と開発・配布手順を掲載しています。
 
 ## 主な機能
 
