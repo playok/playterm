@@ -1,6 +1,6 @@
 # playterm
 
-**English** | [한국어](README.md)
+[한국어](README.md) | **English** | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
 [Report a security vulnerability privately](SECURITY.md)
 
