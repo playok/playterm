@@ -333,28 +333,18 @@ pub(crate) fn connect_error(host: &str, port: u16, e: std::io::Error) -> anyhow:
     // Windows: WSAHOST_NOT_FOUND, WSANO_DATA; elsewhere the resolver says "lookup".
     let unknown_host = matches!(e.raw_os_error(), Some(11001 | 11004)) || e.to_string().to_lowercase().contains("lookup");
     let why = if unknown_host {
-        Some(playterm_i18n::tr!(
-            "'{host}' 라는 호스트를 찾을 수 없습니다. 주소의 철자와 DNS·VPN 연결을 확인하세요",
-            "No host named '{host}' was found. Check the address and the DNS / VPN connection"
-        ))
+        Some(playterm_i18n::tr!("session.no_host_named_was_found_check_the_address", host = host))
     } else {
         match e.kind() {
-            ErrorKind::ConnectionRefused => Some(playterm_i18n::tr!(
-                "서버가 포트 {port} 에서 접속을 받지 않습니다. 서버(서비스)가 켜져 있는지, 포트 번호가 맞는지 확인하세요",
-                "The server does not take connections on port {port}. Check that the server (service) runs and the port is right"
-            )),
-            ErrorKind::TimedOut => Some(playterm_i18n::tr!(
-                "서버가 응답하지 않습니다. 주소와 방화벽, 네트워크(VPN)를 확인하세요",
-                "The server does not answer. Check the address, the firewall and the network (VPN)"
-            )),
-            ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable => Some(playterm_i18n::tr!(
-                "이 PC 에서 그 주소로 가는 길이 없습니다. 네트워크 연결과 VPN 을 확인하세요",
-                "This PC has no route to that address. Check the network connection and the VPN"
-            )),
+            ErrorKind::ConnectionRefused => Some(playterm_i18n::tr!("session.the_server_does_not_take_connections_on_port", port = port)),
+            ErrorKind::TimedOut => Some(playterm_i18n::tr!("session.the_server_does_not_answer_check_the_address")),
+            ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable => {
+                Some(playterm_i18n::tr!("session.this_pc_has_no_route_to_that_address"))
+            }
             _ => None,
         }
     };
-    let head = playterm_i18n::tr!("{host}:{port} 에 연결할 수 없습니다", "Cannot connect to {host}:{port}");
+    let head = playterm_i18n::tr!("common.cannot_connect_to", host = host, port = port);
     match why {
         Some(why) => anyhow::anyhow!("{head}: {why} ({e})"),
         None => anyhow::Error::new(e).context(head),
@@ -382,7 +372,7 @@ impl EventSink {
         tokio::select! {
             result = self.deadline.limit(params.connect_timeout, connecting) => result,
             _ = cancel.wait_for(|&cancelled| cancelled) => {
-                Err(anyhow::anyhow!(playterm_i18n::t("연결을 취소했습니다", "Connection cancelled")))
+                Err(anyhow::anyhow!(playterm_i18n::t!("session.connection_cancelled")))
             }
         }
     }
@@ -607,7 +597,7 @@ mod connect_error_tests {
     /// The common failures say what to check (#146), and keep the system's message.
     #[test]
     fn common_failures_say_what_to_check() {
-        playterm_i18n::set_english(false);
+        playterm_i18n::set_language(playterm_i18n::Language::KOREAN);
         let refused = connect_error("127.0.0.1", 22, Error::from(ErrorKind::ConnectionRefused)).to_string();
         assert!(refused.contains("포트 22 에서 접속을 받지 않습니다"), "{refused}");
         assert!(refused.starts_with("127.0.0.1:22 에 연결할 수 없습니다"), "{refused}");

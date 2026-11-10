@@ -35,14 +35,14 @@ impl TemplateDialog {
             .backdrop_color(crate::app::theme::MODAL_BACKDROP)
             .show(ctx, |ui| {
                 ui.set_width(420.0);
-                ui.heading(if self.is_new { t("템플릿 만들기", "New template") } else { t("템플릿 편집", "Edit template") });
+                ui.heading(if self.is_new { t!("template_dialog.new_template") } else { t!("template_dialog.edit_template") });
                 ui.add_space(8.0);
                 let mut submit = false;
                 egui::Grid::new("template-form").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                    ui.label(t("이름", "Name"));
+                    ui.label(t!("common.name"));
                     let name = ui.add(
                         egui::TextEdit::singleline(&mut self.template.name)
-                            .hint_text(t("예: 운영 서버", "e.g. Production"))
+                            .hint_text(t!("template_dialog.e_g_production"))
                             .desired_width(f32::INFINITY),
                     );
                     if self.is_new && self.template.name.is_empty() {
@@ -50,7 +50,7 @@ impl TemplateDialog {
                     }
                     submit |= name.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.end_row();
-                    ui.label(t("배치", "Layout"));
+                    ui.label(t!("template_dialog.layout"));
                     ui.horizontal_wrapped(|ui| {
                         for layout in TemplateLayout::ALL {
                             ui.radio_value(&mut self.template.layout, layout, layout.label());
@@ -64,7 +64,7 @@ impl TemplateDialog {
                 if let Some(error) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
-                let save = icon::primary(ui, icon::SAVE, t("저장", "Save"));
+                let save = icon::primary(ui, icon::SAVE, t!("common.save"));
                 let (main, cancel) = icon::ok_cancel_row(ui, save, true, icon::cancel());
                 submit |= main.clicked();
                 if cancel.clicked() {
@@ -74,9 +74,9 @@ impl TemplateDialog {
                     self.template.name = self.template.name.trim().to_owned();
                     self.template.sites.retain(|id| store.get(id).is_some());
                     if self.template.name.is_empty() {
-                        self.error = Some(t("이름을 입력하세요", "Enter a name").into());
+                        self.error = Some(t!("template_dialog.enter_a_name").into());
                     } else if self.template.sites.is_empty() {
-                        self.error = Some(t("사이트를 하나 이상 넣으세요", "Add at least one site").into());
+                        self.error = Some(t!("template_dialog.add_at_least_one_site").into());
                     } else if let Err(e) = self.template.ensure_id() {
                         self.error = Some(e.to_string());
                     } else {
@@ -95,7 +95,7 @@ impl TemplateDialog {
     fn sites_ui(&mut self, ui: &mut egui::Ui, store: &ProfileStore) {
         let sites = &mut self.template.sites;
         sites.retain(|id| store.get(id).is_some());
-        ui.label(RichText::new(tr!("사이트 ({}개, 여는 순서)", "Sites ({}, in opening order)", sites.len())).strong());
+        ui.label(RichText::new(tr!("template_dialog.sites_in_opening_order", arg0 = sites.len())).strong());
         let mut swap = None;
         let mut remove = None;
         egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -105,7 +105,7 @@ impl TemplateDialog {
                     ui.label(format!("{}.", i + 1));
                     ui.label(p.display_name()).on_hover_text(sidebar::summary(p));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("빼기", "Remove")).clicked() {
+                        if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t!("template_dialog.remove")).clicked() {
                             remove = Some(i);
                         }
                         if ui.add_enabled(i + 1 < sites.len(), icon::icon_button(icon::DOWN).small()).clicked() {
@@ -126,7 +126,7 @@ impl TemplateDialog {
         }
         let others: Vec<&SessionProfile> = store.profiles().iter().filter(|p| !sites.contains(&p.id)).collect();
         ui.add_enabled_ui(!others.is_empty(), |ui| {
-            ui.menu_button(t("+ 사이트 추가", "+ Add site"), |ui| {
+            ui.menu_button(t!("template_dialog.add_site"), |ui| {
                 egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                     for (folder, items) in sidebar::grouped(store, "") {
                         let items: Vec<&&SessionProfile> = items.iter().filter(|p| !sites.contains(&p.id)).collect();

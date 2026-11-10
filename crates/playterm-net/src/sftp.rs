@@ -209,18 +209,18 @@ impl SftpConnection {
 
     pub fn mkdir(&self, path: &str) {
         let path = path.to_owned();
-        self.op(tr!("폴더 만들기 {path}", "Create folder {path}"), move |sftp| async move { Ok(sftp.create_dir(path).await?) });
+        self.op(tr!("sftp.create_folder", path = path), move |sftp| async move { Ok(sftp.create_dir(path).await?) });
     }
 
     pub fn rename(&self, from: &str, to: &str) {
         let (from, to) = (from.to_owned(), to.to_owned());
-        self.op(tr!("이름 바꾸기 {from} → {to}", "Rename {from} → {to}"), move |sftp| async move { Ok(sftp.rename(from, to).await?) });
+        self.op(tr!("sftp.rename", from = from, to = to), move |sftp| async move { Ok(sftp.rename(from, to).await?) });
     }
 
     /// Removes a file, or a directory with everything in it.
     pub fn remove(&self, path: &str, is_dir: bool) {
         let path = path.to_owned();
-        self.op(tr!("삭제 {path}", "Delete {path}"), move |sftp| async move {
+        self.op(tr!("sftp.delete", path = path), move |sftp| async move {
             if is_dir { remove_tree(&sftp, &path).await } else { Ok(sftp.remove_file(path).await?) }
         });
     }
@@ -254,11 +254,7 @@ impl SftpConnection {
         self.transfer(move |sftp, progress| async move {
             anyhow::ensure!(
                 name.is_empty() || is_safe_local_name(&name),
-                tr!(
-                    "이 PC 에 저장할 수 없는 이름이라 받지 않았습니다: {:?}",
-                    "Not downloaded, the name cannot be saved on this PC: {:?}",
-                    name
-                )
+                tr!("sftp.not_downloaded_the_name_cannot_be_saved_on", name = format!("{name:?}"))
             );
             if is_dir {
                 download_tree(&sftp, &remote, &base, &name, progress).await
@@ -357,7 +353,7 @@ impl Progress {
     /// Records progress; fails once the transfer was cancelled.
     fn advance(&self, bytes: usize) -> anyhow::Result<()> {
         if self.cancelled.flag.load(Ordering::Acquire) {
-            anyhow::bail!(t("취소됨", "Cancelled"));
+            anyhow::bail!(t!("common.cancelled"));
         }
         self.done.fetch_add(bytes as u64, Ordering::Relaxed);
         let mut last = self.last_emit.lock().expect("progress clock");
@@ -380,7 +376,7 @@ impl Progress {
     {
         tokio::select! {
             biased;
-            _ = self.cancelled.wait() => anyhow::bail!(t("취소됨", "Cancelled")),
+            _ = self.cancelled.wait() => anyhow::bail!(t!("common.cancelled")),
             result = future => result.map_err(Into::into),
         }
     }
@@ -422,11 +418,11 @@ impl Progress {
 }
 
 async fn list(sftp: &SftpSession, path: &str) -> anyhow::Result<(String, Vec<RemoteEntry>)> {
-    let canonical = sftp.canonicalize(path).await.with_context(|| tr!("{path} 경로를 찾을 수 없습니다", "Path not found: {path}"))?;
+    let canonical = sftp.canonicalize(path).await.with_context(|| tr!("sftp.path_not_found", path = path))?;
     let mut entries: Vec<RemoteEntry> = sftp
         .read_dir(canonical.clone())
         .await
-        .with_context(|| tr!("{canonical} 을(를) 읽을 수 없습니다", "Cannot read {canonical}"))?
+        .with_context(|| tr!("sftp.cannot_read", canonical = canonical))?
         .filter(|e| e.file_name() != "." && e.file_name() != "..")
         .map(|e| {
             let meta = e.metadata();
@@ -484,13 +480,13 @@ async fn download_file(remote: &str, local: &Path, progress: Progress) -> anyhow
         let mut src = progress
             .open_file(remote.to_owned(), OpenFlags::READ, Default::default(), false)
             .await
-            .with_context(|| tr!("{remote} 을(를) 열 수 없습니다", "Cannot open {remote}"))?;
+            .with_context(|| tr!("sftp.cannot_open", remote = remote))?;
         let mut dst = tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&part)
             .await
-            .with_context(|| tr!("{} 을(를) 만들 수 없습니다", "Cannot create {}", part.display()))?;
+            .with_context(|| tr!("sftp.cannot_create", arg0 = part.display()))?;
         let mut buf = vec![0u8; CHUNK];
         loop {
             let n = progress.request(src.read(&mut buf)).await?;
@@ -505,7 +501,7 @@ async fn download_file(remote: &str, local: &Path, progress: Progress) -> anyhow
         drop(dst);
         // Complete: now it replaces the destination (the user chose it, or it is in the folder
         // they chose).
-        tokio::fs::rename(&part, local).await.with_context(|| tr!("{} 을(를) 만들 수 없습니다", "Cannot create {}", local.display()))?;
+        tokio::fs::rename(&part, local).await.with_context(|| tr!("sftp.cannot_create", arg0 = local.display()))?;
         anyhow::Ok(())
     }
     .await;
@@ -535,7 +531,7 @@ fn remote_temp_path(remote: &str, kind: &str) -> anyhow::Result<String> {
 /// already at `remote` as it was, and removes only the temporary one.
 async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: Progress) -> anyhow::Result<()> {
     // Before anything is created on the server.
-    let mut src = tokio::fs::File::open(local).await.with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", local.display()))?;
+    let mut src = tokio::fs::File::open(local).await.with_context(|| tr!("common.cannot_open", arg0 = local.display()))?;
     let part = remote_temp_path(remote, "part")?;
     // A file being replaced keeps its permissions (an executable script, a private file): the
     // temporary file is created with them, so its data is never open to more than the old was.
@@ -543,10 +539,8 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote: &str, progress: P
     let attributes = russh_sftp::protocol::FileAttributes { permissions, ..russh_sftp::protocol::FileAttributes::empty() };
     // Exclusive: never an existing file, nor a link to one.
     let flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
-    let mut dst = progress
-        .open_file(part.clone(), flags, attributes, true)
-        .await
-        .with_context(|| tr!("{remote} 을(를) 만들 수 없습니다", "Cannot create {remote}"))?;
+    let mut dst =
+        progress.open_file(part.clone(), flags, attributes, true).await.with_context(|| tr!("sftp.cannot_create_2", remote = remote))?;
     let result = async {
         let mut buf = vec![0u8; CHUNK];
         loop {
@@ -583,25 +577,13 @@ async fn existing_remote_file(sftp: &SftpSession, remote: &str) -> anyhow::Resul
     let attrs = match sftp.symlink_metadata(remote).await {
         Ok(attrs) => attrs,
         Err(Error::Status(status)) if status.status_code == StatusCode::NoSuchFile => return Ok(None),
-        Err(e) => anyhow::bail!(tr!(
-            "{remote} 에 이미 있는 항목을 확인할 수 없어 업로드하지 않았습니다 ({e})",
-            "Not uploaded: cannot tell what is already at {remote} ({e})"
-        )),
+        Err(e) => anyhow::bail!(tr!("sftp.not_uploaded_cannot_tell_what_is_already_at", e = e, remote = remote)),
     };
     match attrs.permissions.map(|_| attrs.file_type()) {
         Some(FileType::File) => Ok(Some(attrs)),
-        Some(FileType::Dir) => anyhow::bail!(tr!(
-            "같은 이름의 원격 폴더가 있어 업로드하지 않았습니다: {remote}",
-            "Not uploaded: there is a folder of that name: {remote}"
-        )),
-        Some(FileType::Symlink) => anyhow::bail!(tr!(
-            "같은 이름의 원격 링크가 있어 업로드하지 않았습니다: {remote}",
-            "Not uploaded: there is a link of that name: {remote}"
-        )),
-        _ => anyhow::bail!(tr!(
-            "같은 이름의 원격 항목이 일반 파일이 아니라 업로드하지 않았습니다: {remote}",
-            "Not uploaded: what is at {remote} is not a plain file"
-        )),
+        Some(FileType::Dir) => anyhow::bail!(tr!("sftp.not_uploaded_there_is_a_folder_of_that", remote = remote)),
+        Some(FileType::Symlink) => anyhow::bail!(tr!("sftp.not_uploaded_there_is_a_link_of_that", remote = remote)),
+        _ => anyhow::bail!(tr!("sftp.not_uploaded_what_is_at_is_not_a", remote = remote)),
     }
 }
 
@@ -627,7 +609,7 @@ async fn replace_remote(sftp: &SftpSession, part: &str, remote: &str) -> anyhow:
             if r.is_err() {
                 let _ = sftp.remove_file(part).await;
             }
-            return r.with_context(|| tr!("{remote} 을(를) 만들 수 없습니다 ({first})", "Cannot create {remote} ({first})"));
+            return r.with_context(|| tr!("sftp.cannot_create_3", first = first, remote = remote));
         }
         Err(e) => {
             let _ = sftp.remove_file(part).await;
@@ -638,32 +620,27 @@ async fn replace_remote(sftp: &SftpSession, part: &str, remote: &str) -> anyhow:
     if let Err(e) = sftp.rename(remote, backup.as_str()).await {
         // The old file stays where it is; the upload is dropped.
         let _ = sftp.remove_file(part).await;
-        return Err(anyhow::anyhow!(tr!(
-            "{remote} 을(를) 바꿀 수 없어 원래 파일을 그대로 두었습니다 ({e})",
-            "Could not replace {remote}; the file there was left as it was ({e})"
-        )));
+        return Err(anyhow::anyhow!(tr!("sftp.could_not_replace_the_file_there_was_left", e = e, remote = remote)));
     }
     if let Err(e) = sftp.rename(part, remote).await {
         // Put the old file back.
         return match sftp.rename(backup.as_str(), remote).await {
             Ok(()) => {
                 let _ = sftp.remove_file(part).await;
-                Err(anyhow::anyhow!(tr!(
-                    "{remote} 을(를) 바꾸지 못해 원래 파일로 되돌렸습니다 ({e})",
-                    "Could not replace {remote}; the file there was put back ({e})"
-                )))
+                Err(anyhow::anyhow!(tr!("sftp.could_not_replace_the_file_there_was_put", e = e, remote = remote)))
             }
             Err(e2) => Err(anyhow::anyhow!(tr!(
-                "{remote} 을(를) 바꾸지 못했고({e}) 원래 파일도 되돌리지 못했습니다({e2}). 원래 파일은 {backup}, 올린 파일은 {part} 에 있습니다",
-                "Could not replace {remote} ({e}) nor put the old file back ({e2}). The old file is at {backup}, the upload at {part}"
+                "sftp.could_not_replace_nor_put_the_old_file",
+                backup = backup,
+                e = e,
+                e2 = e2,
+                part = part,
+                remote = remote
             ))),
         };
     }
     if let Err(e) = sftp.remove_file(backup.as_str()).await {
-        return Err(anyhow::anyhow!(tr!(
-            "{remote} 은(는) 바꿨지만 이전 파일의 백업 {backup} 을(를) 지우지 못했습니다 ({e})",
-            "{remote} was replaced, but the backup of the old file, {backup}, could not be removed ({e})"
-        )));
+        return Err(anyhow::anyhow!(tr!("sftp.was_replaced_but_the_backup_of_the_old", backup = backup, e = e, remote = remote)));
     }
     Ok(())
 }
@@ -680,7 +657,7 @@ async fn walk_remote(sftp: &SftpSession, root: &str, download: Option<&Progress>
         }
         let depth = if rel.is_empty() { 0 } else { rel.split('/').count() };
         if depth > MAX_TREE_DEPTH {
-            anyhow::bail!(tr!("폴더가 너무 깊습니다 ({}단계 넘음): {rel}", "Folders nested too deep (over {}): {rel}", MAX_TREE_DEPTH));
+            anyhow::bail!(tr!("sftp.folders_nested_too_deep_over", arg0 = MAX_TREE_DEPTH, rel = rel));
         }
         let dir = if rel.is_empty() { root.to_owned() } else { remote_join(root, &rel) };
         let entries = if let Some(progress) = download { progress.request(sftp.read_dir(dir)).await? } else { sftp.read_dir(dir).await? };
@@ -690,14 +667,10 @@ async fn walk_remote(sftp: &SftpSession, root: &str, download: Option<&Progress>
                 continue;
             }
             if name.contains('/') || (download.is_some() && !is_safe_local_name(&name)) {
-                anyhow::bail!(tr!(
-                    "이 PC 에 저장할 수 없는 이름이 있어 다운로드하지 않았습니다: {:?}",
-                    "Not downloaded: a name cannot be saved on this PC: {:?}",
-                    name
-                ));
+                anyhow::bail!(tr!("sftp.not_downloaded_a_name_cannot_be_saved_on", name = format!("{name:?}")));
             }
             if out.len() >= MAX_TREE_ENTRIES {
-                anyhow::bail!(tr!("항목이 너무 많습니다 ({}개 넘음)", "Too many entries (over {})", MAX_TREE_ENTRIES));
+                anyhow::bail!(tr!("sftp.too_many_entries_over", arg0 = MAX_TREE_ENTRIES));
             }
             let rel_child = if rel.is_empty() { name } else { format!("{rel}/{name}") };
             let meta = e.metadata();
@@ -734,11 +707,7 @@ fn ensure_no_links(base: &Path, rel: &str) -> anyhow::Result<()> {
     for part in rel.split('/').filter(|p| !p.is_empty()) {
         path.push(part);
         match std::fs::symlink_metadata(&path) {
-            Ok(meta) if is_link(&meta) => anyhow::bail!(tr!(
-                "{} 은(는) 다른 곳을 가리키는 링크라 그 안에 받지 않았습니다",
-                "Not downloaded: {} is a link that leads elsewhere",
-                path.display()
-            )),
+            Ok(meta) if is_link(&meta) => anyhow::bail!(tr!("sftp.not_downloaded_is_a_link_that_leads_elsewhere", arg0 = path.display())),
             Ok(_) => {}
             // Not there yet: nothing below it can be a link either.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -810,10 +779,7 @@ async fn upload_tree(sftp: &SftpSession, local: &Path, remote: &str, progress: P
         let target = if rel.is_empty() { remote.to_owned() } else { remote_join(remote, &rel) };
         progress.advance(0)?;
         if !progress.request(sftp.try_exists(target.clone())).await? {
-            progress
-                .request(sftp.create_dir(target.clone()))
-                .await
-                .with_context(|| tr!("{target} 폴더를 만들 수 없습니다", "Cannot create folder {target}"))?;
+            progress.request(sftp.create_dir(target.clone())).await.with_context(|| tr!("sftp.cannot_create_folder", target = target))?;
         }
     }
     for (path, rel) in files {

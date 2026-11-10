@@ -56,26 +56,16 @@ struct VaultLine {
 
 impl VaultLine {
     fn explain() -> &'static str {
-        t(
-            "사이트 비밀번호를 마스터 비밀번호로 암호화해 이 PC 에 저장합니다.",
-            "Site passwords are stored on this PC, encrypted with a master password.",
-        )
+        t!("sidebar.site_passwords_are_stored_on_this_pc_encrypted")
     }
 
     fn of(vault: VaultState) -> Self {
         let (text, icon, button, action) = match vault {
-            VaultState::Missing => (
-                t("저장된 비밀번호: 사용 안 함", "Saved passwords: not set up"),
-                icon::VAULT_SET_UP,
-                t("설정", "Set up"),
-                SidebarAction::SetUpVault,
-            ),
-            VaultState::Locked => {
-                (t("저장된 비밀번호: 잠김", "Saved passwords: locked"), icon::UNLOCK, t("잠금 해제", "Unlock"), SidebarAction::UnlockVault)
+            VaultState::Missing => {
+                (t!("sidebar.saved_passwords_not_set_up"), icon::VAULT_SET_UP, t!("sidebar.set_up"), SidebarAction::SetUpVault)
             }
-            VaultState::Unlocked => {
-                (t("저장된 비밀번호: 열림", "Saved passwords: unlocked"), icon::LOCK, t("잠그기", "Lock"), SidebarAction::LockVault)
-            }
+            VaultState::Locked => (t!("sidebar.saved_passwords_locked"), icon::UNLOCK, t!("common.unlock"), SidebarAction::UnlockVault),
+            VaultState::Unlocked => (t!("sidebar.saved_passwords_unlocked"), icon::LOCK, t!("sidebar.lock"), SidebarAction::LockVault),
         };
         Self { text, icon, button, action }
     }
@@ -130,14 +120,11 @@ pub fn find(sites: &[&SessionProfile], query: &str) -> Result<String, String> {
         sites.iter().filter(|p| p.display_name().to_lowercase().contains(&q) || p.host.to_lowercase().contains(&q)).collect();
     match hits.as_slice() {
         [p] => Ok(p.id.clone()),
-        [] if number.is_some() => Err(tr!(
-            "{query}번 사이트가 없고, '{query}' 와 일치하는 사이트도 없습니다 (sites 로 확인)",
-            "There is no site number {query} and no site matches '{query}' (check with sites)"
-        )),
-        [] => Err(tr!("'{query}' 사이트를 찾을 수 없습니다 (sites 로 목록 보기)", "Site '{query}' not found (type sites for a list)")),
+        [] if number.is_some() => Err(tr!("sidebar.there_is_no_site_number_and_no_site", query = query)),
+        [] => Err(tr!("sidebar.site_not_found_type_sites_for_a_list", query = query)),
         many => {
             let names: Vec<String> = many.iter().map(|p| p.display_name()).collect();
-            Err(tr!("여러 사이트가 일치합니다: {}", "Several sites match: {}", names.join(", ")))
+            Err(tr!("sidebar.several_sites_match", arg0 = names.join(", ")))
         }
     }
 }
@@ -201,11 +188,11 @@ impl Sidebar {
     /// Menu entries for the selected sites.
     fn many_items(ui: &mut egui::Ui, ids: &[String], action: &mut Option<SidebarAction>) {
         let n = ids.len();
-        if ui.add(icon::button(icon::CONNECT, tr!("선택한 {n}개 연결 (탭)", "Connect {n} selected (tabs)"))).clicked() {
+        if ui.add(icon::button(icon::CONNECT, tr!("sidebar.connect_selected_tabs", n = n))).clicked() {
             *action = Some(SidebarAction::ConnectMany(ids.to_vec(), TemplateLayout::Tabs));
             ui.close();
         }
-        ui.menu_button(t("나란히 연결", "Connect side by side"), |ui| {
+        ui.menu_button(t!("sidebar.connect_side_by_side"), |ui| {
             for layout in [TemplateLayout::Columns, TemplateLayout::Rows, TemplateLayout::Grid] {
                 if ui.button(layout.label()).clicked() {
                     *action = Some(SidebarAction::ConnectMany(ids.to_vec(), layout));
@@ -213,7 +200,7 @@ impl Sidebar {
                 }
             }
         });
-        if ui.add(icon::button(icon::TEMPLATE, t("템플릿으로 저장…", "Save as template…"))).clicked() {
+        if ui.add(icon::button(icon::TEMPLATE, t!("sidebar.save_as_template"))).clicked() {
             *action = Some(SidebarAction::NewTemplate(ids.to_vec()));
             ui.close();
         }
@@ -226,14 +213,14 @@ impl Sidebar {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 
         ui.horizontal(|ui| {
-            ui.strong(t("사이트", "Sites"));
+            ui.strong(t!("sidebar.sites"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Hides the list from the list itself, with or without the toolbar (#120).
                 // Icons only, so the line fits a narrow list.
                 if icon::named_icon_button(
                     ui,
                     icon::SIDEBAR_HIDE,
-                    &format!("{} ({})", t("사이트 목록 숨기기", "Hide the site list"), hint(Shortcut::Sidebar)),
+                    &format!("{} ({})", t!("common.hide_the_site_list"), hint(Shortcut::Sidebar)),
                     true,
                 )
                 .clicked()
@@ -243,19 +230,19 @@ impl Sidebar {
                 if icon::named_icon_button(
                     ui,
                     icon::SITE_MANAGER,
-                    &format!("{} ({})", t("사이트 관리", "Site Manager"), hint(Shortcut::SiteManager)),
+                    &format!("{} ({})", t!("common.site_manager"), hint(Shortcut::SiteManager)),
                     true,
                 )
                 .clicked()
                 {
                     action = Some(SidebarAction::Manage(self.selected.clone()));
                 }
-                if icon::named_icon_button(ui, icon::NEW_SITE, t("새 사이트", "New site"), true).clicked() {
+                if icon::named_icon_button(ui, icon::NEW_SITE, t!("common.new_site"), true).clicked() {
                     action = Some(SidebarAction::New);
                 }
             });
         });
-        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t("검색", "Search")).desired_width(f32::INFINITY));
+        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t!("common.search")).desired_width(f32::INFINITY));
 
         // The button first (from the right), so a narrow list shortens the text, not the button.
         ui.horizontal(|ui| {
@@ -276,15 +263,15 @@ impl Sidebar {
             let ids = self.chosen_in_order();
             egui::Panel::bottom("sidebar-selection").show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(tr!("{}개 선택", "{} selected", ids.len())).strong());
+                    ui.label(RichText::new(tr!("sidebar.selected", arg0 = ids.len())).strong());
                     if ui
-                        .add(icon::button(icon::CONNECT, t("연결", "Connect")).small())
-                        .on_hover_text(t("탭으로 모두 연결", "Connect all as tabs"))
+                        .add(icon::button(icon::CONNECT, t!("common.connect")).small())
+                        .on_hover_text(t!("sidebar.connect_all_as_tabs"))
                         .clicked()
                     {
                         action = Some(SidebarAction::ConnectMany(ids.clone(), TemplateLayout::Tabs));
                     }
-                    ui.menu_button(RichText::new(t("나란히 ▾", "Side by side ▾")).small(), |ui| {
+                    ui.menu_button(RichText::new(t!("sidebar.side_by_side")).small(), |ui| {
                         for layout in [TemplateLayout::Columns, TemplateLayout::Rows, TemplateLayout::Grid] {
                             if ui.button(layout.label()).clicked() {
                                 action = Some(SidebarAction::ConnectMany(ids.clone(), layout));
@@ -292,10 +279,10 @@ impl Sidebar {
                             }
                         }
                     });
-                    if ui.add(icon::button(icon::TEMPLATE, t("템플릿 저장", "Save template")).small()).clicked() {
+                    if ui.add(icon::button(icon::TEMPLATE, t!("sidebar.save_template")).small()).clicked() {
                         action = Some(SidebarAction::NewTemplate(ids.clone()));
                     }
-                    if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("선택 해제", "Clear the selection")).clicked() {
+                    if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t!("sidebar.clear_the_selection")).clicked() {
                         self.chosen.clear();
                     }
                 })
@@ -305,26 +292,26 @@ impl Sidebar {
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             if store.profiles().is_empty() {
-                ui.add(egui::Label::new(RichText::new(t("저장된 사이트가 없습니다.", "No saved sites.")).weak()).wrap());
+                ui.add(egui::Label::new(RichText::new(t!("sidebar.no_saved_sites")).weak()).wrap());
                 ui.add_space(4.0);
                 // The ways to get sites, as on the start screen (#138).
-                if ui.add(icon::button(icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
+                if ui.add(icon::button(icon::NEW_SITE, t!("common.new_site"))).clicked() {
                     action = Some(SidebarAction::New);
                 }
-                if ui.add(icon::button(icon::IMPORT, t("PuTTY 가져오기", "Import PuTTY"))).clicked() {
+                if ui.add(icon::button(icon::IMPORT, t!("common.import_putty"))).clicked() {
                     action = Some(SidebarAction::ImportPutty);
                 }
-                if ui.add(icon::button(icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
+                if ui.add(icon::button(icon::IMPORT, t!("common.import_xshell"))).clicked() {
                     action = Some(SidebarAction::ImportXshell);
                 }
-                if ui.add(icon::button(icon::IMPORT, t("SecureCRT 가져오기", "Import SecureCRT"))).clicked() {
+                if ui.add(icon::button(icon::IMPORT, t!("common.import_securecrt"))).clicked() {
                     action = Some(SidebarAction::ImportSecureCrt);
                 }
                 return;
             }
             let templates: Vec<&SiteTemplate> = store.templates().iter().filter(|tpl| template_matches(tpl, &self.filter)).collect();
             if !templates.is_empty() {
-                egui::CollapsingHeader::new(RichText::new(t("템플릿", "Templates")).strong()).id_salt("templates").default_open(true).show(
+                egui::CollapsingHeader::new(RichText::new(t!("sidebar.templates")).strong()).id_salt("templates").default_open(true).show(
                     ui,
                     |ui| {
                         for template in templates {
@@ -337,10 +324,7 @@ impl Sidebar {
             let tree = site_tree::build(store, &self.filter);
             self.folder_items(ui, &tree, &mut action);
             ui.add_space(6.0);
-            let hint = t(
-                "Ctrl·Shift+클릭으로 여러 개를 골라 한 번에 연결하거나 템플릿으로 저장합니다.",
-                "Ctrl/Shift+click to pick several sites, then connect them at once or save a template.",
-            );
+            let hint = t!("sidebar.ctrl_shift_click_to_pick_several_sites_then");
             ui.add(egui::Label::new(RichText::new(hint).small().weak()).wrap());
         });
         action
@@ -351,20 +335,15 @@ impl Sidebar {
         let response = ui
             .push_id(("template", &template.id), |ui| ui.selectable_label(false, format!("▦ {}  ({})", template.name, names.len())))
             .inner
-            .on_hover_text(tr!(
-                "{}\n배치: {}  (더블클릭: 모두 연결)",
-                "{}\nLayout: {}  (double-click: connect all)",
-                names.join(", "),
-                template.layout.label()
-            ));
+            .on_hover_text(tr!("sidebar.layout_double_click_connect_all", arg0 = names.join(", "), arg1 = template.layout.label()));
         if response.double_clicked() {
             *action = Some(SidebarAction::OpenTemplate(template.id.clone()));
         }
         response.context_menu(|ui| {
             let entries = [
-                (t("모두 연결", "Connect all"), SidebarAction::OpenTemplate(template.id.clone())),
-                (t("편집…", "Edit…"), SidebarAction::EditTemplate(template.id.clone())),
-                (t("삭제", "Delete"), SidebarAction::DeleteTemplate(template.id.clone())),
+                (t!("sidebar.connect_all"), SidebarAction::OpenTemplate(template.id.clone())),
+                (t!("sidebar.edit"), SidebarAction::EditTemplate(template.id.clone())),
+                (t!("common.delete"), SidebarAction::DeleteTemplate(template.id.clone())),
             ];
             for (label, a) in entries {
                 if ui.button(label).clicked() {
@@ -400,7 +379,7 @@ impl Sidebar {
                     .inner
                 })
                 .inner
-                .on_hover_text(tr!("{}\n{}  (더블클릭: 연결)", "{}\n{}  (double-click: connect)", p.display_name(), summary(p)));
+                .on_hover_text(tr!("sidebar.double_click_connect", arg0 = p.display_name(), arg1 = summary(p)));
             if response.clicked() {
                 let modifiers = ui.input(|i| i.modifiers);
                 self.click(&p.id, modifiers);
@@ -415,10 +394,10 @@ impl Sidebar {
                     ui.separator();
                 }
                 let entries = [
-                    (t("연결", "Connect"), SidebarAction::Connect(p.id.clone())),
-                    (t("편집…", "Edit…"), SidebarAction::Manage(Some(p.id.clone()))),
-                    (t("복제", "Duplicate"), SidebarAction::Duplicate(p.id.clone())),
-                    (t("삭제", "Delete"), SidebarAction::Delete(p.id.clone())),
+                    (t!("common.connect"), SidebarAction::Connect(p.id.clone())),
+                    (t!("sidebar.edit"), SidebarAction::Manage(Some(p.id.clone()))),
+                    (t!("common.duplicate"), SidebarAction::Duplicate(p.id.clone())),
+                    (t!("common.delete"), SidebarAction::Delete(p.id.clone())),
                 ];
                 for (label, a) in entries {
                     if ui.button(label).clicked() {

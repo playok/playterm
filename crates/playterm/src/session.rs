@@ -74,11 +74,11 @@ impl PendingAuth {
 pub fn elapsed(d: Duration) -> String {
     let minutes = d.as_secs() / 60;
     match minutes {
-        0 => t("방금", "just now").into(),
-        1..=59 => tr!("{minutes}분", "{minutes} min"),
+        0 => t!("session.just_now").into(),
+        1..=59 => tr!("session.min", minutes = minutes),
         _ => {
             let (h, m) = (minutes / 60, minutes % 60);
-            if m == 0 { tr!("{h}시간", "{h} h") } else { tr!("{h}시간 {m}분", "{h} h {m} min") }
+            if m == 0 { tr!("session.h", h = h) } else { tr!("session.h_min", h = h, m = m) }
         }
     }
 }
@@ -402,7 +402,7 @@ impl Session {
         self.remote = Some(Remote { params, handle });
         self.state = SessionState::Connecting;
         let target = self.target();
-        self.terminal.feed_local(&tr!("\x1b[90m{target} 에 연결 중...\x1b[0m\r\n", "\x1b[90mConnecting to {target}...\x1b[0m\r\n"));
+        self.terminal.feed_local(&tr!("session.connecting", target = target));
         if let Some(plan) = log {
             let path = logging::new_log_path(&plan.dir, &self.tab_title());
             self.start_log(&path, plan.mode);
@@ -430,11 +430,11 @@ impl Session {
         let Remote { params: p, .. } = self.remote.as_ref()?;
         let state = match self.state {
             SessionState::Connected => match self.connected_since {
-                Some(since) => format!("{} {}", t("연결됨", "Connected"), elapsed(since.elapsed())),
-                None => t("연결됨", "Connected").into(),
+                Some(since) => format!("{} {}", t!("common.connected"), elapsed(since.elapsed())),
+                None => t!("common.connected").into(),
             },
-            SessionState::Connecting => t("연결 중…", "Connecting…").into(),
-            SessionState::Closed => t("연결 끊김", "Disconnected").into(),
+            SessionState::Connecting => t!("common.connecting").into(),
+            SessionState::Closed => t!("common.disconnected").into(),
             SessionState::Local => return None,
         };
         let mut parts = Vec::new();
@@ -452,7 +452,7 @@ impl Session {
 
     /// `SSH host:22`, `Serial COM3 (9600 8N1)`.
     pub fn target(&self) -> String {
-        let Some(Remote { params: p, .. }) = &self.remote else { return t("로컬", "Local").into() };
+        let Some(Remote { params: p, .. }) = &self.remote else { return t!("session.local").into() };
         match p.protocol {
             Protocol::Serial => format!("Serial {} ({})", p.serial.port, p.serial.line_summary()),
             proto => format!("{proto} {}:{}", printable(&p.host), p.port),
@@ -462,16 +462,14 @@ impl Session {
     pub fn start_log(&mut self, path: &std::path::Path, mode: LogMode) {
         let title = self.tab_title();
         match self.terminal.start_log(path, mode, &title) {
-            Ok(()) => self.notice(&tr!("로그 기록 시작: {}", "Logging started: {}", path.display()), "90"),
-            Err(e) => {
-                self.notice(&tr!("로그 파일을 만들 수 없습니다 ({}): {e}", "Cannot create the log file ({}): {e}", path.display()), "31")
-            }
+            Ok(()) => self.notice(&tr!("session.logging_started", arg0 = path.display()), "90"),
+            Err(e) => self.notice(&tr!("session.cannot_create_the_log_file", arg0 = path.display(), e = e), "31"),
         }
     }
 
     pub fn stop_log(&mut self) {
         if let Some(path) = self.terminal.stop_log() {
-            self.notice(&tr!("로그 기록 중지: {}", "Logging stopped: {}", path.display()), "90");
+            self.notice(&tr!("session.logging_stopped", arg0 = path.display()), "90");
         }
     }
 
@@ -552,11 +550,11 @@ impl Session {
         // SFTP ran over the old connection (its `Closed` is never read now that the handle is
         // replaced): the panel opens a new channel on the new one.
         if self.sftp.as_ref().is_some_and(|b| b.has_running_transfers()) {
-            self.notice(t("다시 연결해 진행 중이던 SFTP 전송을 중단했습니다", "Reconnected; the SFTP transfers in progress stopped"), "31");
+            self.notice(t!("session.reconnected_the_sftp_transfers_in_progress_stopped"), "31");
         }
         self.forget_sftp();
         let target = self.target();
-        self.terminal.feed_local(&tr!("\x1b[90m{target} 에 다시 연결 중...\x1b[0m\r\n", "\x1b[90mReconnecting to {target}...\x1b[0m\r\n"));
+        self.terminal.feed_local(&tr!("session.reconnecting", target = target));
         self.state = SessionState::Connecting;
         self.host_key = None;
         self.auth = None;
@@ -669,7 +667,7 @@ impl Session {
         if let Some(name) = &self.name {
             return name.clone();
         }
-        let Some(Remote { params, .. }) = &self.remote else { return t("로컬", "Local").into() };
+        let Some(Remote { params, .. }) = &self.remote else { return t!("session.local").into() };
         match &self.remote_title {
             Some(t) if !t.is_empty() => t.clone(),
             _ if params.username.is_empty() => params.host.clone(),
@@ -760,13 +758,9 @@ impl Session {
                     match (dir, &mut self.sftp) {
                         (Some(dir), Some(browser)) => browser.go_to(&dir),
                         (Some(dir), None) => self.sftp_start = Some(dir),
-                        (None, Some(browser)) if asked => browser.set_status(
-                            t(
-                                "터미널의 현재 디렉터리를 알 수 없습니다 (Linux 서버의 SSH 셸에서 됩니다)",
-                                "The terminal's current directory is not known (works with SSH shells on Linux servers)",
-                            ),
-                            true,
-                        ),
+                        (None, Some(browser)) if asked => {
+                            browser.set_status(t!("session.the_terminal_s_current_directory_is_not_known"), true)
+                        }
                         _ => {}
                     }
                 }
@@ -777,17 +771,14 @@ impl Session {
                             self.sftp = Some(SftpBrowser::new(conn, self.sftp_start.take()));
                         }
                         Err(e) => {
-                            self.notice(&tr!("SFTP 열기 실패: {e}", "Could not open SFTP: {e}"), "31");
+                            self.notice(&tr!("session.could_not_open_sftp", e = e), "31");
                             self.sftp_error = Some(e);
                         }
                     }
                 }
                 SessionEvent::Closed(reason) => {
                     if self.end_zmodem() {
-                        self.notice(
-                            t("연결이 끊겨 ZMODEM 전송을 중단했습니다", "The connection closed; the ZMODEM transfer stopped"),
-                            "31",
-                        );
+                        self.notice(t!("session.the_connection_closed_the_zmodem_transfer_stopped"), "31");
                     }
                     self.state = SessionState::Closed;
                     self.connected_since = None;
@@ -798,13 +789,10 @@ impl Session {
                     self.forget_sftp();
                     self.terminal.reset_modes();
                     match reason {
-                        Some(reason) => self.notice(&tr!("연결 종료: {reason}", "Disconnected: {reason}"), "31"),
-                        None => self.notice(t("연결이 종료되었습니다", "Disconnected"), "90"),
+                        Some(reason) => self.notice(&tr!("session.disconnected", reason = reason), "31"),
+                        None => self.notice(t!("session.disconnected_2"), "90"),
                     }
-                    self.terminal.feed_local(t(
-                        "\x1b[90mr: 다시 연결 · help: 명령 목록\x1b[0m\r\n",
-                        "\x1b[90mr: reconnect · help: list of commands\x1b[0m\r\n",
-                    ));
+                    self.terminal.feed_local(t!("session.reconnect_hint"));
                     self.prompt();
                 }
             }
@@ -821,9 +809,7 @@ impl Session {
                 }
                 TerminalEvent::Title(title) => self.remote_title = title,
                 TerminalEvent::ClipboardStore(text) => self.clipboard_store = Some(text),
-                TerminalEvent::LogFailed(e) => {
-                    self.notice(&tr!("로그 기록 실패, 중지합니다: {e}", "Logging failed and was stopped: {e}"), "31")
-                }
+                TerminalEvent::LogFailed(e) => self.notice(&tr!("session.logging_failed_and_was_stopped", e = e), "31"),
                 TerminalEvent::Bell => {}
             }
         }
@@ -864,15 +850,11 @@ impl Session {
                     let staging = pick.staging.clone();
                     self.zmodem_pick = Some(pick);
                     self.zmodem_question = true;
-                    let line = t(
-                        "ZMODEM 받기: 저장할 폴더를 고르는 동안 임시 폴더에 받습니다 · Ctrl+C 로 취소",
-                        "ZMODEM download: received into a temporary folder while you choose where to save · Ctrl+C cancels",
-                    );
+                    let line = t!("session.zmodem_download_received_into_a_temporary_folder_while");
                     self.begin_zmodem(staging, &bytes[rest..], line);
                 } else {
                     let dir = self.zmodem_dir.clone();
-                    let line =
-                        tr!("ZMODEM 받기: {} 에 저장합니다 · Ctrl+C 로 취소", "ZMODEM download into {} · Ctrl+C cancels", dir.display());
+                    let line = tr!("session.zmodem_download_into_ctrl_c_cancels", arg0 = dir.display());
                     self.begin_zmodem(dir, &bytes[rest..], &line);
                 }
             }
@@ -881,8 +863,7 @@ impl Session {
                 // couple of minutes).
                 self.terminal.feed(&bytes[..at]);
                 self.login = None;
-                let line =
-                    t("ZMODEM 보내기: 보낼 파일을 고르세요 · Ctrl+C 로 취소", "ZMODEM upload: choose the files to send · Ctrl+C cancels");
+                let line = t!("session.zmodem_upload_choose_the_files_to_send_ctrl");
                 self.terminal.feed_local(&format!("\r\n\x1b[36m[{}]\x1b[0m\r\n", printable(line)));
                 let (upload, reply) = zmodem::Upload::begin(&bytes[rest..], Instant::now());
                 self.zmodem_up = Some(UploadRun { upload, listed: 0, drawn: None });
@@ -918,10 +899,7 @@ impl Session {
         let files = files.unwrap_or_default();
         if !files.is_empty() {
             let count = files.len();
-            self.terminal.feed_local(&format!(
-                "\x1b[36m[{}]\x1b[0m\r\n",
-                printable(&tr!("ZMODEM: 파일 {count}개를 보냅니다", "ZMODEM: sending {count} file(s)"))
-            ));
+            self.terminal.feed_local(&format!("\x1b[36m[{}]\x1b[0m\r\n", printable(&tr!("session.zmodem_sending_file_s", count = count))));
         }
         let Some(run) = &mut self.zmodem_up else { return };
         let reply = run.upload.choose(files, Instant::now());
@@ -942,7 +920,7 @@ impl Session {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let note = match sent {
                 zmodem::Sent::Done(path) => human_size(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)),
-                zmodem::Sent::Skipped(_) => t("서버가 건너뜀", "skipped by the server").into(),
+                zmodem::Sent::Skipped(_) => t!("session.skipped_by_the_server").into(),
             };
             text += &format!("\r\x1b[K  {mark} {} ({note})\r\n", printable(&name));
             run.drawn = None;
@@ -955,15 +933,9 @@ impl Session {
             self.upload_question = false;
             self.terminal.feed_local(&format!("{text}\r\x1b[K"));
             match outcome {
-                Outcome::Finished => self.notice(&tr!("ZMODEM 보내기 완료: 파일 {done}개", "ZMODEM upload done: {done} file(s)"), "32"),
-                Outcome::Cancelled => self.notice(
-                    &tr!(
-                        "ZMODEM 보내기를 취소했습니다 (끝까지 보낸 파일 {done}개)",
-                        "ZMODEM upload cancelled ({done} file(s) sent completely)"
-                    ),
-                    "33",
-                ),
-                Outcome::Failed(e) => self.notice(&tr!("ZMODEM 보내기 실패: {e}", "ZMODEM upload failed: {e}"), "31"),
+                Outcome::Finished => self.notice(&tr!("session.zmodem_upload_done_file_s", done = done), "32"),
+                Outcome::Cancelled => self.notice(&tr!("session.zmodem_upload_cancelled_file_s_sent_completely", done = done), "33"),
+                Outcome::Failed(e) => self.notice(&tr!("session.zmodem_upload_failed", e = e), "31"),
             }
             if !rest.is_empty() {
                 self.output(&rest);
@@ -1001,8 +973,7 @@ impl Session {
         let running = pick.ended.is_none();
         match dir {
             Some(dir) if running => {
-                let line =
-                    tr!("ZMODEM: 받기가 끝나면 {} 에 저장합니다", "ZMODEM: the files go to {} when the download is done", dir.display());
+                let line = tr!("session.zmodem_the_files_go_to_when_the_download", arg0 = dir.display());
                 pick.chosen = Some(dir);
                 // Below the progress line, which goes on.
                 self.terminal.feed_local(&format!("\r\x1b[K\x1b[36m[{}]\x1b[0m\r\n", printable(&line)));
@@ -1024,15 +995,9 @@ impl Session {
                 drop(pick);
                 self.notice(
                     if running {
-                        t(
-                            "저장할 폴더를 고르지 않아 ZMODEM 받기를 취소하고 받은 파일을 지웠습니다",
-                            "No folder was chosen: the ZMODEM download was cancelled and what it received deleted",
-                        )
+                        t!("session.no_folder_was_chosen_the_zmodem_download_was")
                     } else {
-                        t(
-                            "저장할 폴더를 고르지 않아 ZMODEM 으로 받은 파일을 지웠습니다",
-                            "No folder was chosen: the files received with ZMODEM were deleted",
-                        )
+                        t!("session.no_folder_was_chosen_the_files_received_with")
                     },
                     "33",
                 );
@@ -1049,9 +1014,7 @@ impl Session {
         if count == 0 {
             self.zmodem_pick = None;
             match outcome {
-                Outcome::Finished => {
-                    self.notice(t("ZMODEM 받기 완료: 받은 파일이 없습니다", "ZMODEM download done: no files were received"), "32")
-                }
+                Outcome::Finished => self.notice(t!("session.zmodem_download_done_no_files_were_received"), "32"),
                 outcome => self.zmodem_notice(&outcome, 0, Path::new("")),
             }
             return;
@@ -1061,25 +1024,15 @@ impl Session {
             self.zmodem_move(&dir);
             return;
         }
-        let wait = t("저장할 폴더를 고르면 그곳으로 옮깁니다", "they move to the folder you choose");
+        let wait = t!("session.they_move_to_the_folder_you_choose");
         match outcome {
-            Outcome::Finished => {
-                self.notice(&tr!("ZMODEM 받기 완료: 파일 {count}개 · {wait}", "ZMODEM download done: {count} file(s), {wait}"), "36")
+            Outcome::Finished => self.notice(&tr!("session.zmodem_download_done_file_s", count = count, wait = wait), "36"),
+            Outcome::Cancelled => {
+                self.notice(&tr!("session.zmodem_download_cancelled_file_s_received_completely", count = count, wait = wait), "33")
             }
-            Outcome::Cancelled => self.notice(
-                &tr!(
-                    "ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {count}개) · {wait}",
-                    "ZMODEM download cancelled ({count} file(s) received completely), {wait}"
-                ),
-                "33",
-            ),
-            Outcome::Failed(e) => self.notice(
-                &tr!(
-                    "ZMODEM 받기 실패: {e} (끝까지 받은 파일 {count}개) · {wait}",
-                    "ZMODEM download failed: {e} ({count} file(s) received completely), {wait}"
-                ),
-                "31",
-            ),
+            Outcome::Failed(e) => {
+                self.notice(&tr!("session.zmodem_download_failed_file_s_received_completely", count = count, e = e, wait = wait), "31")
+            }
         }
     }
 
@@ -1098,13 +1051,7 @@ impl Session {
         if !failed.is_empty() {
             pick.keep = true;
             let (staging, failed) = (pick.staging.display(), failed.join(", "));
-            self.notice(
-                &tr!(
-                    "옮기지 못한 파일은 {staging} 에 남겨 두었습니다: {failed}",
-                    "Files that could not be moved are left in {staging}: {failed}"
-                ),
-                "31",
-            );
+            self.notice(&tr!("session.files_that_could_not_be_moved_are_left", failed = failed, staging = staging), "31");
         }
     }
 
@@ -1112,18 +1059,9 @@ impl Session {
     fn zmodem_notice(&mut self, outcome: &Outcome, saved: usize, dir: &Path) {
         let dir = dir.display();
         match outcome {
-            Outcome::Finished => self.notice(
-                &tr!("ZMODEM 받기 완료: 파일 {saved}개를 {dir} 에 저장했습니다", "ZMODEM download done: {saved} file(s) saved in {dir}"),
-                "32",
-            ),
-            Outcome::Cancelled => self.notice(
-                &tr!(
-                    "ZMODEM 받기를 취소했습니다 (끝까지 받은 파일 {saved}개)",
-                    "ZMODEM download cancelled ({saved} file(s) received completely)"
-                ),
-                "33",
-            ),
-            Outcome::Failed(e) => self.notice(&tr!("ZMODEM 받기 실패: {e}", "ZMODEM download failed: {e}"), "31"),
+            Outcome::Finished => self.notice(&tr!("session.zmodem_download_done_file_s_saved_in", dir = dir, saved = saved), "32"),
+            Outcome::Cancelled => self.notice(&tr!("session.zmodem_download_cancelled_file_s_received_completely_2", saved = saved), "33"),
+            Outcome::Failed(e) => self.notice(&tr!("session.zmodem_download_failed", e = e), "31"),
         }
     }
 
@@ -1197,10 +1135,7 @@ impl Session {
     /// Starts a macro in this tab (a running one stops).
     pub fn run_macro(&mut self, name: &str, steps: Vec<macros::Step>) {
         if macros::uses_password(&steps) {
-            self.notice(&tr!(
-                "매크로 '{name}' 자동 실행 중단: 비밀번호가 에코될 수 있습니다. 도구 메뉴에서 매크로를 선택하고 위험 안내를 확인한 뒤 실행하세요.",
-                "Macro '{name}' automatic run stopped: the password may be echoed. Select it in Tools and confirm the warning before running."
-            ), "33");
+            self.notice(&tr!("session.macro_automatic_run_stopped_the_password_may_be", name = name), "33");
             return;
         }
         self.run_macro_confirmed(name, steps);
@@ -1214,7 +1149,7 @@ impl Session {
         // The prompt already on the screen counts for a first @wait (read before the notice
         // below moves the cursor).
         let prompt = self.terminal.cursor_line_text();
-        let line = tr!("매크로 '{name}' 실행 · 키를 누르면 중지", "Macro '{name}' running · press a key to stop");
+        let line = tr!("session.macro_running_press_a_key_to_stop", name = name);
         self.notice(&line, "36");
         let mut run = MacroRun::new(name.to_owned(), steps);
         run.output(&prompt);
@@ -1235,7 +1170,7 @@ impl Session {
     /// Stops the running macro (the user typed, or chose Stop).
     pub fn stop_macro(&mut self) {
         if let Some(run) = self.macro_run.take() {
-            self.notice(&tr!("매크로 '{}' 를 중지했습니다", "Macro '{}' stopped", run.name), "33");
+            self.notice(&tr!("session.macro_stopped", arg0 = run.name), "33");
         }
     }
 
@@ -1272,13 +1207,7 @@ impl Session {
                         .or_else(|| self.login_script.as_ref().and_then(|l| l.password.as_deref().map(String::as_str)));
                     let Some(text) = macros::expand(&text, &remote.params.username, password) else {
                         self.macro_run = None;
-                        self.notice(
-                            &tr!(
-                                "매크로 '{name}' 중단: {{password}} 에 쓸 비밀번호가 없습니다 (저장된 비밀번호도, 입력한 비밀번호도 없음)",
-                                "Macro '{name}' stopped: no password for {{password}} (none saved or typed)"
-                            ),
-                            "31",
-                        );
+                        self.notice(&tr!("session.macro_stopped_no_password_for_none_saved_or", name = name), "31");
                         return true;
                     };
                     let bytes = Zeroizing::new(self.terminal.encode_input(&text));
@@ -1287,11 +1216,11 @@ impl Session {
                 }
                 macros::Action::Done => {
                     self.macro_run = None;
-                    self.notice(&tr!("매크로 '{name}' 완료", "Macro '{name}' done"), "32");
+                    self.notice(&tr!("session.macro_done", name = name), "32");
                 }
                 macros::Action::Failed(why) => {
                     self.macro_run = None;
-                    self.notice(&tr!("매크로 '{name}' 중단: {why}", "Macro '{name}' stopped: {why}"), "31");
+                    self.notice(&tr!("session.macro_stopped_2", name = name, why = why), "31");
                 }
             }
         }
@@ -1404,11 +1333,9 @@ impl Session {
     pub fn charset_label(&self) -> String {
         match (self.charset, self.terminal.detected_charset()) {
             // "Detecting" only while output can still come in (#147).
-            (Charset::Auto, None) if self.state == SessionState::Connected => {
-                t("자동 감지 중 (UTF-8 로 표시)", "Detecting (shown as UTF-8)").into()
-            }
-            (Charset::Auto, None) => t("자동 (UTF-8)", "Auto (UTF-8)").into(),
-            (Charset::Auto, Some(found)) => tr!("{found} (자동 감지)", "{found} (auto-detected)"),
+            (Charset::Auto, None) if self.state == SessionState::Connected => t!("session.detecting_shown_as_utf_8").into(),
+            (Charset::Auto, None) => t!("session.auto_utf_8").into(),
+            (Charset::Auto, Some(found)) => tr!("session.auto_detected", found = found),
             (set, _) => set.to_string(),
         }
     }
@@ -1578,23 +1505,20 @@ impl Session {
                     run.addr = Some(addr);
                     let target = if run.host == addr.to_string() { run.host.clone() } else { format!("{} [{addr}]", run.host) };
                     let size = run.size;
-                    text += &tr!(
-                        "{target} 에 ping 을 보냅니다 ({size}바이트 데이터) \x1b[90m· Ctrl+C 로 중지\x1b[0m\n",
-                        "Pinging {target} with {size} bytes of data \x1b[90m· Ctrl+C stops\x1b[0m\n"
-                    );
+                    text += &tr!("session.pinging_with_bytes_of_data_90m_ctrl_c", size = size, target = target);
                 }
                 PingEvent::Reply { from, bytes, time_ms, ttl } => {
                     let time = if time_ms == 0 { "<1ms".to_owned() } else { format!("={time_ms}ms") };
                     let ttl = ttl.map(|ttl| format!(" TTL={ttl}")).unwrap_or_default();
-                    text += &tr!("{from} 의 응답: 바이트={bytes} 시간{time}{ttl}\n", "Reply from {from}: bytes={bytes} time{time}{ttl}\n");
+                    text += &tr!("session.reply_from_bytes_time", bytes = bytes, from = from, time = time, ttl = ttl);
                 }
                 PingEvent::TimedOut => {
-                    text += &format!("\x1b[33m{}\x1b[0m\n", t("요청 시간이 만료되었습니다.", "Request timed out."));
+                    text += &format!("\x1b[33m{}\x1b[0m\n", t!("session.request_timed_out"));
                 }
                 PingEvent::Failed { from, status } => {
                     let what = ping::status_text(status);
                     text += &match from {
-                        Some(from) => tr!("\x1b[33m{from} 의 응답: {what}\x1b[0m\n", "\x1b[33mReply from {from}: {what}\x1b[0m\n"),
+                        Some(from) => tr!("session.ping_reply", from = from, what = what),
                         None => format!("\x1b[33m{what}\x1b[0m\n"),
                     };
                 }
@@ -1624,15 +1548,16 @@ impl Session {
         {
             let (sent, received, lost, loss) = (stats.sent, stats.received, stats.lost(), stats.loss_percent());
             let mut text = tr!(
-                "\n{addr} 에 대한 ping 통계:\n    패킷: 보냄 = {sent}, 받음 = {received}, 손실 = {lost} ({loss}% 손실)",
-                "\nPing statistics for {addr}:\n    Packets: Sent = {sent}, Received = {received}, Lost = {lost} ({loss}% loss)"
+                "session.ping_statistics_for_packets_sent_received_lost_loss",
+                addr = addr,
+                loss = loss,
+                lost = lost,
+                received = received,
+                sent = sent
             );
             if stats.received > 0 {
                 let (min, max, average) = (stats.min_ms, stats.max_ms, stats.average_ms());
-                text += &tr!(
-                    "\n왕복 시간(밀리초):\n    최소 = {min}ms, 최대 = {max}ms, 평균 = {average}ms",
-                    "\nApproximate round trip times in milli-seconds:\n    Minimum = {min}ms, Maximum = {max}ms, Average = {average}ms"
-                );
+                text += &tr!("session.approximate_round_trip_times_in_milli_seconds_minimum", average = average, max = max, min = min);
             }
             self.print(&text);
         }
@@ -1713,7 +1638,7 @@ mod tests {
 
     #[test]
     fn elapsed_reads_naturally() {
-        playterm_i18n::set_english(false);
+        playterm_i18n::set_language(playterm_i18n::Language::KOREAN);
         assert_eq!(elapsed(Duration::from_secs(20)), "방금");
         assert_eq!(elapsed(Duration::from_secs(12 * 60 + 5)), "12분");
         assert_eq!(elapsed(Duration::from_secs(2 * 3600)), "2시간");

@@ -4,7 +4,7 @@ use super::*;
 
 /// Language and light/dark look of the windows (the terminal colors are separate).
 pub(super) fn apply_ui(ctx: &egui::Context, settings: &AppSettings) {
-    playterm_i18n::set_english(settings.language == Language::English);
+    playterm_i18n::set_language(settings.language);
     ctx.set_theme(match settings.ui_theme {
         UiTheme::Dark => egui::ThemePreference::Dark,
         UiTheme::Light => egui::ThemePreference::Light,

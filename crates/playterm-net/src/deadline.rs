@@ -42,11 +42,7 @@ impl Deadline {
         }
         let result = tokio::select! {
             result = connecting => result,
-            () = self.passed() => Err(anyhow::anyhow!(tr!(
-                "연결 시간 초과 ({}초 동안 응답 없음). 시간 제한은 도구 → 설정에서 바꿀 수 있습니다.",
-                "Connection timed out (no answer for {} s). The limit can be changed in Tools → Settings.",
-                limit.as_secs()
-            ))),
+            () = self.passed() => Err(anyhow::anyhow!(tr!("deadline.connection_timed_out_no_answer_for_s_the", arg0 = limit.as_secs()))),
         };
         self.state().until = None;
         result

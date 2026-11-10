@@ -82,9 +82,9 @@ pub fn change_dir(cwd: &Path, arg: Option<&str>) -> Result<PathBuf, String> {
     if target.is_dir() {
         Ok(target)
     } else if target.exists() {
-        Err(tr!("cd: 폴더가 아닙니다: {}", "cd: not a folder: {}", target.display()))
+        Err(tr!("local_fs.cd_not_a_folder", arg0 = target.display()))
     } else {
-        Err(tr!("cd: 경로를 찾을 수 없습니다: {}", "cd: path not found: {}", target.display()))
+        Err(tr!("local_fs.cd_path_not_found", arg0 = target.display()))
     }
 }
 
@@ -147,7 +147,7 @@ pub fn list(cwd: &Path, opts: &ListOptions, cols: usize) -> Result<String, Strin
         pattern = Some(name.to_owned());
         target.pop();
     }
-    let meta = std::fs::metadata(&target).map_err(|_| tr!("경로를 찾을 수 없습니다: {}", "Path not found: {}", target.display()))?;
+    let meta = std::fs::metadata(&target).map_err(|_| tr!("local_fs.path_not_found", arg0 = target.display()))?;
     let mut entries = Vec::new();
     if meta.is_dir() {
         let read = std::fs::read_dir(&target).map_err(|e| format!("{}: {e}", target.display()))?;
@@ -183,7 +183,7 @@ fn thousands(n: u64) -> String {
 }
 
 fn long_listing(dir: &Path, entries: &[Entry]) -> String {
-    let mut out = tr!("\x1b[90m{} 폴더\x1b[0m\n\n", "\x1b[90mFolder {}\x1b[0m\n\n", dir.display());
+    let mut out = tr!("local_fs.folder_header", arg0 = dir.display());
     let (mut files, mut dirs, mut total) = (0, 0, 0u64);
     for e in entries {
         let time = e
@@ -199,18 +199,14 @@ fn long_listing(dir: &Path, entries: &[Entry]) -> String {
             out.push_str(&format!("{time}    {:>14} {}\n", thousands(e.size), e.name));
         }
     }
-    out.push_str(&tr!(
-        "\x1b[90m파일 {files}개 ({} 바이트), 폴더 {dirs}개\x1b[0m",
-        "\x1b[90m{files} files ({} bytes), {dirs} folders\x1b[0m",
-        thousands(total)
-    ));
+    out.push_str(&tr!("local_fs.directory_summary", arg0 = thousands(total), dirs = dirs, files = files));
     out
 }
 
 /// Names in columns, filled top to bottom like `ls`.
 fn short_listing(entries: &[Entry], cols: usize) -> String {
     if entries.is_empty() {
-        return t("\x1b[90m(비어 있음)\x1b[0m", "\x1b[90m(empty)\x1b[0m").into();
+        return t!("local_fs.empty").into();
     }
     let label = |e: &Entry| if e.is_dir { format!("{}{}", e.name, std::path::MAIN_SEPARATOR) } else { e.name.clone() };
     let width = entries.iter().map(|e| label(e).width()).max().unwrap_or(1) + 2;

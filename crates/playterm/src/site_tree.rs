@@ -135,8 +135,8 @@ pub fn badge(ui: &mut egui::Ui, protocol: Protocol) {
     let name = match protocol {
         Protocol::Ssh => "SSH",
         Protocol::Telnet => "Telnet",
-        Protocol::Serial => t("시리얼", "Serial"),
-        Protocol::Rdp => t("원격 데스크톱 (RDP)", "Remote Desktop (RDP)"),
+        Protocol::Serial => t!("site_tree.serial"),
+        Protocol::Rdp => t!("site_tree.remote_desktop_rdp"),
     };
     ui.add(
         egui::Label::new(RichText::new(text).monospace().size(10.0).strong().color(Color32::WHITE).background_color(color))

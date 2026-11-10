@@ -27,25 +27,24 @@ impl Authorities {
 
     pub fn verify(&self, cert: &Certificate, host: &str, now: u64) -> anyhow::Result<()> {
         if !self.configured() {
-            bail!(t("이 호스트에 신뢰하는 SSH CA가 없습니다", "No trusted SSH CA is configured for this host"));
+            bail!(t!("host_certificate.no_trusted_ssh_ca_is_configured_for_this"));
         }
         if cert.cert_type() != CertType::Host {
-            bail!(t("SSH 호스트 인증서가 아닙니다", "This is not an SSH host certificate"));
+            bail!(t!("host_certificate.this_is_not_an_ssh_host_certificate"));
         }
         if !cert.valid_principals().iter().any(|principal| wildcard_match(principal, host)) {
-            bail!(t("SSH 인증서의 호스트 이름이 일치하지 않습니다", "The SSH certificate hostname does not match"));
+            bail!(t!("host_certificate.the_ssh_certificate_hostname_does_not_match"));
         }
         // No critical options are defined for OpenSSH host certificates. Unknown ones
         // must fail closed; noncritical extensions may be ignored.
         if !cert.critical_options().is_empty() {
-            bail!(t("지원하지 않는 SSH 인증서 필수 옵션입니다", "Unsupported SSH certificate critical options"));
+            bail!(t!("host_certificate.unsupported_ssh_certificate_critical_options"));
         }
         if self.revoked.iter().any(|key| key.key_data() == cert.signature_key() || key.key_data() == cert.public_key()) {
-            bail!(t("폐기된 SSH 인증서 키 또는 CA입니다", "The SSH certificate key or CA is revoked"));
+            bail!(t!("host_certificate.the_ssh_certificate_key_or_ca_is_revoked"));
         }
         let fingerprints: Vec<_> = self.trusted.iter().map(|key| key.fingerprint(HashAlg::Sha256)).collect();
-        cert.validate_at(now, &fingerprints)
-            .context(t("SSH 인증서 서명·CA·유효 기간 검증 실패", "SSH certificate signature, CA or validity check failed"))
+        cert.validate_at(now, &fingerprints).context(t!("host_certificate.ssh_certificate_signature_ca_or_validity_check_failed"))
     }
 }
 

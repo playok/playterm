@@ -40,7 +40,7 @@ The screenshots show the Korean UI; English is one setting away.
 
 | Crate | Role |
 |---|---|
-| `crates/playterm-term` | Terminal emulation (alacritty_terminal), UTF-8/CP949 conversion, color palettes |
+| `crates/playterm-term` | Terminal emulation (alacritty_terminal), international charset conversion, color palettes |
 | `crates/playterm-net` | SSH (russh) / Telnet / serial / RDP (IronRDP) transports, session event and command channels, ZMODEM receiving and sending |
 | `crates/playterm-types` | Protocol, forwarding, serial and RDP settings shared by config and transports |
 | `crates/playterm-config` | Site list (`sessions.toml`), password vault (`vault.toml`), settings (`settings.toml`) |
@@ -300,7 +300,11 @@ mouse move to reset the idle time. That also postpones idle screen-off and autom
 
 With a site's encoding set to **Auto-detect** (the default for new sites), playterm decides from the output whether it is UTF-8 or CP949.
 A couple of Hangul characters settle it; if it is CP949, output that was garbled before is redrawn (the prompt lines from before the connection keep only their text).
-The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Choosing UTF-8 or CP949 yourself turns detection off.
+The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Selecting an encoding explicitly turns detection off.
+
+Shift_JIS, EUC-JP, GBK, GB18030, Big5, Windows code pages and ISO-8859 encodings are also available per site.
+The UI follows the OS language by default, falling back to English for unsupported locales. An explicit Korean or English choice survives restart.
+See [language and encoding support](docs/i18n.md).
 
 ## Serial and logging
 

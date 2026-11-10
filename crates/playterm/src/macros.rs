@@ -94,7 +94,7 @@ fn seconds(arg: &str, line: usize) -> Result<Duration, String> {
         .ok()
         .filter(|s| s.is_finite() && *s >= 0.0 && *s <= 24.0 * 3600.0)
         .map(Duration::from_secs_f64)
-        .ok_or_else(|| tr!("{line}번째 줄: 초를 숫자로 쓰세요 ({arg})", "Line {line}: seconds must be a number ({arg})", arg = arg.trim()))
+        .ok_or_else(|| tr!("macros.line_seconds_must_be_a_number", arg = arg.trim(), line = line))
 }
 
 /// Reads a macro's text into steps, or says which line is wrong.
@@ -119,7 +119,7 @@ pub fn parse(script: &str) -> Result<Vec<Step>, String> {
         let (word, arg) = directive.split_once(char::is_whitespace).unwrap_or((directive, ""));
         let needs_text = |what: &str| {
             if arg.trim().is_empty() {
-                Err(tr!("{line}번째 줄: @{what} 다음에 글자를 쓰세요", "Line {line}: @{what} needs some text"))
+                Err(tr!("macros.line_needs_some_text", line = line, what = what))
             } else {
                 Ok(arg.trim().to_owned())
             }
@@ -140,11 +140,11 @@ pub fn parse(script: &str) -> Result<Vec<Step>, String> {
                     *els = Some(steps.len());
                     Step::Else { skip_to: 0 }
                 }
-                _ => return Err(tr!("{line}번째 줄: 짝이 되는 @if 가 없는 @else", "Line {line}: @else without its @if")),
+                _ => return Err(tr!("macros.line_else_without_its_if", line = line)),
             },
             "end" => {
                 let Some((at_if, at_else, _)) = open.pop() else {
-                    return Err(tr!("{line}번째 줄: 짝이 되는 @if 가 없는 @end", "Line {line}: @end without its @if"));
+                    return Err(tr!("macros.line_end_without_its_if", line = line));
                 };
                 let after_end = steps.len() + 1;
                 let after_else = at_else.map_or(after_end, |e| e + 1);
@@ -159,21 +159,18 @@ pub fn parse(script: &str) -> Result<Vec<Step>, String> {
                 Step::End
             }
             "stop" => Step::Stop(None),
-            "fail" => Step::Stop(Some(if arg.trim().is_empty() { t("@fail", "@fail").to_owned() } else { arg.trim().to_owned() })),
+            "fail" => Step::Stop(Some(if arg.trim().is_empty() { t!("macros.fail").to_owned() } else { arg.trim().to_owned() })),
             _ => {
-                return Err(tr!(
-                    "{line}번째 줄: 모르는 명령 @{word} (@wait, @sleep, @timeout, @send, @enter, @if, @ifnot, @else, @end, @stop, @fail; 글자 @ 로 시작하는 줄은 @@)",
-                    "Line {line}: unknown @{word} (@wait, @sleep, @timeout, @send, @enter, @if, @ifnot, @else, @end, @stop, @fail; a line starting with @ is written @@)"
-                ));
+                return Err(tr!("macros.line_unknown_wait_sleep_timeout_send_enter_if", line = line, word = word));
             }
         };
         steps.push(step);
     }
     if let Some((_, _, line)) = open.last() {
-        return Err(tr!("{line}번째 줄의 @if 에 @end 가 없습니다", "The @if on line {line} has no @end"));
+        return Err(tr!("macros.the_if_on_line_has_no_end", line = line));
     }
     if !steps.iter().any(|s| matches!(s, Step::Send(_))) {
-        return Err(t("보낼 줄이 없습니다", "There is nothing to type").into());
+        return Err(t!("macros.there_is_nothing_to_type").into());
     }
     Ok(steps)
 }
@@ -246,10 +243,7 @@ impl MacroRun {
                         let since = *self.waiting_since.get_or_insert(now);
                         if now.duration_since(since) >= self.timeout {
                             let secs = self.timeout.as_secs_f64();
-                            actions.push(Action::Failed(tr!(
-                                "'{text}' 이(가) {secs}초 안에 나오지 않았습니다",
-                                "'{text}' did not come within {secs} s"
-                            )));
+                            actions.push(Action::Failed(tr!("macros.did_not_come_within_s", secs = secs, text = text)));
                             self.next = self.steps.len();
                         }
                         return actions;
@@ -313,10 +307,10 @@ impl MacroDialog {
         for (i, m) in self.macros.iter().enumerate() {
             let name = m.name.trim();
             if name.is_empty() {
-                return Some(tr!("{}번째 매크로에 이름이 없습니다", "Macro {} has no name", i + 1));
+                return Some(tr!("macros.macro_has_no_name", arg0 = i + 1));
             }
             if self.macros[..i].iter().any(|o| o.name.trim() == name) {
-                return Some(tr!("이름이 같은 매크로가 있습니다: {name}", "Two macros are named {name}"));
+                return Some(tr!("macros.two_macros_are_named", name = name));
             }
             if let Err(e) = parse(&m.script) {
                 return Some(format!("{name}: {e}"));
@@ -329,7 +323,7 @@ impl MacroDialog {
         let mut result = MacroDialogResult::Open;
         let problem = self.problem();
         let modal = egui::Modal::new(egui::Id::unique("macro-dialog")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
-            ui.heading(t("매크로 관리", "Macros"));
+            ui.heading(t!("macros.macros"));
             ui.add_space(6.0);
             // A modal has no height of its own: a body of a fixed size, or the separator between
             // the list and the editor would take the whole height, making the modal taller on
@@ -340,12 +334,12 @@ impl MacroDialog {
                 ui.vertical(|ui| {
                     ui.set_width(LIST_WIDTH);
                     ui.horizontal(|ui| {
-                        if ui.add(icon::button(icon::ADD, t("추가", "Add"))).clicked() {
-                            let name = tr!("매크로 {}", "Macro {}", self.macros.len() + 1);
+                        if ui.add(icon::button(icon::ADD, t!("macros.add"))).clicked() {
+                            let name = tr!("macros.macro", arg0 = self.macros.len() + 1);
                             self.macros.push(Macro { name, script: String::new() });
                             self.selected = Some(self.macros.len() - 1);
                         }
-                        if ui.add_enabled(self.selected.is_some(), icon::button(icon::DELETE, t("삭제", "Delete"))).clicked()
+                        if ui.add_enabled(self.selected.is_some(), icon::button(icon::DELETE, t!("common.delete"))).clicked()
                             && let Some(i) = self.selected
                         {
                             self.macros.remove(i);
@@ -355,10 +349,10 @@ impl MacroDialog {
                     ui.add_space(4.0);
                     egui::ScrollArea::vertical().id_salt("macro-list").max_height(330.0).show(ui, |ui| {
                         if self.macros.is_empty() {
-                            ui.weak(t("매크로가 없습니다. [추가] 로 만드세요.", "No macros yet. Add one."));
+                            ui.weak(t!("macros.no_macros_yet_add_one"));
                         }
                         for (i, m) in self.macros.iter().enumerate() {
-                            let name = if m.name.trim().is_empty() { t("(이름 없음)", "(no name)").to_owned() } else { m.name.clone() };
+                            let name = if m.name.trim().is_empty() { t!("macros.no_name").to_owned() } else { m.name.clone() };
                             if ui.selectable_label(self.selected == Some(i), name).clicked() {
                                 self.selected = Some(i);
                             }
@@ -371,7 +365,7 @@ impl MacroDialog {
                     match self.selected.and_then(|i| self.macros.get_mut(i)) {
                         Some(m) => {
                             ui.horizontal(|ui| {
-                                ui.label(t("이름", "Name"));
+                                ui.label(t!("common.name"));
                                 ui.add(egui::TextEdit::singleline(&mut m.name).desired_width(f32::INFINITY));
                             });
                             ui.add_space(4.0);
@@ -381,31 +375,16 @@ impl MacroDialog {
                                         .code_editor()
                                         .desired_rows(11)
                                         .desired_width(f32::INFINITY)
-                                        .hint_text(t("한 줄에 하나씩 입력할 명령", "One command per line")),
+                                        .hint_text(t!("macros.one_command_per_line")),
                                 );
                             });
                         }
                         None => {
-                            ui.weak(t("왼쪽에서 매크로를 고르거나 추가하세요.", "Pick a macro on the left, or add one."));
+                            ui.weak(t!("macros.pick_a_macro_on_the_left_or_add"));
                         }
                     }
                     ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(t(
-                            "줄마다 입력하고 Enter · @wait 글자: 출력에 나올 때까지 기다림\n\
-                             @timeout 초: 기다리는 시간(기본 30) · @sleep 초: 잠깐 멈춤\n\
-                             @send 글자: Enter 없이 입력 · @enter: Enter 만 · # 주석 · @@: @ 로 시작하는 줄\n\
-                             @if 글자 / @ifnot 글자 … @else … @end: 마지막 입력 뒤 출력에 따라 · @stop · @fail 메시지\n\
-                             {user} {password}: 그 탭의 사용자·비밀번호 (비밀번호를 직접 적지 마세요).",
-                            "Each line is typed with Enter · @wait text: wait until it comes in the output\n\
-                             @timeout s: how long to wait (default 30) · @sleep s: pause\n\
-                             @send text: type without Enter · @enter: Enter alone · # comment · @@: a line starting with @\n\
-                             @if text / @ifnot text … @else … @end: by the output since the last line · @stop · @fail message\n\
-                             {user} {password}: the tab's user and password (do not write passwords here).",
-                        ))
-                        .small()
-                        .weak(),
-                    );
+                    ui.label(egui::RichText::new(t!("macros.each_line_is_typed_with_enter_wait_text")).small().weak());
                 });
             });
             ui.add_space(6.0);
@@ -414,7 +393,7 @@ impl MacroDialog {
             }
             ui.separator();
             let (save, cancel) =
-                icon::ok_cancel_row(ui, icon::primary(ui, icon::SAVE, t("저장", "Save")), problem.is_none(), icon::cancel());
+                icon::ok_cancel_row(ui, icon::primary(ui, icon::SAVE, t!("common.save")), problem.is_none(), icon::cancel());
             if save.clicked() {
                 result = MacroDialogResult::Save(
                     self.macros.iter().map(|m| Macro { name: m.name.trim().to_owned(), script: m.script.clone() }).collect(),

@@ -53,7 +53,7 @@ impl client::Handler for ClientHandler {
         let sink = self.sink.clone();
         self.agent_tasks.spawn(async move {
             if let Err(e) = forward.relay(channel, reply).await {
-                sink.notice(tr!("SSH 에이전트 포워딩: {e:#}", "SSH agent forwarding: {e:#}"));
+                sink.notice(tr!("ssh.ssh_agent_forwarding", error = format!("{e:#}")));
             }
         });
         Ok(())
@@ -65,21 +65,21 @@ impl client::Handler for ClientHandler {
             PublicKeyOrCertificate::Certificate(cert) => {
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
                 authorities.verify(cert, &self.host, now)?;
-                self.sink.notice(t("신뢰한 CA의 SSH 호스트 인증서를 확인했습니다", "Verified SSH host certificate from a trusted CA"));
+                self.sink.notice(t!("ssh.verified_ssh_host_certificate_from_a_trusted_ca"));
                 return Ok(true);
             }
             PublicKeyOrCertificate::PublicKey { key, .. } => key,
         };
         if authorities.is_revoked(key) {
-            bail!(t("폐기된 SSH 호스트 키입니다", "The SSH host key is revoked"));
+            bail!(t!("ssh.the_ssh_host_key_is_revoked"));
         }
         if authorities.configured() {
-            bail!(t("신뢰한 CA의 호스트 인증서가 필요합니다", "A host certificate from the trusted CA is required"));
+            bail!(t!("ssh.a_host_certificate_from_the_trusted_ca_is"));
         }
 
-        crate::trust::read(&self.known_hosts).context(t("known_hosts 확인 실패", "Could not check known_hosts"))?;
-        let known = known_hosts::known_host_keys_path(&self.host, self.port, &self.known_hosts)
-            .context(t("known_hosts 확인 실패", "Could not check known_hosts"))?;
+        crate::trust::read(&self.known_hosts).context(t!("ssh.could_not_check_known_hosts"))?;
+        let known =
+            known_hosts::known_host_keys_path(&self.host, self.port, &self.known_hosts).context(t!("ssh.could_not_check_known_hosts"))?;
         if known.iter().any(|(_, recorded)| recorded.key_data() == key.key_data()) {
             return Ok(true);
         }
@@ -89,14 +89,11 @@ impl client::Handler for ClientHandler {
             let types: Vec<String> = known.iter().map(|(_, k)| k.algorithm().to_string()).collect();
             let lines: Vec<String> = known.iter().map(|(line, _)| line.to_string()).collect();
             bail!(tr!(
-                "경고: 호스트 키가 변경되었습니다! 저장된 키({})가 아닌 {} 키를 받았습니다. 중간자 공격일 수 있습니다. \
-                 정상적인 변경이라면 {} 의 {}번째 줄을 삭제하세요.",
-                "WARNING: the host key has changed! Got a {1} key instead of the known one ({0}). This could be a \
-                 man-in-the-middle attack. If the change is legitimate, delete line {3} of {2}.",
-                types.join(", "),
-                key.algorithm(),
-                self.known_hosts.display(),
-                lines.join(", ")
+                "ssh.warning_the_host_key_has_changed_got_a",
+                arg0 = types.join(", "),
+                arg1 = key.algorithm(),
+                arg2 = self.known_hosts.display(),
+                arg3 = lines.join(", ")
             ));
         }
         let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
@@ -106,14 +103,11 @@ impl client::Handler for ClientHandler {
             // Another window may have learned a key while this confirmation was open.
             let latest = known_hosts::known_host_keys_path(&self.host, self.port, &self.known_hosts)?;
             if !latest.is_empty() && !latest.iter().any(|(_, recorded)| recorded.key_data() == key.key_data()) {
-                bail!(t(
-                    "확인 중 호스트 키가 변경되었습니다. 다시 연결해 확인하세요",
-                    "The host key changed while confirming; reconnect and verify it"
-                ));
+                bail!(t!("ssh.the_host_key_changed_while_confirming_reconnect_and"));
             }
             if latest.is_empty() {
                 known_hosts::learn_known_hosts_path(&self.host, self.port, key, &self.known_hosts)
-                    .context(t("known_hosts 저장 실패", "Could not save known_hosts"))?;
+                    .context(t!("ssh.could_not_save_known_hosts"))?;
             }
         }
         Ok(accepted)
@@ -142,7 +136,7 @@ impl client::Handler for ClientHandler {
         let sink = self.sink.clone();
         tokio::spawn(async move {
             if let Err(e) = forward::handle_remote(channel, rule.clone()).await {
-                sink.notice(tr!("포워딩 연결 실패 ({rule}): {e:#}", "Forwarded connection failed ({rule}): {e:#}"));
+                sink.notice(tr!("common.forwarded_connection_failed", error = format!("{e:#}"), rule = rule));
             }
         });
         Ok(())
@@ -165,7 +159,7 @@ impl client::Handler for ClientHandler {
         let sink = self.sink.clone();
         tokio::spawn(async move {
             if let Err(e) = x11.relay(channel.into_stream()).await {
-                sink.notice(tr!("X11 포워딩: {e:#}", "X11 forwarding: {e:#}"));
+                sink.notice(tr!("ssh.x11_forwarding", error = format!("{e:#}")));
             }
         });
         Ok(())
@@ -284,15 +278,7 @@ fn connect_ssh<'a>(
                 let channel = bastion
                     .channel_open_direct_tcpip(params.host.as_str(), params.port.into(), "127.0.0.1", 0)
                     .await
-                    .with_context(|| {
-                        tr!(
-                            "점프 호스트 {} 에서 {}:{} 에 연결할 수 없습니다",
-                            "The jump host {} cannot reach {}:{}",
-                            jump.host,
-                            params.host,
-                            params.port
-                        )
-                    })?;
+                    .with_context(|| tr!("ssh.the_jump_host_cannot_reach", arg0 = jump.host, arg1 = params.host, arg2 = params.port))?;
                 let session = client::connect_stream(config, channel.into_stream(), handler).await?;
                 hops.push(bastion);
                 (session, hops)
@@ -322,19 +308,16 @@ async fn open(
 
     let mut channel = session.channel_open_session().await?;
     if params.agent_forwarding {
-        let binding = session
-            .agent_session_binding()
-            .cloned()
-            .context(t("SSH 에이전트의 세션 바인딩을 만들 수 없습니다", "Cannot bind the SSH agent to this session"))?;
+        let binding = session.agent_session_binding().cloned().context(t!("ssh.cannot_bind_the_ssh_agent_to_this_session"))?;
         let forward = crate::agent_forward::Forward::prepare(params, binding).await?;
         // The server may open channels immediately after acknowledging this request.
         *agent_forward.lock().unwrap() = Some(forward);
         channel.agent_forward(true).await?;
         match channel.wait().await {
-            Some(ChannelMsg::Success) => sink.notice(t("SSH 에이전트 포워딩을 허용했습니다", "SSH agent forwarding enabled")),
+            Some(ChannelMsg::Success) => sink.notice(t!("ssh.ssh_agent_forwarding_enabled")),
             _ => {
                 *agent_forward.lock().unwrap() = None;
-                bail!(t("서버가 SSH 에이전트 포워딩을 거부했습니다", "The server refused SSH agent forwarding"));
+                bail!(t!("ssh.the_server_refused_ssh_agent_forwarding"));
             }
         }
     }
@@ -342,12 +325,8 @@ async fn open(
     if let Some(x11) = &x11 {
         channel.request_x11(false, false, x11::AUTH_PROTOCOL, x11.fake_cookie_hex(), x11.screen).await?;
         match x11.refusal() {
-            Some(why) => sink.notice(tr!("X11 포워딩: {why}", "X11 forwarding: {why}")),
-            None => sink.notice(tr!(
-                "X11 포워딩: 서버의 X 프로그램을 {} 에 표시합니다",
-                "X11 forwarding: X programs on the server show on {}",
-                x11.display
-            )),
+            Some(why) => sink.notice(tr!("ssh.x11_forwarding_2", why = why)),
+            None => sink.notice(tr!("ssh.x11_forwarding_x_programs_on_the_server_show", arg0 = x11.display)),
         }
     }
     channel.request_shell(false).await?;
@@ -373,7 +352,7 @@ pub(crate) async fn run(
                     sink.data(data.to_vec()).await;
                 }
                 Some(ChannelMsg::ExitStatus { exit_status }) if exit_status != 0 => {
-                    sink.notice(tr!("원격 셸 종료 코드: {exit_status}", "Remote shell exit code: {exit_status}"));
+                    sink.notice(tr!("ssh.remote_shell_exit_code", exit_status = exit_status));
                 }
                 Some(ChannelMsg::Eof | ChannelMsg::Close) | None => break,
                 Some(_) => {}
@@ -405,7 +384,7 @@ pub(crate) async fn run(
                     });
                 }
                 Some(SessionCommand::SendBreak) => {
-                    sink.notice(t("SSH 세션에서는 BREAK 신호를 지원하지 않습니다", "SSH sessions do not support BREAK"))
+                    sink.notice(t!("ssh.ssh_sessions_do_not_support_break"))
                 }
                 Some(SessionCommand::Close) | None => break,
             },
@@ -455,9 +434,7 @@ async fn shell_dir(session: &client::Handle<ClientHandler>) -> anyhow::Result<Op
 async fn open_sftp(session: &client::Handle<ClientHandler>, sink: &EventSink) -> anyhow::Result<SftpConnection> {
     let channel = session.channel_open_session().await?;
     channel.request_subsystem(true, "sftp").await?;
-    let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
-        .await
-        .context(t("서버가 SFTP를 지원하지 않습니다", "The server does not support SFTP"))?;
+    let sftp = russh_sftp::client::SftpSession::new(channel.into_stream()).await.context(t!("ssh.the_server_does_not_support_sftp"))?;
     Ok(SftpConnection::new(sftp, sink.waker()))
 }
 

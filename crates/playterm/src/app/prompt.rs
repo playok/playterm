@@ -46,7 +46,7 @@ impl PlaytermApp {
                 self.reconnect(i);
                 return;
             }
-            Request::Reconnect => output = Some(t("다시 연결할 대상이 없습니다", "Nothing to reconnect to").into()),
+            Request::Reconnect => output = Some(t!("app.prompt.nothing_to_reconnect_to").into()),
             Request::Ping(host, options) => {
                 let waker = self.waker.clone();
                 self.sessions[i].start_ping(host, options, waker);
@@ -74,18 +74,14 @@ impl PlaytermApp {
         use crate::console::pad;
         let sites = self.numbered_sites();
         if sites.is_empty() {
-            return t(
-                "저장된 사이트가 없습니다. open 으로 사이트 관리 창을 열어 추가하세요.",
-                "No saved sites. Type open to add one in the Site Manager.",
-            )
-            .into();
+            return t!("app.prompt.no_saved_sites_type_open_to_add_one").into();
         }
         let mut out = format!(
             "\x1b[90m{}  {}  {}  {}\x1b[0m\n",
-            pad(t("번호", "No."), 4),
-            pad(t("이름", "Name"), 20),
-            pad(t("접속", "Connection"), 34),
-            t("폴더", "Folder")
+            pad(t!("app.prompt.no"), 4),
+            pad(t!("common.name"), 20),
+            pad(t!("app.prompt.connection"), 34),
+            t!("common.folder")
         );
         let mut shown = 0;
         // Numbers count every site, so `open N` works on a filtered list too.
@@ -100,9 +96,9 @@ impl PlaytermApp {
             ));
         }
         if shown == 0 {
-            out.push_str(&tr!("'{}' 와 일치하는 사이트가 없습니다\n", "No sites match '{}'\n", printable(filter.trim())));
+            out.push_str(&tr!("app.prompt.no_sites_match", arg0 = printable(filter.trim())));
         }
-        out.push_str(t("\x1b[90mopen 번호|이름 으로 접속\x1b[0m", "\x1b[90mopen <number|name> to connect\x1b[0m"));
+        out.push_str(t!("app.prompt.open_site_hint"));
         out
     }
 }

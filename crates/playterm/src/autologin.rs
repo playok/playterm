@@ -62,13 +62,7 @@ impl LoginRunner {
         }
         if now > self.expires {
             self.next = self.script.steps.len();
-            return Some(LoginAction::Stop(
-                playterm_i18n::t(
-                    "자동 로그인: 1분 동안 다음 프롬프트가 나오지 않아 멈췄습니다",
-                    "Automatic login: stopped, no prompt came for a minute",
-                )
-                .into(),
-            ));
+            return Some(LoginAction::Stop(playterm_i18n::t!("autologin.automatic_login_stopped_no_prompt_came_for_a").into()));
         }
         let step = &self.script.steps[self.next];
         if !prompt_matches(line, &step.expect) {
@@ -81,13 +75,7 @@ impl LoginRunner {
         if text.contains("{password}") {
             let Some(password) = &self.script.password else {
                 self.next = self.script.steps.len();
-                return Some(LoginAction::Stop(
-                    playterm_i18n::t(
-                        "자동 로그인: 저장된 비밀번호가 없어 멈춥니다. 직접 입력하세요",
-                        "Automatic login: stopped, no saved password. Type it yourself",
-                    )
-                    .into(),
-                ));
+                return Some(LoginAction::Stop(playterm_i18n::t!("autologin.automatic_login_stopped_no_saved_password_type_it").into()));
             };
             text = text.replace("{password}", password);
         }

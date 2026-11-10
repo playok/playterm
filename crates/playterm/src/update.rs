@@ -128,14 +128,10 @@ fn parse_latest(json: &str, current: Version) -> Result<Option<Release>, String>
     }
     let url = |name: &str| gh.assets.iter().find(|a| a.name == name).map(|a| a.browser_download_url.clone());
     let Some(package) = package_name(version) else { return Ok(None) };
-    let package_url = url(&package).ok_or_else(|| {
-        tr!("{version} 릴리스에 이 PC 용 패키지({package})가 없습니다", "Release {version} has no package for this PC ({package})")
-    })?;
+    let package_url =
+        url(&package).ok_or_else(|| tr!("update.release_has_no_package_for_this_pc", package = package, version = version))?;
     let (Some(sums_url), Some(sig_url)) = (url(SUMS), url(SUMS_SIG)) else {
-        return Err(tr!(
-            "{version} 릴리스에 서명된 체크섬({SUMS_SIG})이 없어 자동으로 설치할 수 없습니다",
-            "Release {version} has no signed checksums ({SUMS_SIG}), so it cannot be installed automatically"
-        ));
+        return Err(tr!("update.release_has_no_signed_checksums_so_it_cannot", SUMS_SIG = SUMS_SIG, version = version));
     };
     Ok(Some(Release {
         version,
@@ -157,13 +153,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 
 /// Checks the signature of `SHA256SUMS.txt` against `public` (hex).
 fn verify_sums(sums: &[u8], sig_hex: &str, public: &str) -> Result<(), String> {
-    let bad = || {
-        t(
-            "체크섬 파일의 서명이 맞지 않습니다. 설치하지 않았습니다.",
-            "The signature of the checksums does not match. Nothing was installed.",
-        )
-        .to_owned()
-    };
+    let bad = || t!("update.the_signature_of_the_checksums_does_not_match").to_owned();
     let sig = unhex(sig_hex.trim()).ok_or_else(bad)?;
     let public = unhex(public).expect("PUBLIC_KEY is hex");
     UnparsedPublicKey::new(&ED25519, public).verify(sums, &sig).map_err(|_| bad())
@@ -186,7 +176,7 @@ fn extract_exe(package: &[u8]) -> Result<Vec<u8>, String> {
     let mut exe = Vec::new();
     file.take(MAX_PACKAGE + 1).read_to_end(&mut exe).map_err(|e| format!("zip ({EXE}): {e}"))?;
     if exe.len() as u64 > MAX_PACKAGE || !exe.starts_with(b"MZ") {
-        return Err(tr!("패키지의 {EXE} 가 올바르지 않습니다", "The {EXE} in the package is not valid"));
+        return Err(tr!("update.the_in_the_package_is_not_valid", EXE = EXE));
     }
     Ok(exe)
 }
@@ -202,13 +192,8 @@ fn sibling(exe: &Path, suffix: &str) -> PathBuf {
 /// (a running exe can be renamed but not overwritten). Undoes the move if that fails.
 fn replace_exe(exe: &Path, new: &[u8]) -> Result<(), String> {
     let staged = sibling(exe, ".new");
-    let write_err = |e: std::io::Error| {
-        tr!(
-            "{} 에 쓸 수 없습니다: {e}\n릴리스 페이지에서 직접 받아 주세요.",
-            "Cannot write to {}: {e}\nPlease download it from the releases page.",
-            exe.parent().unwrap_or(exe).display()
-        )
-    };
+    let write_err =
+        |e: std::io::Error| tr!("update.cannot_write_to_please_download_it_from_the", arg0 = exe.parent().unwrap_or(exe).display(), e = e);
     std::fs::write(&staged, new).map_err(write_err)?;
     // An older .old may still be running (a window not restarted since the last update): then
     // it cannot be deleted, and this one gets a name of its own.
@@ -283,8 +268,8 @@ fn install(release: &Release, progress: &Progress, ctx: &egui::Context) -> Resul
     let agent = agent();
     let sums = get_small(&agent, &release.sums_url)?;
     verify_sums(sums.as_bytes(), &get_small(&agent, &release.sig_url)?, PUBLIC_KEY)?;
-    let expected = expected_hash(&sums, &release.package)
-        .ok_or_else(|| tr!("서명된 체크섬에 {} 가 없습니다", "The signed checksums do not list {}", release.package))?;
+    let expected =
+        expected_hash(&sums, &release.package).ok_or_else(|| tr!("update.the_signed_checksums_do_not_list", arg0 = release.package))?;
 
     let url = &release.package_url;
     let mut response = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
@@ -302,11 +287,7 @@ fn install(release: &Release, progress: &Progress, ctx: &egui::Context) -> Resul
         ctx.request_repaint();
     }
     if ring::digest::digest(&ring::digest::SHA256, &package).as_ref() != expected.as_slice() {
-        return Err(tr!(
-            "받은 {} 의 SHA-256 이 서명된 체크섬과 다릅니다. 설치하지 않았습니다.",
-            "The SHA-256 of the downloaded {} does not match the signed checksums. Nothing was installed.",
-            release.package
-        ));
+        return Err(tr!("update.the_sha_256_of_the_downloaded_does_not", arg0 = release.package));
     }
     replace_exe(&exe, &extract_exe(&package)?)?;
     Ok(exe)
@@ -440,51 +421,45 @@ impl Updater {
         let mut install = None;
         let close = egui::Modal::new(egui::Id::unique("update")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
             ui.set_width(420.0);
-            ui.heading(t("업데이트", "Update"));
+            ui.heading(t!("update.update"));
             ui.add_space(6.0);
             match &dialog {
                 Dialog::Checking => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(t("새 버전을 확인하는 중…", "Checking for a new version…"));
+                        ui.label(t!("update.checking_for_a_new_version"));
                     });
                     ui.add_space(8.0);
-                    keep = !ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked();
+                    keep = !ui.add(icon::button(icon::CLOSE, t!("common.close"))).clicked();
                 }
                 Dialog::UpToDate => {
-                    ui.label(tr!("최신 버전({})을 쓰고 있습니다.", "You have the latest version ({}).", Version::current()));
+                    ui.label(tr!("update.you_have_the_latest_version", arg0 = Version::current()));
                     ui.add_space(8.0);
-                    keep = !ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked();
+                    keep = !ui.add(icon::primary(ui, icon::OK, t!("common.ok"))).clicked();
                 }
                 Dialog::Available(release) => {
-                    ui.label(tr!(
-                        "playterm {} 이 나왔습니다 (지금 {}).",
-                        "playterm {} is available (you have {}).",
-                        release.version,
-                        Version::current()
-                    ));
+                    ui.label(tr!("update.playterm_is_available_you_have", arg0 = release.version, arg1 = Version::current()));
                     if !release.notes.trim().is_empty() {
                         ui.add_space(4.0);
                         egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
                             ui.add(egui::Label::new(notes_preview(&release.notes)).wrap());
                         });
                     }
-                    ui.hyperlink_to(t("릴리스 페이지", "Release page"), &release.page);
+                    ui.hyperlink_to(t!("update.release_page"), &release.page);
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if AUTO_INSTALL {
-                            if ui.add(icon::primary(ui, icon::UPDATE, t("업데이트", "Update"))).clicked() {
+                            if ui.add(icon::primary(ui, icon::UPDATE, t!("update.update"))).clicked() {
                                 install = Some(release.clone());
                             }
-                        } else if ui.add(icon::button(icon::WEB_PAGE, t("다운로드 페이지 열기", "Open the download page"))).clicked()
-                        {
+                        } else if ui.add(icon::button(icon::WEB_PAGE, t!("update.open_the_download_page"))).clicked() {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(&release.page));
                             keep = false;
                         }
-                        if ui.add(icon::button(icon::LATER, t("나중에", "Later"))).clicked() {
+                        if ui.add(icon::button(icon::LATER, t!("update.later"))).clicked() {
                             keep = false;
                         }
-                        if ui.add(icon::button(icon::SKIP, t("이 버전 건너뛰기", "Skip this version"))).clicked() {
+                        if ui.add(icon::button(icon::SKIP, t!("update.skip_this_version"))).clicked() {
                             action = Some(Action::Skip(release.version.to_string()));
                             self.available = None;
                             keep = false;
@@ -492,7 +467,7 @@ impl Updater {
                     });
                 }
                 Dialog::Downloading(version) => {
-                    ui.label(tr!("playterm {version} 을 받는 중…", "Downloading playterm {version}…"));
+                    ui.label(tr!("update.downloading_playterm", version = version));
                     let done = self.progress.done.load(Ordering::Relaxed);
                     let total = self.progress.total.load(Ordering::Relaxed);
                     let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
@@ -504,36 +479,30 @@ impl Updater {
                     ui.add(bar);
                 }
                 Dialog::Installed(version, exe) => {
-                    ui.label(tr!(
-                        "playterm {version} 을 설치했습니다. 다시 시작하면 적용됩니다.",
-                        "playterm {version} is installed. It takes effect when playterm restarts."
-                    ));
+                    ui.label(tr!("update.playterm_is_installed_it_takes_effect_when_playterm", version = version));
                     if connected > 0 {
                         ui.colored_label(
                             ui.visuals().warn_fg_color,
-                            tr!(
-                                "지금 다시 시작하면 연결된 세션 {connected}개가 끊어집니다.",
-                                "Restarting now closes {connected} connected session(s)."
-                            ),
+                            tr!("update.restarting_now_closes_connected_session_s", connected = connected),
                         );
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.add(icon::primary(ui, icon::RESTART, t("지금 다시 시작", "Restart now"))).clicked() {
+                        if ui.add(icon::primary(ui, icon::RESTART, t!("update.restart_now"))).clicked() {
                             action = Some(Action::Restart(exe.clone()));
                             keep = false;
                         }
-                        if ui.add(icon::button(icon::LATER, t("나중에", "Later"))).clicked() {
+                        if ui.add(icon::button(icon::LATER, t!("update.later"))).clicked() {
                             keep = false;
                         }
                     });
                 }
                 Dialog::Failed(error) => {
-                    ui.label(t("업데이트하지 못했습니다:", "The update failed:"));
+                    ui.label(t!("update.the_update_failed"));
                     ui.colored_label(ui.visuals().error_fg_color, error);
-                    ui.hyperlink_to(t("릴리스 페이지", "Releases page"), RELEASES_PAGE);
+                    ui.hyperlink_to(t!("update.releases_page"), RELEASES_PAGE);
                     ui.add_space(8.0);
-                    keep = !ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked();
+                    keep = !ui.add(icon::primary(ui, icon::OK, t!("common.ok"))).clicked();
                 }
             }
         });
@@ -598,7 +567,7 @@ mod tests {
     #[ignore = "interactive Windows release notes preview"]
     fn native_release_notes_preview() {
         use winit::platform::windows::EventLoopBuilderExtWindows as _;
-        playterm_i18n::set_english(true);
+        playterm_i18n::set_language(playterm_i18n::Language::ENGLISH);
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default().with_inner_size([720.0, 640.0]),
             event_loop_builder: Some(Box::new(|builder| {

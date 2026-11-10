@@ -336,19 +336,19 @@ pub fn paste(session: &mut Session, text: &str) {
 }
 
 fn context_menu(ui: &mut egui::Ui, session: &mut Session, keys: &ClipboardKeys) {
-    let copy = egui::Button::new(t("복사", "Copy")).shortcut_text(clip_keys::copy_hint(keys));
+    let copy = egui::Button::new(t!("common.copy")).shortcut_text(clip_keys::copy_hint(keys));
     if ui.add_enabled(session.terminal.has_selection(), copy).clicked() {
         copy_selection(ui.ctx(), session);
         ui.close();
     }
-    if ui.add(egui::Button::new(t("붙여넣기", "Paste")).shortcut_text(clip_keys::paste_hint(keys))).clicked() {
+    if ui.add(egui::Button::new(t!("common.paste")).shortcut_text(clip_keys::paste_hint(keys))).clicked() {
         if let Some(text) = clipboard::read_text() {
             request_paste(session, text, &mut Vec::new(), keys);
         }
         ui.close();
     }
     ui.separator();
-    if ui.button(t("모두 선택", "Select all")).clicked() {
+    if ui.button(t!("common.select_all")).clicked() {
         session.terminal.select_all();
         ui.close();
     }
@@ -740,17 +740,17 @@ const CARD_MARGIN: f32 = 16.0;
 fn start_card(ui: &mut egui::Ui, style: &ViewStyle, command: &mut Option<crate::menu::Command>) {
     use crate::menu::Command;
     ui.heading("playterm");
-    ui.weak(t("연결할 곳을 고르세요.", "Choose where to connect."));
+    ui.weak(t!("view.choose_where_to_connect"));
     ui.add_space(8.0);
     if !style.recent.is_empty() {
-        ui.strong(t("최근 연결", "Recent"));
+        ui.strong(t!("view.recent"));
         for site in &style.recent {
             ui.horizontal(|ui| {
                 // A long name ends in "…" inside the card instead of pushing its
                 // right edge out of the pane; the tooltip has all of it.
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 crate::site_tree::badge(ui, site.protocol);
-                let tip = format!("{} — {}", site.name, t("연결", "Connect"));
+                let tip = format!("{} — {}", site.name, t!("common.connect"));
                 if ui.link(&site.name).on_hover_text(tip).clicked() {
                     *command = Some(Command::ConnectSite(site.id.clone()));
                 }
@@ -759,27 +759,24 @@ fn start_card(ui: &mut egui::Ui, style: &ViewStyle, command: &mut Option<crate::
         ui.add_space(8.0);
     }
     ui.horizontal_wrapped(|ui| {
-        if ui.add(crate::icon::primary(ui, crate::icon::QUICK_CONNECT, t("빠른 연결", "Quick Connect"))).clicked() {
+        if ui.add(crate::icon::primary(ui, crate::icon::QUICK_CONNECT, t!("common.quick_connect"))).clicked() {
             *command = Some(Command::QuickConnect);
         }
-        if ui.add(crate::icon::button(crate::icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
+        if ui.add(crate::icon::button(crate::icon::NEW_SITE, t!("common.new_site"))).clicked() {
             *command = Some(Command::NewSite);
         }
-        if ui.add(crate::icon::button(crate::icon::IMPORT, t("PuTTY 가져오기", "Import PuTTY"))).clicked() {
+        if ui.add(crate::icon::button(crate::icon::IMPORT, t!("common.import_putty"))).clicked() {
             *command = Some(Command::ImportPutty);
         }
-        if ui.add(crate::icon::button(crate::icon::IMPORT, t("Xshell 가져오기", "Import Xshell"))).clicked() {
+        if ui.add(crate::icon::button(crate::icon::IMPORT, t!("common.import_xshell"))).clicked() {
             *command = Some(Command::ImportXshell);
         }
-        if ui.add(crate::icon::button(crate::icon::IMPORT, t("SecureCRT 가져오기", "Import SecureCRT"))).clicked() {
+        if ui.add(crate::icon::button(crate::icon::IMPORT, t!("common.import_securecrt"))).clicked() {
             *command = Some(Command::ImportSecureCrt);
         }
     });
     ui.add_space(8.0);
-    ui.weak(t(
-        "명령으로 쓰려면 아무 키나 누르세요 — ssh, telnet, open, sites, ls, help …",
-        "To use commands, just type — ssh, telnet, open, sites, ls, help …",
-    ));
+    ui.weak(t!("view.to_use_commands_just_type_ssh_telnet_open"));
 }
 
 /// Height of the connection line above a remote terminal.
@@ -829,13 +826,13 @@ fn connection_line(ui: &mut egui::Ui, session: &Session, strip: Rect, text: &str
     let mut right = strip.right() - 4.0;
     if let Some(id) = &site {
         let button = egui::Button::new(crate::icon::MANAGE.rich_text()).frame(false);
-        if line_button(ui, &mut right, strip, button, t("사이트 설정", "Site settings")) {
+        if line_button(ui, &mut right, strip, button, t!("view.site_settings")) {
             action = Some(LineAction::EditSite(id.clone()));
         }
     }
     if session.state == SessionState::Closed && session.has_target() {
-        let button = crate::icon::button(crate::icon::RECONNECT, t("다시 연결", "Reconnect"));
-        if line_button(ui, &mut right, strip, button, t("같은 곳에 다시 연결", "Connect to the same place again")) {
+        let button = crate::icon::button(crate::icon::RECONNECT, t!("common.reconnect"));
+        if line_button(ui, &mut right, strip, button, t!("view.connect_to_the_same_place_again")) {
             action = Some(LineAction::Reconnect);
         }
     }
@@ -850,7 +847,7 @@ fn connection_line(ui: &mut egui::Ui, session: &Session, strip: Rect, text: &str
     let response = if truncated { response.on_hover_text(text) } else { response };
     response.context_menu(|ui| {
         if let Some(address) = session.address()
-            && ui.button(tr!("주소 복사: {}", "Copy the address: {}", address)).clicked()
+            && ui.button(tr!("view.copy_the_address", arg0 = address)).clicked()
         {
             ui.ctx().copy_text(address);
             ui.close();

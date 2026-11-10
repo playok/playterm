@@ -36,16 +36,16 @@ impl QuickConnect {
         let mut result = QuickConnectResult::Open;
         let close = modal("quick-connect", ctx, |ui| {
             ui.set_width(380.0);
-            ui.heading(t("빠른 연결", "Quick Connect"));
+            ui.heading(t!("common.quick_connect"));
             ui.add_space(8.0);
             let mut submit = self.form.ui(ui, &FormOptions { meta: false, save_password: false, folders: &[], macros: &[] });
             ui.add_space(8.0);
             let (main, cancel) = ui
                 .horizontal(|ui| {
-                    let connect = icon::primary(ui, icon::CONNECT, t("연결", "Connect"));
+                    let connect = icon::primary(ui, icon::CONNECT, t!("common.connect"));
                     let buttons = icon::ok_cancel_row(ui, connect, true, icon::cancel());
                     ui.add_space(12.0);
-                    ui.checkbox(&mut self.save, t("사이트 목록에 저장", "Save to the site list"));
+                    ui.checkbox(&mut self.save, t!("dialogs.save_to_the_site_list"));
                     buttons
                 })
                 .inner;
@@ -126,18 +126,14 @@ impl VaultDialog {
         let close = modal("vault-working", ctx, |ui| {
             ui.set_width(380.0);
             ui.heading(match self.mode {
-                VaultMode::Unlock => t("저장된 비밀번호 잠금 해제 중", "Unlocking saved passwords"),
-                VaultMode::Create => t("비밀번호 볼트 만드는 중", "Creating the password vault"),
+                VaultMode::Unlock => t!("dialogs.unlocking_saved_passwords"),
+                VaultMode::Create => t!("dialogs.creating_the_password_vault"),
             });
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(if can_cancel {
-                    t("잠시 기다려 주세요", "Please wait")
-                } else {
-                    t("마무리하는 중입니다", "Finishing")
-                });
+                ui.label(if can_cancel { t!("dialogs.please_wait") } else { t!("dialogs.finishing") });
             });
-            cancel = ui.add_enabled(can_cancel, icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked();
+            cancel = ui.add_enabled(can_cancel, icon::button(icon::CANCEL, t!("common.cancel"))).clicked();
         });
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
         can_cancel && (cancel || close)
@@ -154,22 +150,19 @@ impl VaultDialog {
         let close = modal("vault", ctx, |ui| {
             ui.set_width(380.0);
             ui.heading(match self.mode {
-                VaultMode::Unlock => t("저장된 비밀번호 잠금 해제", "Unlock saved passwords"),
-                VaultMode::Create => t("마스터 비밀번호 설정", "Set master password"),
+                VaultMode::Unlock => t!("dialogs.unlock_saved_passwords"),
+                VaultMode::Create => t!("dialogs.set_master_password"),
             });
             if !self.reason.is_empty() {
                 ui.label(&self.reason);
             }
             if self.mode == VaultMode::Create {
-                ui.label(t(
-                    "저장된 비밀번호는 이 마스터 비밀번호로 암호화됩니다.\n잊어버리면 복구할 수 없습니다.",
-                    "Saved passwords are encrypted with this master password.\nIf you forget it, they cannot be recovered.",
-                ));
+                ui.label(t!("dialogs.saved_passwords_are_encrypted_with_this_master_password"));
             }
             ui.add_space(6.0);
 
             let mut enter = false;
-            ui.label(t("마스터 비밀번호", "Master password"));
+            ui.label(t!("dialogs.master_password"));
             let first = ui.add(egui::TextEdit::singleline(&mut *self.master).password(true));
             secret_field(ui, &first);
             enter |= first.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -183,21 +176,21 @@ impl VaultDialog {
                 let length = self.master.chars().count();
                 let short = length < MIN_MASTER_LENGTH;
                 let (color, text) = if short {
-                    (ui.visuals().warn_fg_color, tr!("{}자 이상 ({length}자)", "At least {} characters ({length})", MIN_MASTER_LENGTH))
+                    (ui.visuals().warn_fg_color, tr!("dialogs.at_least_characters", arg0 = MIN_MASTER_LENGTH, length = length))
                 } else {
-                    (ui.visuals().weak_text_color(), tr!("{length}자", "{length} characters"))
+                    (ui.visuals().weak_text_color(), tr!("dialogs.characters", length = length))
                 };
                 ui.label(egui::RichText::new(text).small().color(color));
-                ui.label(t("마스터 비밀번호 확인", "Confirm master password"));
+                ui.label(t!("dialogs.confirm_master_password"));
                 let second = ui.add(egui::TextEdit::singleline(&mut *self.confirm).password(true));
                 secret_field(ui, &second);
                 enter |= second.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let matches = *self.master == *self.confirm;
                 if !self.confirm.is_empty() {
                     let (color, text) = if matches {
-                        (ui.visuals().weak_text_color(), t("✓ 일치합니다", "✓ They match"))
+                        (ui.visuals().weak_text_color(), t!("dialogs.they_match"))
                     } else {
-                        (ui.visuals().error_fg_color, t("두 비밀번호가 다릅니다", "The passwords do not match"))
+                        (ui.visuals().error_fg_color, t!("dialogs.the_passwords_do_not_match"))
                     };
                     ui.label(egui::RichText::new(text).small().color(color));
                 }
@@ -209,18 +202,18 @@ impl VaultDialog {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                let label = if self.mode == VaultMode::Unlock { t("잠금 해제", "Unlock") } else { t("만들기", "Create") };
+                let label = if self.mode == VaultMode::Unlock { t!("common.unlock") } else { t!("dialogs.create") };
                 let icon = if self.mode == VaultMode::Unlock { icon::UNLOCK } else { icon::VAULT_SET_UP };
                 if ui.add_enabled(ready, icon::primary(ui, icon, label)).clicked() || (enter && ready) {
                     if self.master.is_empty() {
-                        self.error = Some(t("마스터 비밀번호를 입력하세요", "Enter the master password").into());
+                        self.error = Some(t!("dialogs.enter_the_master_password").into());
                     } else if self.mode == VaultMode::Create && *self.master != *self.confirm {
-                        self.error = Some(t("두 비밀번호가 다릅니다", "The passwords do not match").into());
+                        self.error = Some(t!("dialogs.the_passwords_do_not_match").into());
                     } else {
                         result = VaultResult::Submit(self.master.clone());
                     }
                 }
-                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
+                if ui.add(icon::button(icon::CANCEL, t!("common.cancel"))).clicked() {
                     result = VaultResult::Cancel;
                 }
             });
@@ -228,22 +221,16 @@ impl VaultDialog {
             if self.mode == VaultMode::Unlock {
                 ui.add_space(6.0);
                 if !self.confirm_reset {
-                    if ui.small_button(t("마스터 비밀번호를 잊었나요?", "Forgot the master password?")).clicked() {
+                    if ui.small_button(t!("dialogs.forgot_the_master_password")).clicked() {
                         self.confirm_reset = true;
                     }
                 } else {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        t(
-                            "초기화하면 저장된 비밀번호 없이 새로 시작합니다. 사이트 목록은 유지됩니다.\n기존 파일은 vault.toml.bak 으로 남겨 둡니다.",
-                            "Resetting starts over without the saved passwords. The site list is kept.\nThe old file is kept as vault.toml.bak.",
-                        ),
-                    );
+                    ui.colored_label(ui.visuals().warn_fg_color, t!("dialogs.resetting_starts_over_without_the_saved_passwords_the"));
                     ui.horizontal(|ui| {
-                        if ui.add(icon::danger(ui, icon::RESET, t("초기화", "Reset"))).clicked() {
+                        if ui.add(icon::danger(ui, icon::RESET, t!("dialogs.reset"))).clicked() {
                             result = VaultResult::Reset;
                         }
-                        if ui.add(icon::button(icon::BACK, t("돌아가기", "Back"))).clicked() {
+                        if ui.add(icon::button(icon::BACK, t!("dialogs.back"))).clicked() {
                             self.confirm_reset = false;
                         }
                     });
@@ -265,21 +252,17 @@ pub fn confirm_password_macro(ctx: &egui::Context, name: &str, targets: &[String
     let mut answer = None;
     let close = modal("password-macro", ctx, |ui| {
         ui.set_width(440.0);
-        ui.heading(t("비밀번호를 전송하는 매크로", "Macro sends a password"));
+        ui.heading(t!("dialogs.macro_sends_a_password"));
         ui.label(name);
-        ui.label(t(
-            "이 매크로는 비밀번호 프롬프트를 확인하지 않고 {password}를 전송합니다. 원격 프로그램의 에코가 켜져 있으면 비밀번호가 화면이나 로그에 남을 수 있습니다. 대상과 프롬프트를 확인한 뒤 실행하세요.",
-            "This macro sends {password} without verifying a password prompt. If remote input is echoed, the password may appear in the terminal or logs. Check the targets and prompt before running.",
-        ));
+        ui.label(t!("dialogs.this_macro_sends_without_verifying_a_password_prompt"));
         for target in targets.iter().take(6) {
             ui.label(target);
         }
         if targets.len() > 6 {
-            ui.label(tr!("외 {}개 대상", "{} more targets", targets.len() - 6));
+            ui.label(tr!("dialogs.more_targets", arg0 = targets.len() - 6));
         }
         ui.add_space(8.0);
-        let (run, cancel) =
-            icon::ok_cancel_row(ui, icon::primary(ui, icon::SEND, t("확인 후 실행", "Run after checking")), true, icon::cancel());
+        let (run, cancel) = icon::ok_cancel_row(ui, icon::primary(ui, icon::SEND, t!("dialogs.run_after_checking")), true, icon::cancel());
         if run.clicked() {
             answer = Some(true);
         }
@@ -321,7 +304,7 @@ pub fn notice(ctx: &egui::Context, title: &str, text: &str) -> bool {
         ui.add_space(4.0);
         ui.label(text);
         ui.add_space(8.0);
-        let ok = ui.add(icon::primary(ui, icon::OK, t("확인", "OK")));
+        let ok = ui.add(icon::primary(ui, icon::OK, t!("common.ok")));
         if !ui.memory(|m| m.focused().is_some()) {
             ok.request_focus();
         }
@@ -349,28 +332,24 @@ pub fn confirm_close(ctx: &egui::Context, q: &CloseQuestion<'_>, dont_ask: &mut 
     let close = modal(("confirm-close", q.title), ctx, |ui| {
         ui.set_width(380.0);
         ui.heading(q.title);
-        ui.label(tr!("연결 {}개가 끊어집니다.", "{} connections will end.", q.tabs.len()));
+        ui.label(tr!("dialogs.connections_will_end", arg0 = q.tabs.len()));
         ui.add_space(4.0);
         for name in q.tabs.iter().take(SHOWN) {
             ui.label(format!("• {name}"));
         }
         if q.tabs.len() > SHOWN {
-            ui.weak(tr!("… 외 {}개", "… and {} more", q.tabs.len() - SHOWN));
+            ui.weak(tr!("dialogs.and_more", arg0 = q.tabs.len() - SHOWN));
         }
         if q.transferring > 0 {
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(tr!(
-                    "⚠ 파일 전송 중인 탭 {}개: 전송이 중단됩니다.",
-                    "⚠ {} tabs are transferring files: the transfers stop.",
-                    q.transferring
-                ))
-                .strong()
-                .color(ui.visuals().warn_fg_color),
+                egui::RichText::new(tr!("dialogs.tabs_are_transferring_files_the_transfers_stop", arg0 = q.transferring))
+                    .strong()
+                    .color(ui.visuals().warn_fg_color),
             );
         }
         ui.add_space(8.0);
-        ui.checkbox(dont_ask, t("다시 묻지 않기 (설정 → 연결에서 되돌림)", "Do not ask again (undo in Settings → Connection)"));
+        ui.checkbox(dont_ask, t!("dialogs.do_not_ask_again_undo_in_settings_connection"));
         ui.add_space(6.0);
         let ok = icon::primary(ui, icon::CLOSE, q.ok_label);
         let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
@@ -405,25 +384,16 @@ pub fn confirm_paste(ctx: &egui::Context, text: &str, others: &[String]) -> Opti
         })
         .collect();
     if lines.len() > SHOWN_LINES {
-        preview.push(tr!("… ({}줄 더)", "… ({} more lines)", lines.len() - SHOWN_LINES));
+        preview.push(tr!("dialogs.more_lines", arg0 = lines.len() - SHOWN_LINES));
     }
     let mut answer = None;
     let close = modal("confirm-paste", ctx, |ui| {
         ui.set_width(520.0);
-        ui.heading(t("여러 줄 붙여넣기", "Paste several lines"));
-        ui.label(tr!(
-            "{}줄을 붙여넣습니다. 줄마다 Enter 가 입력되어 각 줄이 명령으로 바로 실행될 수 있습니다.",
-            "This pastes {} lines. Each ends with Enter, so every line may run as a command right away.",
-            lines.len()
-        ));
+        ui.heading(t!("dialogs.paste_several_lines"));
+        ui.label(tr!("dialogs.this_pastes_lines_each_ends_with_enter_so", arg0 = lines.len()));
         if !others.is_empty() {
             ui.add_space(4.0);
-            let warning = tr!(
-                "⚠ 동시 입력 중: 이 탭과 다른 탭 {}개에 함께 붙여넣습니다 — {}",
-                "⚠ Simultaneous input: this also pastes into {} other tabs — {}",
-                others.len(),
-                others.join(", ")
-            );
+            let warning = tr!("dialogs.simultaneous_input_this_also_pastes_into_other_tabs", arg0 = others.len(), arg1 = others.join(", "));
             ui.label(egui::RichText::new(warning).strong().color(ui.visuals().warn_fg_color));
         }
         ui.add_space(6.0);
@@ -432,7 +402,7 @@ pub fn confirm_paste(ctx: &egui::Context, text: &str, others: &[String]) -> Opti
             ui.add(egui::Label::new(egui::RichText::new(preview.join("\n")).monospace()).wrap());
         });
         ui.add_space(8.0);
-        let paste = icon::primary(ui, icon::PASTE, t("붙여넣기", "Paste"));
+        let paste = icon::primary(ui, icon::PASTE, t!("common.paste"));
         let (main, cancel) = icon::ok_cancel_row(ui, paste, true, icon::cancel());
         if main.clicked() {
             answer = Some(true);
@@ -440,7 +410,7 @@ pub fn confirm_paste(ctx: &egui::Context, text: &str, others: &[String]) -> Opti
         if cancel.clicked() {
             answer = Some(false);
         }
-        ui.weak(t("도구 → 설정의 '붙여넣기 확인' 에서 끌 수 있습니다.", "Can be turned off with 'Confirm paste' in Tools → Settings."));
+        ui.weak(t!("dialogs.can_be_turned_off_with_confirm_paste_in"));
     });
     if close && answer.is_none() {
         answer = Some(false);
@@ -458,43 +428,34 @@ fn shortcut_list(keys: &ClipboardKeys, shortcuts: &ShortcutKeys) -> Vec<(String,
         .filter_map(|(on, k)| on.then_some(k))
         .collect();
     if !copy.is_empty() {
-        list.push((copy.join(", "), t("복사", "Copy")));
+        list.push((copy.join(", "), t!("common.copy")));
     }
     if keys.ctrl_c {
-        let what = t("선택 영역이 있으면 복사, 없으면 ^C 전송", "Copy if there is a selection, otherwise send ^C");
+        let what = t!("dialogs.copy_if_there_is_a_selection_otherwise_send");
         list.push(("Ctrl+C".into(), what));
     }
     if keys.copy_on_select {
-        list.push((t("드래그로 선택", "Select by dragging").into(), t("선택하면 바로 복사", "Copies right away")));
+        list.push((t!("dialogs.select_by_dragging").into(), t!("dialogs.copies_right_away")));
     }
     let paste: Vec<&str> = [
         (keys.ctrl_shift_v, "Ctrl+Shift+V"),
         (keys.ctrl_v, "Ctrl+V"),
         (keys.shift_insert, "Shift+Insert"),
-        (keys.right_click_paste, t("오른쪽 클릭", "Right click")),
-        (keys.middle_click_paste, t("가운데 클릭", "Middle click")),
+        (keys.right_click_paste, t!("common.right_click")),
+        (keys.middle_click_paste, t!("common.middle_click")),
     ]
     .into_iter()
     .filter_map(|(on, k)| on.then_some(k))
     .collect();
     if !paste.is_empty() {
-        list.push((paste.join(", "), t("붙여넣기", "Paste")));
+        list.push((paste.join(", "), t!("common.paste")));
     }
     list.extend(
         [
-            (
-                t("Shift+드래그", "Shift+drag"),
-                t("마우스를 쓰는 프로그램 안에서도 로컬 선택", "Select locally even in programs that use the mouse"),
-            ),
-            (t("Ctrl+휠", "Ctrl+wheel"), t("글꼴 크기", "Font size")),
-            (
-                t("탭 끌기", "Drag a tab"),
-                t(
-                    "다른 탭 옆·위아래에 놓으면 화면 분할, 창 밖에 놓으면 새 창",
-                    "Beside, above or below another tab: split the view; outside the window: a window of its own",
-                ),
-            ),
-            (t("탭 가운데 클릭", "Middle-click a tab"), t("탭 닫기", "Close the tab")),
+            (t!("dialogs.shift_drag"), t!("dialogs.select_locally_even_in_programs_that_use_the")),
+            (t!("dialogs.ctrl_wheel"), t!("dialogs.font_size")),
+            (t!("dialogs.drag_a_tab"), t!("dialogs.beside_above_or_below_another_tab_split_the")),
+            (t!("dialogs.middle_click_a_tab"), t!("dialogs.close_the_tab")),
         ]
         .into_iter()
         .map(|(k, what)| (k.to_owned(), what)),
@@ -507,7 +468,7 @@ pub fn shortcuts(ctx: &egui::Context, keys: &ClipboardKeys, shortcuts: &Shortcut
     let mut done = false;
     let close = modal("shortcuts", ctx, |ui| {
         ui.set_width(440.0);
-        ui.heading(t("단축키", "Keyboard shortcuts"));
+        ui.heading(t!("common.keyboard_shortcuts"));
         ui.add_space(6.0);
         // Scrolls in a short window, so Close stays on screen. Its height is set from the rows,
         // so the dialog has its size from the first frame (it does not grow into place).
@@ -525,7 +486,7 @@ pub fn shortcuts(ctx: &egui::Context, keys: &ClipboardKeys, shortcuts: &Shortcut
             });
         });
         ui.add_space(8.0);
-        done = ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked();
+        done = ui.add(icon::button(icon::CLOSE, t!("common.close"))).clicked();
     });
     done || close
 }
@@ -541,21 +502,18 @@ pub fn about(ctx: &egui::Context) -> bool {
         ui.set_width(340.0);
         ui.vertical_centered(|ui| {
             ui.heading("playterm");
-            ui.label(tr!("버전 {}", "Version {}", env!("CARGO_PKG_VERSION")));
+            ui.label(tr!("dialogs.version", arg0 = env!("CARGO_PKG_VERSION")));
             ui.add_space(6.0);
-            ui.label(t("SSH · Telnet · 시리얼 · 원격 데스크톱 터미널", "SSH · Telnet · serial · Remote Desktop terminal"));
-            ui.weak(t("SFTP, 포트 포워딩, 세션 로그, 한글(CP949) 지원", "SFTP, port forwarding, session logs, Korean (CP949) support"));
+            ui.label(t!("dialogs.ssh_telnet_serial_remote_desktop_terminal"));
+            ui.weak(t!("dialogs.sftp_port_forwarding_session_logs_korean_cp949_support"));
             ui.add_space(6.0);
-            ui.label(tr!("제작: {}", "Made by {}", AUTHOR));
-            ui.hyperlink_to(t("문의·버그 신고 (GitHub)", "Questions and bug reports (GitHub)"), PROJECT_PAGE).on_hover_text(PROJECT_PAGE);
+            ui.label(tr!("dialogs.made_by", arg0 = AUTHOR));
+            ui.hyperlink_to(t!("common.questions_and_bug_reports_github"), PROJECT_PAGE).on_hover_text(PROJECT_PAGE);
             ui.weak(PROJECT_PAGE);
             ui.add_space(4.0);
-            ui.weak(t(
-                "MIT 라이선스 · 사용한 오픈소스는 도움말 → 오픈소스 라이선스",
-                "MIT License · open-source components: Help → Open-source licenses",
-            ));
+            ui.weak(t!("dialogs.mit_license_open_source_components_help_open_source"));
             ui.add_space(8.0);
-            done = ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked();
+            done = ui.add(icon::primary(ui, icon::OK, t!("common.ok"))).clicked();
         });
     });
     done || close
@@ -569,34 +527,24 @@ pub fn host_key(ctx: &egui::Context, session: &mut Session) {
     egui::Modal::new(egui::Id::unique(("host-key", session.id))).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
         let check = session.host_key.as_ref().expect("checked by caller");
         ui.set_width(460.0);
-        ui.heading(t("알 수 없는 호스트", "Unknown host"));
+        ui.heading(t!("dialogs.unknown_host"));
         ui.add_space(6.0);
         if check.certificate {
-            ui.label(tr!(
-                "{}:{} 의 RDP 서버 인증서를 처음 봅니다 (known_rdp_hosts에 없음).\n처음 접속하는 서버라면 지문이 맞는지 확인한 뒤 진행하세요. 신뢰하면 기억해 두고, 나중에 인증서가 바뀌면 경고합니다.",
-                "The RDP server certificate of {}:{} is new (not in known_rdp_hosts).\nIf this is your first connection to the server, check the fingerprint before continuing. A trusted certificate is remembered, and a later change is reported.",
-                check.host,
-                check.port
-            ));
+            ui.label(tr!("dialogs.the_rdp_server_certificate_of_is_new_not", arg0 = check.host, arg1 = check.port));
         } else {
-            ui.label(tr!(
-                "{}:{} 의 호스트 키가 known_hosts에 없습니다.\n처음 접속하는 서버라면 지문이 맞는지 확인한 뒤 진행하세요.",
-                "The host key of {}:{} is not in known_hosts.\nIf this is your first connection to the server, check that the fingerprint is correct before continuing.",
-                check.host,
-                check.port
-            ));
+            ui.label(tr!("dialogs.the_host_key_of_is_not_in_known", arg0 = check.host, arg1 = check.port));
         }
         ui.add_space(6.0);
         egui::Grid::new("hk").num_columns(2).show(ui, |ui| {
-            ui.label(t("키 종류", "Key type"));
+            ui.label(t!("dialogs.key_type"));
             ui.monospace(&check.algorithm);
             ui.end_row();
-            ui.label(t("지문", "Fingerprint"));
+            ui.label(t!("dialogs.fingerprint"));
             ui.monospace(&check.fingerprint);
             ui.end_row();
         });
         ui.add_space(10.0);
-        let trust = icon::primary(ui, icon::TRUST, t("신뢰하고 연결", "Trust and connect"));
+        let trust = icon::primary(ui, icon::TRUST, t!("dialogs.trust_and_connect"));
         let (main, cancel) = icon::ok_cancel_row(ui, trust, true, icon::cancel());
         if main.clicked() {
             decision = Some(true);
@@ -640,16 +588,13 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
             let mut enter = false;
             let original_user = pending.prompt.user.clone();
             if let Some(original) = &original_user {
-                ui.label(t("사용자", "User"));
+                ui.label(t!("common.user"));
                 let edit = ui.add(egui::TextEdit::singleline(&mut pending.user));
                 enter |= edit.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter));
                 if pending.user.trim() != original.as_str() {
-                    ui.weak(t(
-                        "사용자를 바꾸면 새로 연결해서 그 사용자로 로그인합니다.",
-                        "Changing the user connects again and logs in as that user.",
-                    ));
+                    ui.weak(t!("dialogs.changing_the_user_connects_again_and_logs_in"));
                     if saved_site {
-                        ui.checkbox(&mut pending.save_user, t("사이트 정보에도 저장", "Save it in the site too"));
+                        ui.checkbox(&mut pending.save_user, t!("dialogs.save_it_in_the_site_too"));
                     }
                 }
                 ui.add_space(4.0);
@@ -669,17 +614,15 @@ pub fn auth(ctx: &egui::Context, session: &mut Session, saved_site: bool) -> Opt
             }
             if saved_site && pending.is_password() {
                 ui.add_space(4.0);
-                ui.checkbox(&mut pending.save_password, t("비밀번호 저장", "Save password")).on_hover_text(t(
-                    "로그인에 성공하면 마스터 비밀번호로 암호화해 저장합니다. 다음부터는 묻지 않습니다.",
-                    "Once the login succeeds, it is saved in the vault (encrypted with the master password) and not asked again.",
-                ));
+                ui.checkbox(&mut pending.save_password, t!("dialogs.save_password"))
+                    .on_hover_text(t!("dialogs.once_the_login_succeeds_it_is_saved_in"));
             }
             ui.add_space(10.0);
-            if pending.prompt.can_skip && ui.button(t("이 키 건너뛰기", "Skip this key")).clicked() {
+            if pending.prompt.can_skip && ui.button(t!("dialogs.skip_this_key")).clicked() {
                 skip_key = true;
             }
             let user_ok = original_user.is_none() || !pending.user.trim().is_empty();
-            let ok = icon::primary(ui, icon::OK, t("확인", "OK"));
+            let ok = icon::primary(ui, icon::OK, t!("common.ok"));
             let (main, cancel) = icon::ok_cancel_row(ui, ok, user_ok, icon::cancel());
             if main.clicked() || (enter && user_ok) {
                 submit = Some(true);
@@ -745,7 +688,7 @@ pub fn secret_field(ui: &egui::Ui, field: &egui::Response) {
             ui.painter().text(
                 field.rect.right_center() - egui::vec2(6.0, 0.0),
                 egui::Align2::RIGHT_CENTER,
-                t("⇪ CapsLock 켜짐", "⇪ Caps Lock on"),
+                t!("dialogs.caps_lock_on"),
                 egui::TextStyle::Small.resolve(ui.style()),
                 ui.visuals().warn_fg_color,
             );

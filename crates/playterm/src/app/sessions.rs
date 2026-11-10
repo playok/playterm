@@ -88,15 +88,13 @@ impl PlaytermApp {
             return None;
         }
         let Some(m) = self.settings.macros.iter().find(|m| m.name == name) else {
-            self.status =
-                Some(tr!("연결 후 매크로 '{name}' 가 없어 실행하지 않습니다", "The macro '{name}' to run after connecting does not exist"));
+            self.status = Some(tr!("app.sessions.the_macro_to_run_after_connecting_does_not", name = name));
             return None;
         };
         match crate::macros::parse(&m.script) {
             Ok(steps) => Some((m.name.clone(), steps)),
             Err(e) => {
-                self.status =
-                    Some(tr!("연결 후 매크로 '{name}' 를 실행할 수 없습니다: {e}", "Cannot run the macro '{name}' after connecting: {e}"));
+                self.status = Some(tr!("app.sessions.cannot_run_the_macro_after_connecting", e = e, name = name));
                 None
             }
         }
@@ -200,10 +198,7 @@ impl PlaytermApp {
         // SSH logs in with it; Telnet and serial sites type it at the prompt (automatic login).
         let wants_secret = profile.save_password;
         if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
-            let dialog = VaultDialog::new(
-                VaultMode::Unlock,
-                tr!("'{}' 의 저장된 비밀번호를 사용합니다.", "Uses the saved password of '{}'.", profile.display_name()),
-            );
+            let dialog = VaultDialog::new(VaultMode::Unlock, tr!("app.sessions.uses_the_saved_password_of", arg0 = profile.display_name()));
             let target = self.connect_target.take();
             self.modal = Some(Modal::Vault(dialog, Pending::Connect(id.to_owned(), target)));
             return;
@@ -220,29 +215,22 @@ impl PlaytermApp {
             Some(saved) if saved == now => Some(secret),
             Some(saved) => {
                 self.status = Some(tr!(
-                    "'{}' 의 접속 대상이 비밀번호를 저장할 때와 달라({saved} → {now}) 저장된 비밀번호를 보내지 않았습니다. \
-                     직접 바꾼 것이라면 로그인할 때 '비밀번호 저장' 을 다시 선택하세요.",
-                    "The target of '{}' differs from when its password was saved ({saved} → {now}), so the saved password was not sent. \
-                     If you changed it, choose 'Save password' again when logging in.",
-                    profile.display_name()
+                    "app.sessions.the_target_of_differs_from_when_its_password",
+                    arg0 = profile.display_name(),
+                    now = now,
+                    saved = saved
                 ));
                 None
             }
             // Saved by an older version, before gateways: not sent through one added since.
             None if !super::may_bind_unbound(profile) => {
-                self.status = Some(tr!(
-                    "'{}' 의 저장된 비밀번호는 RD 게이트웨이를 쓰기 전에 저장되어 게이트웨이로 보내지 않았습니다. \
-                     로그인할 때 '비밀번호 저장' 을 다시 선택하세요.",
-                    "The saved password of '{}' was saved before the site used an RD Gateway, so it was not sent through it. \
-                     Choose 'Save password' again when logging in.",
-                    profile.display_name()
-                ));
+                self.status = Some(tr!("app.sessions.the_saved_password_of_was_saved_before_the", arg0 = profile.display_name()));
                 None
             }
             // Saved by an older version; bound to the site on this unlock.
             None => {
                 let r = self.vault.rebind(&profile.id, &now);
-                self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
+                self.report(t!("common.could_not_update_the_saved_passwords"), r);
                 Some(secret)
             }
         }
@@ -268,7 +256,7 @@ impl PlaytermApp {
         let session = &self.sessions[i];
         if session.lacks_saved_password() && !self.vault.is_unlocked() && self.vault.exists() {
             let name = session.profile().map(|p| p.display_name()).unwrap_or_default();
-            let reason = tr!("'{name}' 의 저장된 비밀번호를 사용합니다.", "Uses the saved password of '{name}'.");
+            let reason = tr!("app.sessions.uses_the_saved_password_of_2", name = name);
             self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, reason), Pending::Reconnect(session.id)));
             return;
         }
@@ -292,7 +280,7 @@ impl PlaytermApp {
     pub(super) fn forget_secret(&mut self, id: &str) {
         if self.vault.is_unlocked() {
             let r = self.vault.remove(id);
-            self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
+            self.report(t!("common.could_not_update_the_saved_passwords"), r);
         } else {
             self.vault_todo.push(VaultTodo::Forget(id.to_owned()));
         }
@@ -306,7 +294,7 @@ impl PlaytermApp {
         }
         let wants_secret = ids.iter().filter_map(|id| self.store.get(id)).any(|p| p.save_password);
         if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
-            let reason = tr!("사이트 {}개의 저장된 비밀번호를 사용합니다.", "Uses the saved passwords of {} sites.", ids.len());
+            let reason = tr!("app.sessions.uses_the_saved_passwords_of_sites", arg0 = ids.len());
             self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, reason), Pending::ConnectMany(ids, layout)));
             return;
         }
@@ -334,7 +322,7 @@ impl PlaytermApp {
     pub(super) fn open_template(&mut self, id: &str) {
         let Some(template) = self.store.template(id).cloned() else { return };
         if !template.sites.iter().any(|s| self.store.get(s).is_some()) {
-            self.status = Some(tr!("'{}' 템플릿에 사이트가 없습니다", "Template '{}' has no sites", template.name));
+            self.status = Some(tr!("app.sessions.template_has_no_sites", arg0 = template.name));
             return;
         }
         self.connect_many(template.sites, template.layout);

@@ -36,7 +36,7 @@ impl Endpoint {
             })
         })
         .await
-        .context(t("SSH 에이전트 연결 시간 초과", "SSH agent connection timed out"))?
+        .context(t!("agent_forward.ssh_agent_connection_timed_out"))?
     }
 }
 
@@ -65,7 +65,7 @@ impl Forward {
                 Err(e) => log::debug!("agent forwarding unavailable: {e:#}"),
             }
         }
-        bail!(t("포워딩할 SSH 에이전트에 연결할 수 없습니다", "Cannot connect to an SSH agent for forwarding"))
+        bail!(t!("agent_forward.cannot_connect_to_an_ssh_agent_for_forwarding"))
     }
 
     async fn connect(&self) -> anyhow::Result<Agent> {

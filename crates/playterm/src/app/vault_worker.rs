@@ -59,10 +59,7 @@ impl Worker {
         if self.busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
-                t(
-                    "이전 볼트 작업을 마무리 중입니다. 잠시 후 다시 시도하세요",
-                    "The previous vault operation is finishing. Try again shortly",
-                ),
+                t!("app.vault_worker.the_previous_vault_operation_is_finishing_try_again"),
             ));
         }
         let guard = BusyGuard(self.busy.clone());
@@ -95,7 +92,7 @@ impl Task {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
-                Some(Err(VaultError::Io(io::Error::other(t("볼트 작업이 중단되었습니다", "The vault worker stopped unexpectedly")))))
+                Some(Err(VaultError::Io(io::Error::other(t!("app.vault_worker.the_vault_worker_stopped_unexpectedly")))))
             }
         }
     }

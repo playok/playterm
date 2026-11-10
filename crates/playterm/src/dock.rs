@@ -43,10 +43,10 @@ struct StateMark {
 impl StateMark {
     fn of(state: &SessionState) -> Self {
         let (icon, color, label) = match state {
-            SessionState::Local => (icon::STATE_LOCAL, Color32::from_rgb(140, 140, 140), t("로컬 프롬프트", "Local prompt")),
-            SessionState::Connecting => (icon::STATE_CONNECTING, Color32::from_rgb(220, 180, 40), t("연결 중…", "Connecting…")),
-            SessionState::Connected => (icon::STATE_CONNECTED, Color32::from_rgb(60, 190, 90), t("연결됨", "Connected")),
-            SessionState::Closed => (icon::STATE_CLOSED, Color32::from_rgb(200, 70, 70), t("연결 끊김", "Disconnected")),
+            SessionState::Local => (icon::STATE_LOCAL, Color32::from_rgb(140, 140, 140), t!("common.local_prompt")),
+            SessionState::Connecting => (icon::STATE_CONNECTING, Color32::from_rgb(220, 180, 40), t!("common.connecting")),
+            SessionState::Connected => (icon::STATE_CONNECTED, Color32::from_rgb(60, 190, 90), t!("common.connected")),
+            SessionState::Closed => (icon::STATE_CLOSED, Color32::from_rgb(200, 70, 70), t!("common.disconnected")),
         };
         Self { icon, color, label }
     }
@@ -501,35 +501,31 @@ impl Behavior<u64> for DockView<'_> {
         response.context_menu(|ui| {
             menu::session_items(ui, command, i, s);
             ui.separator();
-            let item = egui::Button::new((menu::lead(ui, s.in_broadcast), t("동시 입력에 포함", "Include in simultaneous input")));
+            let item = egui::Button::new((menu::lead(ui, s.in_broadcast), t!("dock.include_in_simultaneous_input")));
             if ui.add(item).clicked() {
                 *command = Some(Command::ToggleInBroadcast(i));
                 ui.close();
             }
             menu::tab_color_menu(ui, command, i, s.tab_color);
             ui.separator();
-            let mut entries = vec![
-                (t("복제", "Duplicate"), Command::Duplicate(i)),
-                (t("새 창으로 분리", "Move to new window"), Command::OpenInNewWindow(i)),
-            ];
+            let mut entries =
+                vec![(t!("common.duplicate"), Command::Duplicate(i)), (t!("common.move_to_new_window"), Command::OpenInNewWindow(i))];
             if self.detached {
-                entries.push((t("메인 창으로 합치기", "Move to main window"), Command::MoveToMain(i)));
+                entries.push((t!("dock.move_to_main_window"), Command::MoveToMain(i)));
             }
-            entries.push((t("다시 연결", "Reconnect"), Command::Reconnect(i)));
+            entries.push((t!("common.reconnect"), Command::Reconnect(i)));
             for (label, c) in entries {
                 if ui.add(egui::Button::new((menu::lead(ui, false), label))).clicked() {
                     *command = Some(c);
                     ui.close();
                 }
             }
-            if ui.add_enabled(s.can_disconnect(), egui::Button::new((menu::lead(ui, false), t("연결 끊기", "Disconnect")))).clicked() {
+            if ui.add_enabled(s.can_disconnect(), egui::Button::new((menu::lead(ui, false), t!("common.disconnect")))).clicked() {
                 *command = Some(Command::Disconnect(i));
                 ui.close();
             }
             ui.separator();
-            for (label, c) in
-                [(t("닫기", "Close"), Command::Close(i)), (t("다른 탭 모두 닫기", "Close other tabs"), Command::CloseOthers(i))]
-            {
+            for (label, c) in [(t!("common.close"), Command::Close(i)), (t!("common.close_other_tabs"), Command::CloseOthers(i))] {
                 if ui.add(egui::Button::new((menu::lead(ui, false), label))).clicked() {
                     *command = Some(c);
                     ui.close();
@@ -560,7 +556,7 @@ impl Behavior<u64> for DockView<'_> {
                 }
             }
         });
-        list.response.on_hover_text(t("이 그룹의 탭 목록", "The tabs of this group"));
+        list.response.on_hover_text(t!("dock.the_tabs_of_this_group"));
     }
 
     fn tab_bar_height(&self, style: &egui::Style) -> f32 {

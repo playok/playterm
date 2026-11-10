@@ -55,10 +55,7 @@ use playterm_i18n::{t, tr};
 use playterm_net::{ForwardKind, ForwardRule};
 
 fn usage() -> &'static str {
-    t(
-        "사용법: playterm [--cp949] [-i 키파일] [-L|-R 포트:호스트:포트] [-D 포트] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:속도] | rdp://[user@]host[:port]]...",
-        "Usage: playterm [--cp949] [-i keyfile] [-L|-R port:host:port] [-D port] [ssh://[user@]host[:port] | telnet://host[:port] | serial://COM3[:speed] | rdp://[user@]host[:port]]...",
-    )
+    t!("main.usage_playterm_cp949_i_keyfile_l_r_port")
 }
 
 fn main() -> eframe::Result {
@@ -66,10 +63,11 @@ fn main() -> eframe::Result {
     env_logger::init();
     update::clean_up();
     // The language is needed before the window exists (command-line errors).
+    playterm_i18n::set_language(playterm_i18n::Language::SYSTEM);
     if let Some(dir) = app::config_dir()
         && let Ok(settings) = playterm_config::AppSettings::load(&dir.join("settings.toml"))
     {
-        playterm_i18n::set_english(settings.language == playterm_config::Language::English);
+        playterm_i18n::set_language(settings.language);
     }
 
     let initial = match parse_args(std::env::args().skip(1)) {
@@ -116,14 +114,14 @@ fn main() -> eframe::Result {
                 last_error = Some(e);
             }
             Err(e) => {
-                show_message(&tr!("playterm 을 시작할 수 없습니다:\n{e}", "Cannot start playterm:\n{e}"), false);
+                show_message(&tr!("main.cannot_start_playterm", e = e), false);
                 return Err(e);
             }
             Ok(()) => return Ok(()),
         }
     }
     let error = last_error.expect("at least one renderer was tried");
-    show_message(&tr!("화면 렌더러를 초기화할 수 없습니다:\n{error}", "Cannot initialize the display renderer:\n{error}"), false);
+    show_message(&tr!("main.cannot_initialize_the_display_renderer", error = error), false);
     Err(error)
 }
 
@@ -202,19 +200,18 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Vec<SessionProfile>,
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cp949" | "--euc-kr" => charset = playterm_term::Charset::Cp949,
-            "-i" => identity_file = args.next().ok_or(t("-i 다음에 키 파일 경로가 필요합니다", "Missing key file path after -i"))?,
+            "-i" => identity_file = args.next().ok_or(t!("main.missing_key_file_path_after_i"))?,
             "-L" | "-R" | "-D" => {
                 let kind = match arg.as_str() {
                     "-L" => ForwardKind::Local,
                     "-R" => ForwardKind::Remote,
                     _ => ForwardKind::Dynamic,
                 };
-                let spec =
-                    args.next().ok_or_else(|| tr!("{arg} 다음에 포워딩 설정이 필요합니다", "Missing forwarding spec after {arg}"))?;
+                let spec = args.next().ok_or_else(|| tr!("main.missing_forwarding_spec_after", arg = arg))?;
                 forwards.push(ForwardRule::parse(kind, &spec)?);
             }
             "-h" | "--help" => return Err(String::new()),
-            option if option.starts_with('-') => return Err(tr!("알 수 없는 옵션: {option}", "Unknown option: {option}")),
+            option if option.starts_with('-') => return Err(tr!("main.unknown_option", option = option)),
             url => {
                 let mut profile = profile_form::parse_url(url)?;
                 profile.charset = charset;

@@ -163,8 +163,8 @@ pub fn color32(c: TabColor) -> egui::Color32 {
 
 /// "Tab color" submenu for tab `i`, whose color is `current`.
 pub fn tab_color_menu(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, current: Option<TabColor>) {
-    submenu(ui, t("탭 색상", "Tab color"), |ui| {
-        if ui.add(Button::selectable(current.is_none(), t("없음", "None"))).clicked() {
+    submenu(ui, t!("common.tab_color"), |ui| {
+        if ui.add(Button::selectable(current.is_none(), t!("common.none"))).clicked() {
             *out = Some(Command::SetTabColor(i, None));
             ui.close();
         }
@@ -185,17 +185,17 @@ pub fn tab_color_menu(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, cu
 
 /// BREAK and logging for tab `i`. Used by the tools menu and the tab context menu.
 pub fn session_items(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, s: &Session) {
-    item(ui, out, t("BREAK 신호 보내기", "Send BREAK"), "", s.can_break(), Command::Break(i));
-    submenu(ui, t("로그", "Log"), |ui| {
+    item(ui, out, t!("menu.send_break"), "", s.can_break(), Command::Break(i));
+    submenu(ui, t!("menu.log"), |ui| {
         if s.terminal.log().is_some() {
-            item(ui, out, t("로그 기록 중지", "Stop logging"), "", true, Command::StopLog(i));
-            item(ui, out, t("로그 파일 위치 열기", "Show log file"), "", true, Command::RevealLog(i));
+            item(ui, out, t!("menu.stop_logging"), "", true, Command::StopLog(i));
+            item(ui, out, t!("menu.show_log_file"), "", true, Command::RevealLog(i));
         } else {
             let text = Command::StartLog(i, LogMode::Text { timestamps: true });
-            item(ui, out, t("텍스트 로그 시작…", "Start text log…"), "", true, text);
-            item(ui, out, t("원본(raw) 로그 시작…", "Start raw log…"), "", true, Command::StartLog(i, LogMode::Raw));
+            item(ui, out, t!("menu.start_text_log"), "", true, text);
+            item(ui, out, t!("menu.start_raw_log"), "", true, Command::StartLog(i, LogMode::Raw));
         }
-        item(ui, out, t("로그 폴더 열기", "Open log folder"), "", true, Command::OpenLogFolder);
+        item(ui, out, t!("menu.open_log_folder"), "", true, Command::OpenLogFolder);
     });
 }
 
@@ -208,132 +208,102 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
     let (maximized, fullscreen) = ui.input(|inp| (inp.viewport().maximized.unwrap_or(false), inp.viewport().fullscreen.unwrap_or(false)));
 
     egui::MenuBar::new().ui(ui, |ui| {
-        ui.menu_button(t("파일", "File"), |ui| {
-            item(ui, out, t("새 탭", "New tab"), &hint(Shortcut::NewTab), true, Command::NewTab);
-            item(ui, out, t("새 창", "New window"), &hint(Shortcut::NewWindow), true, Command::NewWindow);
-            item(ui, out, t("빠른 연결…", "Quick Connect…"), &hint(Shortcut::QuickConnect), true, Command::QuickConnect);
-            item(ui, out, t("사이트 관리…", "Site Manager…"), &hint(Shortcut::SiteManager), true, Command::SiteManager);
-            item(ui, out, t("새 사이트…", "New site…"), "", true, Command::NewSite);
-            submenu(ui, t("가져오기", "Import"), |ui| {
-                item(ui, out, t("PuTTY 세션…", "PuTTY sessions…"), "", true, Command::ImportPutty);
-                item(ui, out, t("Xshell 세션…", "Xshell sessions…"), "", true, Command::ImportXshell);
-                item(ui, out, t("SecureCRT 세션…", "SecureCRT sessions…"), "", true, Command::ImportSecureCrt);
+        ui.menu_button(t!("menu.file"), |ui| {
+            item(ui, out, t!("common.new_tab"), &hint(Shortcut::NewTab), true, Command::NewTab);
+            item(ui, out, t!("common.new_window"), &hint(Shortcut::NewWindow), true, Command::NewWindow);
+            item(ui, out, t!("menu.quick_connect"), &hint(Shortcut::QuickConnect), true, Command::QuickConnect);
+            item(ui, out, t!("menu.site_manager"), &hint(Shortcut::SiteManager), true, Command::SiteManager);
+            item(ui, out, t!("menu.new_site"), "", true, Command::NewSite);
+            submenu(ui, t!("menu.import"), |ui| {
+                item(ui, out, t!("menu.putty_sessions"), "", true, Command::ImportPutty);
+                item(ui, out, t!("menu.xshell_sessions"), "", true, Command::ImportXshell);
+                item(ui, out, t!("menu.securecrt_sessions"), "", true, Command::ImportSecureCrt);
             });
             ui.separator();
-            item(ui, out, t("끝내기", "Exit"), keys("Alt+F4", "⌘Q"), true, Command::Quit);
+            item(ui, out, t!("menu.exit"), keys("Alt+F4", "⌘Q"), true, Command::Quit);
         });
 
-        ui.menu_button(t("편집", "Edit"), |ui| {
+        ui.menu_button(t!("menu.edit"), |ui| {
             let has_selection = active.is_some_and(|s| s.terminal.has_selection());
-            item(ui, out, t("복사", "Copy"), st.copy_hint, has_selection, Command::Copy);
-            item(ui, out, t("붙여넣기", "Paste"), st.paste_hint, active.is_some(), Command::Paste);
-            item(ui, out, t("모두 선택", "Select all"), "", active.is_some(), Command::SelectAll);
-            item(ui, out, t("찾기…", "Find…"), &hint(Shortcut::Find), active.is_some(), Command::Find);
+            item(ui, out, t!("common.copy"), st.copy_hint, has_selection, Command::Copy);
+            item(ui, out, t!("common.paste"), st.paste_hint, active.is_some(), Command::Paste);
+            item(ui, out, t!("common.select_all"), "", active.is_some(), Command::SelectAll);
+            item(ui, out, t!("menu.find"), &hint(Shortcut::Find), active.is_some(), Command::Find);
             ui.separator();
-            item(ui, out, t("스크롤백 지우기", "Clear scrollback"), "", active.is_some(), Command::ClearScrollback);
+            item(ui, out, t!("menu.clear_scrollback"), "", active.is_some(), Command::ClearScrollback);
         });
 
-        ui.menu_button(t("보기", "View"), |ui| {
-            check(ui, out, t("사이트 목록", "Site list"), &hint(Shortcut::Sidebar), st.show_sidebar, Command::ToggleSidebar);
-            check(ui, out, t("도구 모음", "Toolbar"), "", st.show_toolbar, Command::ToggleToolbar);
-            check(ui, out, t("상태 표시줄", "Status bar"), "", st.show_status_bar, Command::ToggleStatusBar);
-            check(
-                ui,
-                out,
-                t("명령 입력창", "Command input bar"),
-                &hint(Shortcut::ComposeBar),
-                st.show_compose_bar,
-                Command::ToggleComposeBar,
-            );
-            check(ui, out, t("전체 화면", "Full screen"), &hint(Shortcut::Fullscreen), fullscreen, Command::ToggleFullscreen);
+        ui.menu_button(t!("menu.view"), |ui| {
+            check(ui, out, t!("menu.site_list"), &hint(Shortcut::Sidebar), st.show_sidebar, Command::ToggleSidebar);
+            check(ui, out, t!("menu.toolbar"), "", st.show_toolbar, Command::ToggleToolbar);
+            check(ui, out, t!("menu.status_bar"), "", st.show_status_bar, Command::ToggleStatusBar);
+            check(ui, out, t!("common.command_input_bar"), &hint(Shortcut::ComposeBar), st.show_compose_bar, Command::ToggleComposeBar);
+            check(ui, out, t!("common.full_screen"), &hint(Shortcut::Fullscreen), fullscreen, Command::ToggleFullscreen);
             ui.separator();
-            item(ui, out, t("글꼴 크게", "Larger font"), &hint(Shortcut::ZoomIn), true, Command::ZoomIn);
-            item(ui, out, t("글꼴 작게", "Smaller font"), &hint(Shortcut::ZoomOut), true, Command::ZoomOut);
-            item(ui, out, t("기본 크기", "Default size"), &hint(Shortcut::ZoomReset), true, Command::ZoomReset);
+            item(ui, out, t!("common.larger_font"), &hint(Shortcut::ZoomIn), true, Command::ZoomIn);
+            item(ui, out, t!("common.smaller_font"), &hint(Shortcut::ZoomOut), true, Command::ZoomOut);
+            item(ui, out, t!("menu.default_size"), &hint(Shortcut::ZoomReset), true, Command::ZoomReset);
         });
 
-        ui.menu_button(t("도구", "Tools"), |ui| {
+        ui.menu_button(t!("menu.tools"), |ui| {
             match active {
                 Some(s) => session_items(ui, out, i, s),
                 None => {
-                    item(ui, out, t("BREAK 신호 보내기", "Send BREAK"), "", false, Command::Break(i));
-                    item(ui, out, t("로그 폴더 열기", "Open log folder"), "", true, Command::OpenLogFolder);
+                    item(ui, out, t!("menu.send_break"), "", false, Command::Break(i));
+                    item(ui, out, t!("menu.open_log_folder"), "", true, Command::OpenLogFolder);
                 }
             }
-            check(
-                ui,
-                out,
-                t("SFTP 탐색기 (옆 패널)", "SFTP explorer (side panel)"),
-                &hint(Shortcut::SftpPanel),
-                st.sftp_panel,
-                Command::ToggleSftpPanel,
-            );
-            submenu(ui, t("매크로", "Macros"), |ui| {
+            check(ui, out, t!("menu.sftp_explorer_side_panel"), &hint(Shortcut::SftpPanel), st.sftp_panel, Command::ToggleSftpPanel);
+            submenu(ui, t!("common.macros"), |ui| {
                 let connected = active.is_some_and(|s| s.state == crate::session::SessionState::Connected);
                 for (k, m) in st.macros.iter().enumerate() {
                     item(ui, out, &m.name, "", connected, Command::RunMacro(k));
                 }
                 if st.macros.is_empty() {
-                    ui.weak(t("저장된 매크로가 없습니다", "No macros saved"));
+                    ui.weak(t!("common.no_macros_saved"));
                 }
                 ui.separator();
                 let running = active.is_some_and(|s| s.macro_name().is_some());
-                item(ui, out, t("실행 중인 매크로 중지", "Stop the running macro"), "", running, Command::StopMacro);
-                item(ui, out, t("매크로 관리…", "Manage macros…"), "", true, Command::Macros);
+                item(ui, out, t!("menu.stop_the_running_macro"), "", running, Command::StopMacro);
+                item(ui, out, t!("common.manage_macros"), "", true, Command::Macros);
             });
             ui.separator();
             match st.vault {
-                VaultState::Missing => item(ui, out, t("저장된 비밀번호 설정…", "Set up saved passwords…"), "", true, Command::SetUpVault),
-                VaultState::Locked => {
-                    item(ui, out, t("저장된 비밀번호 잠금 해제…", "Unlock saved passwords…"), "", true, Command::UnlockVault)
-                }
-                VaultState::Unlocked => item(ui, out, t("저장된 비밀번호 잠그기", "Lock saved passwords"), "", true, Command::LockVault),
+                VaultState::Missing => item(ui, out, t!("menu.set_up_saved_passwords"), "", true, Command::SetUpVault),
+                VaultState::Locked => item(ui, out, t!("menu.unlock_saved_passwords"), "", true, Command::UnlockVault),
+                VaultState::Unlocked => item(ui, out, t!("menu.lock_saved_passwords"), "", true, Command::LockVault),
             }
             if crate::power::SUPPORTED {
                 ui.separator();
-                check(
-                    ui,
-                    out,
-                    t("화면보호기 진입 방지", "Prevent screen saver"),
-                    "",
-                    st.prevent_screensaver,
-                    Command::TogglePreventScreensaver,
-                );
+                check(ui, out, t!("menu.prevent_screen_saver"), "", st.prevent_screensaver, Command::TogglePreventScreensaver);
             }
             ui.separator();
-            item(ui, out, t("저장된 호스트 키·인증서…", "Remembered host keys and certificates…"), "", true, Command::TrustedHosts);
-            item(ui, out, t("설정…", "Settings…"), &hint(Shortcut::Settings), true, Command::Settings);
+            item(ui, out, t!("menu.remembered_host_keys_and_certificates"), "", true, Command::TrustedHosts);
+            item(ui, out, t!("menu.settings"), &hint(Shortcut::Settings), true, Command::Settings);
         });
 
-        ui.menu_button(t("탭", "Tab"), |ui| {
-            item(ui, out, t("새 탭", "New tab"), &hint(Shortcut::NewTab), true, Command::NewTab);
+        ui.menu_button(t!("menu.tab"), |ui| {
+            item(ui, out, t!("common.new_tab"), &hint(Shortcut::NewTab), true, Command::NewTab);
             ui.separator();
-            item(ui, out, t("다음 탭", "Next tab"), &hint(Shortcut::NextTab), n > 1, Command::NextTab);
-            item(ui, out, t("이전 탭", "Previous tab"), &hint(Shortcut::PrevTab), n > 1, Command::PrevTab);
+            item(ui, out, t!("common.next_tab"), &hint(Shortcut::NextTab), n > 1, Command::NextTab);
+            item(ui, out, t!("common.previous_tab"), &hint(Shortcut::PrevTab), n > 1, Command::PrevTab);
             ui.separator();
-            item(ui, out, t("탭 복제", "Duplicate tab"), &hint(Shortcut::DuplicateTab), active.is_some(), Command::Duplicate(i));
-            item(ui, out, t("새 창으로 분리", "Move to new window"), "", active.is_some(), Command::OpenInNewWindow(i));
+            item(ui, out, t!("common.duplicate_tab"), &hint(Shortcut::DuplicateTab), active.is_some(), Command::Duplicate(i));
+            item(ui, out, t!("common.move_to_new_window"), "", active.is_some(), Command::OpenInNewWindow(i));
             if let Some(s) = active {
                 tab_color_menu(ui, out, i, s.tab_color);
             }
             let can_reconnect = active.is_some_and(|s| s.has_target());
-            item(ui, out, t("다시 연결", "Reconnect"), "", can_reconnect, Command::Reconnect(i));
+            item(ui, out, t!("common.reconnect"), "", can_reconnect, Command::Reconnect(i));
             let can_disconnect = active.is_some_and(Session::can_disconnect);
-            item(ui, out, t("연결 끊기", "Disconnect"), "", can_disconnect, Command::Disconnect(i));
+            item(ui, out, t!("common.disconnect"), "", can_disconnect, Command::Disconnect(i));
             ui.separator();
-            item(ui, out, t("탭 닫기", "Close tab"), &hint(Shortcut::CloseTab), active.is_some(), Command::Close(i));
-            item(ui, out, t("다른 탭 모두 닫기", "Close other tabs"), "", n > 1, Command::CloseOthers(i));
-            item(ui, out, t("모든 탭 닫기", "Close all tabs"), "", n > 0, Command::CloseAll);
-            item(ui, out, t("닫은 탭 다시 열기", "Reopen closed tab"), &hint(Shortcut::ReopenClosed), st.can_reopen, Command::ReopenClosed);
+            item(ui, out, t!("common.close_tab"), &hint(Shortcut::CloseTab), active.is_some(), Command::Close(i));
+            item(ui, out, t!("common.close_other_tabs"), "", n > 1, Command::CloseOthers(i));
+            item(ui, out, t!("menu.close_all_tabs"), "", n > 0, Command::CloseAll);
+            item(ui, out, t!("common.reopen_closed_tab"), &hint(Shortcut::ReopenClosed), st.can_reopen, Command::ReopenClosed);
             ui.separator();
-            check(
-                ui,
-                out,
-                t("모든 탭에 동시 입력", "Type into all tabs"),
-                &hint(Shortcut::Broadcast),
-                st.broadcast,
-                Command::ToggleBroadcast,
-            );
+            check(ui, out, t!("common.type_into_all_tabs"), &hint(Shortcut::Broadcast), st.broadcast, Command::ToggleBroadcast);
             if n > 0 {
                 ui.separator();
                 for (k, title) in Session::numbered_titles(st.sessions).into_iter().enumerate() {
@@ -345,28 +315,27 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
             }
         });
 
-        ui.menu_button(t("창", "Window"), |ui| {
-            item(ui, out, t("최소화", "Minimize"), "", true, Command::Minimize);
-            let label = if maximized { t("이전 크기로", "Restore") } else { t("최대화", "Maximize") };
+        ui.menu_button(t!("menu.window"), |ui| {
+            item(ui, out, t!("menu.minimize"), "", true, Command::Minimize);
+            let label = if maximized { t!("menu.restore") } else { t!("menu.maximize") };
             item(ui, out, label, "", !fullscreen, Command::ToggleMaximize);
-            check(ui, out, t("전체 화면", "Full screen"), &hint(Shortcut::Fullscreen), fullscreen, Command::ToggleFullscreen);
-            check(ui, out, t("항상 위에 표시", "Always on top"), "", st.always_on_top, Command::ToggleAlwaysOnTop);
+            check(ui, out, t!("common.full_screen"), &hint(Shortcut::Fullscreen), fullscreen, Command::ToggleFullscreen);
+            check(ui, out, t!("menu.always_on_top"), "", st.always_on_top, Command::ToggleAlwaysOnTop);
         });
 
-        ui.menu_button(t("도움말", "Help"), |ui| {
-            item(ui, out, t("단축키", "Keyboard shortcuts"), "", true, Command::Shortcuts);
+        ui.menu_button(t!("menu.help"), |ui| {
+            item(ui, out, t!("common.keyboard_shortcuts"), "", true, Command::Shortcuts);
             ui.separator();
-            item(ui, out, t("playterm 정보", "About playterm"), "", true, Command::About);
-            item(ui, out, t("오픈소스 라이선스", "Open-source licenses"), "", true, Command::Licenses);
-            item(ui, out, t("문의·버그 신고 (GitHub)", "Questions and bug reports (GitHub)"), "", true, Command::ProjectPage);
+            item(ui, out, t!("menu.about_playterm"), "", true, Command::About);
+            item(ui, out, t!("common.open_source_licenses"), "", true, Command::Licenses);
+            item(ui, out, t!("common.questions_and_bug_reports_github"), "", true, Command::ProjectPage);
             ui.separator();
-            item(ui, out, t("업데이트 확인…", "Check for updates…"), "", true, Command::CheckUpdates);
+            item(ui, out, t!("menu.check_for_updates"), "", true, Command::CheckUpdates);
         });
 
         if let Some(version) = &st.update {
-            let text =
-                egui::RichText::new(tr!("⬆ 새 버전 {version}", "⬆ New version {version}")).color(ui.visuals().selection.stroke.color);
-            if ui.button(text).on_hover_text(t("업데이트 설치…", "Install the update…")).clicked() {
+            let text = egui::RichText::new(tr!("menu.new_version", version = version)).color(ui.visuals().selection.stroke.color);
+            if ui.button(text).on_hover_text(t!("menu.install_the_update")).clicked() {
                 *out = Some(Command::ShowUpdate);
             }
         }

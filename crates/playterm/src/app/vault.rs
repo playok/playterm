@@ -13,7 +13,7 @@ impl PlaytermApp {
         let id = profile.id.clone();
         let save_password = profile.save_password;
         if let Err(e) = self.store.upsert(profile) {
-            self.report(t("사이트 저장 실패", "Could not save the site"), Err(e));
+            self.report(t!("common.could_not_save_the_site"), Err(e));
             return false;
         }
 
@@ -24,7 +24,7 @@ impl PlaytermApp {
             if self.vault.is_unlocked() {
                 let target = self.store.get(&id).map(vault_target).unwrap_or_default();
                 let r = self.vault.rebind(&id, &target);
-                self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
+                self.report(t!("common.could_not_update_the_saved_passwords"), r);
             } else {
                 self.vault_todo.push(VaultTodo::Rebind(id.clone()));
             }
@@ -55,12 +55,9 @@ impl PlaytermApp {
             return;
         }
         let (mode, reason) = if self.vault.exists() {
-            (
-                VaultMode::Unlock,
-                t("비밀번호를 저장하려면 저장된 비밀번호를 잠금 해제하세요.", "Unlock the saved passwords to save the password."),
-            )
+            (VaultMode::Unlock, t!("app.vault.unlock_the_saved_passwords_to_save_the_password"))
         } else {
-            (VaultMode::Create, t("처음으로 비밀번호를 저장합니다.", "Saving a password for the first time."))
+            (VaultMode::Create, t!("app.vault.saving_a_password_for_the_first_time"))
         };
         self.modal = Some(Modal::Vault(VaultDialog::new(mode, reason), Pending::SaveLogin { id, password }));
     }
@@ -68,34 +65,31 @@ impl PlaytermApp {
     /// Stores a login password in the (unlocked) vault and marks the site as saving it.
     pub(super) fn finish_save_login(&mut self, id: &str, password: &str) {
         if let Err(e) = self.set_secret(id, password) {
-            self.status = Some(format!("{}: {e}", t("비밀번호 저장 실패", "Could not save the password")));
+            self.status = Some(format!("{}: {e}", t!("app.vault.could_not_save_the_password")));
             return;
         }
         let Some(mut profile) = self.store.get(id).cloned() else { return };
         if !profile.save_password {
             profile.save_password = true;
             let r = self.store.upsert(profile.clone());
-            self.report(t("사이트 저장 실패", "Could not save the site"), r);
+            self.report(t!("common.could_not_save_the_site"), r);
         }
-        self.info = Some(tr!("'{}' 의 비밀번호를 저장했습니다", "Saved the password of '{}'", profile.display_name()));
+        self.info = Some(tr!("app.vault.saved_the_password_of", arg0 = profile.display_name()));
     }
 
     pub(super) fn store_secret(&mut self, id: String, password: Zeroizing<String>, connect: bool) {
         if self.vault.is_unlocked() {
             let r = self.set_secret(&id, &password);
-            self.report(t("비밀번호 저장 실패", "Could not save the password"), r);
+            self.report(t!("app.vault.could_not_save_the_password"), r);
             if connect {
                 self.connect_saved(&id);
             }
             return;
         }
         let (mode, reason) = if self.vault.exists() {
-            (
-                VaultMode::Unlock,
-                t("비밀번호를 저장하려면 저장된 비밀번호를 잠금 해제하세요.", "Unlock the saved passwords to save the password."),
-            )
+            (VaultMode::Unlock, t!("app.vault.unlock_the_saved_passwords_to_save_the_password"))
         } else {
-            (VaultMode::Create, t("처음으로 비밀번호를 저장합니다.", "Saving a password for the first time."))
+            (VaultMode::Create, t!("app.vault.saving_a_password_for_the_first_time"))
         };
         let target = self.connect_target.take();
         let pending = Pending::StoreSecret { id, password, connect, target };
@@ -114,12 +108,12 @@ impl PlaytermApp {
                     None => Ok(()),
                 },
             };
-            self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
+            self.report(t!("common.could_not_update_the_saved_passwords"), r);
         }
         // Passwords saved by older versions get the target of their site as it is now.
         let store = &self.store;
         let r = self.vault.bind_missing(|id| store.get(id).filter(|p| p.save_password && may_bind_unbound(p)).map(vault_target));
-        self.report(t("저장된 비밀번호 갱신 실패", "Could not update the saved passwords"), r);
+        self.report(t!("common.could_not_update_the_saved_passwords"), r);
         match pending {
             Pending::Unlock => {}
             Pending::Connect(id, target) => self.connect_in(target, |app| app.connect_saved(&id)),
@@ -131,7 +125,7 @@ impl PlaytermApp {
             }
             Pending::StoreSecret { id, password, connect, target } => {
                 let r = self.set_secret(&id, &password);
-                self.report(t("비밀번호 저장 실패", "Could not save the password"), r);
+                self.report(t!("app.vault.could_not_save_the_password"), r);
                 if connect {
                     self.connect_in(target, |app| app.connect_saved(&id));
                 }
@@ -158,10 +152,10 @@ impl PlaytermApp {
                 }
             }
             Pending::SaveLogin { .. } => {
-                self.status = Some(t("비밀번호는 저장되지 않았습니다", "The password was not saved").into());
+                self.status = Some(t!("app.vault.the_password_was_not_saved").into());
             }
             Pending::StoreSecret { id, password, connect, target } => {
-                self.status = Some(t("비밀번호는 저장되지 않았습니다", "The password was not saved").into());
+                self.status = Some(t!("app.vault.the_password_was_not_saved").into());
                 if connect && let Some(p) = self.store.get(&id).cloned() {
                     let password = Password::from(password);
                     self.connect_in(target, |app| app.open_session(&p, Some(password), Some(p.display_name())));
@@ -176,7 +170,7 @@ impl PlaytermApp {
         let mut copy = match original.duplicate() {
             Ok(copy) => copy,
             Err(e) => {
-                self.status = Some(format!("{}: {e}", t("사이트 복사 실패", "Could not duplicate the site")));
+                self.status = Some(format!("{}: {e}", t!("app.vault.could_not_duplicate_the_site")));
                 return None;
             }
         };
@@ -186,23 +180,24 @@ impl PlaytermApp {
             Ok(secret) => secret,
             Err(saved) => {
                 let now = vault_target(&original);
-                let saved = if saved.is_empty() { t("알 수 없음", "unknown").to_owned() } else { saved };
+                let saved = if saved.is_empty() { t!("app.vault.unknown").to_owned() } else { saved };
                 self.status = Some(tr!(
-                    "'{}' 의 접속 대상이 비밀번호를 저장할 때와 달라({saved} → {now}) 복제본에 비밀번호를 복사하지 않았습니다",
-                    "The target of '{}' differs from when its password was saved ({saved} → {now}), so the password was not copied",
-                    original.display_name()
+                    "app.vault.the_target_of_differs_from_when_its_password",
+                    arg0 = original.display_name(),
+                    now = now,
+                    saved = saved
                 ));
                 None
             }
         };
         copy.save_password &= secret.is_some();
         if let Err(e) = self.store.upsert(copy.clone()) {
-            self.report(t("사이트 저장 실패", "Could not save the site"), Err(e));
+            self.report(t!("common.could_not_save_the_site"), Err(e));
             return None;
         }
         if let Some(secret) = secret {
             let r = self.vault.set(&copy.id, &vault_target(&copy), &secret);
-            self.report(t("비밀번호 복사 실패", "Could not copy the password"), r);
+            self.report(t!("app.vault.could_not_copy_the_password"), r);
         }
         Some(copy)
     }
@@ -219,7 +214,7 @@ impl PlaytermApp {
             return;
         }
         let result = self.store.reload();
-        self.report(t("사이트 목록을 읽을 수 없습니다", "Could not reload the sites"), result);
+        self.report(t!("app.vault.could_not_reload_the_sites"), result);
         let mut manager = SiteManager::default();
         manager.view = self.settings.site_view;
         if new_site {
@@ -278,10 +273,7 @@ impl PlaytermApp {
 
     /// Sets the master password before any password is saved (the sidebar's "Set up").
     pub(super) fn set_up_vault(&mut self) {
-        let reason = t(
-            "사이트 비밀번호를 저장해 두면 접속할 때 다시 묻지 않습니다.",
-            "With site passwords saved, connecting does not ask for them again.",
-        );
+        let reason = t!("app.vault.with_site_passwords_saved_connecting_does_not_ask");
         self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Create, reason), Pending::Unlock));
     }
 
@@ -329,24 +321,24 @@ impl PlaytermApp {
             }
             SiteManagerResult::CreateFolder(path) => {
                 let r = self.store.create_folder(&path);
-                self.report(t("폴더를 만들 수 없습니다", "Could not create the folder"), r);
+                self.report(t!("app.vault.could_not_create_the_folder"), r);
                 self.site_manager = Some(manager);
             }
             SiteManagerResult::RenameFolder { from, to } => {
                 let r = self.store.rename_folder(&from, &to);
-                self.report(t("폴더 이름을 바꿀 수 없습니다", "Could not rename the folder"), r);
+                self.report(t!("app.vault.could_not_rename_the_folder"), r);
                 manager.refresh(&self.store, &|p| has_secret(&self.vault, p));
                 self.site_manager = Some(manager);
             }
             SiteManagerResult::DeleteFolder(path) => {
                 let r = self.store.delete_folder(&path);
-                self.report(t("폴더를 삭제할 수 없습니다", "Could not delete the folder"), r);
+                self.report(t!("app.vault.could_not_delete_the_folder"), r);
                 manager.refresh(&self.store, &|p| has_secret(&self.vault, p));
                 self.site_manager = Some(manager);
             }
             SiteManagerResult::MoveSite { id, folder } => {
                 let r = self.store.move_site(&id, &folder);
-                self.report(t("사이트를 옮길 수 없습니다", "Could not move the site"), r);
+                self.report(t!("app.vault.could_not_move_the_site"), r);
                 manager.refresh(&self.store, &|p| has_secret(&self.vault, p));
                 self.site_manager = Some(manager);
             }

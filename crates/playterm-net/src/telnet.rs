@@ -267,7 +267,7 @@ pub(crate) async fn run(
     loop {
         tokio::select! {
             n = reader.read(&mut buf) => {
-                let n = n.context(t("수신 오류", "Receive error"))?;
+                let n = n.context(t!("common.receive_error"))?;
                 if n == 0 {
                     return Ok(());
                 }
@@ -291,15 +291,12 @@ pub(crate) async fn run(
                 }
                 Some(SessionCommand::SendBreak) => {
                     writer.write_all(&[IAC, BRK]).await?;
-                    sink.notice(t("BREAK 신호를 보냈습니다", "Sent BREAK"));
+                    sink.notice(t!("common.sent_break"));
                 }
                 Some(SessionCommand::Rdp(_)) => {}
                 Some(SessionCommand::ShellDir) => sink.send(SessionEvent::ShellDir(None)),
                 Some(SessionCommand::OpenSftp) => {
-                    sink.send(SessionEvent::Sftp(Err(t(
-                        "Telnet 세션에서는 SFTP를 쓸 수 없습니다",
-                        "SFTP is not available in Telnet sessions",
-                    )
+                    sink.send(SessionEvent::Sftp(Err(t!("telnet.sftp_is_not_available_in_telnet_sessions")
                     .into())));
                 }
                 Some(SessionCommand::Close) | None => {

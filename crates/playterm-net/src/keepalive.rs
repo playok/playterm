@@ -30,7 +30,7 @@ impl IdleTimer {
             .then(|| match decode_escapes(&keepalive.text) {
                 Ok(bytes) => Some(bytes).filter(|b| !b.is_empty()),
                 Err(e) => {
-                    sink.notice(tr!("접속 유지 문자열 오류: {e}", "Keep-alive text error: {e}"));
+                    sink.notice(tr!("keepalive.keep_alive_text_error", e = e));
                     None
                 }
             })

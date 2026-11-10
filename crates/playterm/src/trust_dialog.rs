@@ -35,21 +35,17 @@ impl TrustDialog {
     pub fn show(&mut self, ctx: &egui::Context) -> bool {
         let mut close = false;
         let mut refresh = false;
-        let response = egui::Modal::new(egui::Id::unique("trusted-hosts"))
-            .backdrop_color(crate::app::theme::MODAL_BACKDROP)
-            .show(ctx, |ui| {
+        let response =
+            egui::Modal::new(egui::Id::unique("trusted-hosts")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
                 ui.set_width(580.0);
                 if let Some(entry) = self.pending.clone() {
-                    ui.heading(t("저장된 호스트 신뢰 삭제", "Remove remembered host identity"));
-                    ui.label(tr!("{} 항목을 삭제할까요?", "Remove the entry for {}?", entry.host));
+                    ui.heading(t!("trust_dialog.remove_remembered_host_identity"));
+                    ui.label(tr!("trust_dialog.remove_the_entry_for", arg0 = entry.host));
                     ui.monospace(&entry.algorithm);
                     ui.monospace(&entry.fingerprint);
-                    ui.label(t(
-                        "삭제하면 다음 연결에서 새 키·인증서의 지문을 다시 확인해야 합니다. 예상하지 못한 변경은 중간자 공격일 수 있습니다. 서버 관리자에게 새 지문을 확인한 뒤에만 신뢰하세요.",
-                        "After removal, the next connection asks you to verify the new key or certificate fingerprint. An unexpected change could be a man-in-the-middle attack. Verify the new fingerprint with the server administrator before trusting it.",
-                    ));
+                    ui.label(t!("trust_dialog.after_removal_the_next_connection_asks_you_to"));
                     ui.horizontal(|ui| {
-                        if ui.button(t("삭제 확인", "Confirm removal")).clicked() {
+                        if ui.button(t!("trust_dialog.confirm_removal")).clicked() {
                             match remove_trusted_host(&self.path, &entry) {
                                 Ok(()) => {
                                     self.pending = None;
@@ -58,22 +54,19 @@ impl TrustDialog {
                                 Err(e) => self.error = Some(e.to_string()),
                             }
                         }
-                        if ui.button(t("취소", "Cancel")).clicked() {
+                        if ui.button(t!("common.cancel")).clicked() {
                             self.pending = None;
                             self.error = None;
                         }
                     });
                 } else {
-                    ui.heading(t("저장된 호스트 키와 인증서", "Remembered host keys and certificates"));
-                    ui.label(t(
-                        "SSH 호스트(점프 호스트 포함)와 직접 연결한 RDP 서버의 신뢰 기록입니다. 변경된 키는 자동으로 교체하지 않습니다.",
-                        "Trust records for SSH hosts (including jump hosts) and direct RDP servers. Changed keys are never replaced automatically.",
-                    ));
-                    ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(t("호스트 검색", "Search hosts")));
+                    ui.heading(t!("trust_dialog.remembered_host_keys_and_certificates"));
+                    ui.label(t!("trust_dialog.trust_records_for_ssh_hosts_including_jump_hosts"));
+                    ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(t!("trust_dialog.search_hosts")));
                     ui.separator();
                     egui::ScrollArea::vertical().max_height(330.0).show(ui, |ui| {
                         if self.entries.is_empty() {
-                            ui.label(t("저장된 호스트가 없습니다", "No remembered hosts"));
+                            ui.label(t!("trust_dialog.no_remembered_hosts"));
                         }
                         for entry in &self.entries {
                             if !entry.host.to_lowercase().contains(&self.search.to_lowercase()) {
@@ -81,21 +74,24 @@ impl TrustDialog {
                             }
                             ui.push_id((entry.kind as u8, entry.line), |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.strong(match entry.kind { TrustKind::Ssh => "SSH", TrustKind::Rdp => "RDP" });
+                                    ui.strong(match entry.kind {
+                                        TrustKind::Ssh => "SSH",
+                                        TrustKind::Rdp => "RDP",
+                                    });
                                     ui.label(&entry.host);
-                                    if ui.button(t("삭제…", "Remove…")).clicked() {
+                                    if ui.button(t!("trust_dialog.remove")).clicked() {
                                         self.pending = Some(entry.clone());
                                     }
                                 });
-                                ui.label(tr!("{} · {}번째 줄", "{} · line {}", entry.algorithm, entry.line));
+                                ui.label(tr!("trust_dialog.line", arg0 = entry.algorithm, arg1 = entry.line));
                                 ui.monospace(&entry.fingerprint);
                                 ui.separator();
                             });
                         }
                     });
                     ui.horizontal(|ui| {
-                        refresh = ui.button(t("새로 고침", "Refresh")).clicked();
-                        close = ui.button(t("닫기", "Close")).clicked();
+                        refresh = ui.button(t!("trust_dialog.refresh")).clicked();
+                        close = ui.button(t!("common.close")).clicked();
                     });
                 }
                 if let Some(error) = &self.error {

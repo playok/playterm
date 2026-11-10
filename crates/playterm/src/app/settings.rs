@@ -51,7 +51,7 @@ impl PlaytermApp {
     pub(super) fn save_settings(&mut self) {
         self.settings_unsaved = None;
         let r = self.settings.save(&self.settings_path);
-        self.report(t("설정 저장 실패", "Could not save the settings"), r);
+        self.report(t!("app.settings.could_not_save_the_settings"), r);
     }
 
     /// Changes the font size (zoom), saving it once the zooming stops.

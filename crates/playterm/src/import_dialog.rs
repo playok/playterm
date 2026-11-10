@@ -136,12 +136,12 @@ impl ImportDialog {
         let source = self.source.name();
         ui.horizontal(|ui| {
             match &self.dir {
-                Some(dir) => ui.weak(tr!("폴더: {}", "Folder: {}", dir.display())),
-                None => ui.label(tr!("{source} 세션 폴더를 찾지 못했습니다.", "The {source} sessions folder was not found.")),
+                Some(dir) => ui.weak(tr!("import_dialog.folder", arg0 = dir.display())),
+                None => ui.label(tr!("import_dialog.the_sessions_folder_was_not_found", source = source)),
             };
-            if ui.add(icon::button(icon::BROWSE, t("다른 폴더…", "Other folder…")).small()).clicked() {
+            if ui.add(icon::button(icon::BROWSE, t!("import_dialog.other_folder")).small()).clicked() {
                 let mut picker =
-                    crate::picker::Picker::new(crate::picker::Kind::Folder, tr!("{source} 세션 폴더", "{source} sessions folder"));
+                    crate::picker::Picker::new(crate::picker::Kind::Folder, tr!("import_dialog.sessions_folder", source = source));
                 if let Some(dir) = &self.dir {
                     picker = picker.directory(dir);
                 }
@@ -156,100 +156,84 @@ impl ImportDialog {
     pub fn show(&mut self, ctx: &egui::Context, store: &ProfileStore) -> ImportResult {
         let mut result = ImportResult::Open;
         let source = self.source.name();
-        let modal = egui::Modal::new(egui::Id::unique(("session-import", source))).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
-            ui.set_width(600.0);
-            ui.heading(tr!("{source} 세션 가져오기", "Import {source} sessions"));
-            ui.add_space(4.0);
-            if self.source == ImportSource::SecureCrt {
-                password_alert(ui);
+        let modal = egui::Modal::new(egui::Id::unique(("session-import", source))).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(
+            ctx,
+            |ui| {
+                ui.set_width(600.0);
+                ui.heading(tr!("import_dialog.import_sessions", source = source));
                 ui.add_space(4.0);
-            }
-            self.location(ui, store);
-            if self.truncated {
-                ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    tr!(
-                        "폴더가 너무 커서 일부만 읽었습니다. {source} 세션 폴더를 직접 고르세요.",
-                        "The folder is too big, so only part of it was read. Pick the {source} sessions folder itself.",
-                    ),
-                );
-            }
-            if let Some(e) = &self.error {
-                ui.colored_label(ui.visuals().error_fg_color, e);
-            } else if self.items.is_empty() {
-                ui.label(tr!("가져올 {source} 세션이 없습니다.", "There are no {source} sessions to import."));
-                if self.source == ImportSource::Putty {
-                    ui.weak(tr!(
-                        "(레지스트리 HKEY_CURRENT_USER\\{})",
-                        "(registry HKEY_CURRENT_USER\\{})",
-                        putty::sessions_key()
-                    ));
+                if self.source == ImportSource::SecureCrt {
+                    password_alert(ui);
+                    ui.add_space(4.0);
                 }
-            } else {
-                ui.weak(match self.source {
-                    ImportSource::Putty => t(
-                        "비밀번호는 PuTTY 가 저장하지 않으므로 가져오지 않습니다. 이미 있는 사이트는 기본으로 선택 해제됩니다.",
-                        "Passwords are not imported because PuTTY does not save them. Sites that already exist are unchecked by default.",
-                    ),
-                    ImportSource::Xshell => t(
-                        "Xshell 의 하위 폴더는 아래 폴더 안에 그대로 만듭니다. 비밀번호는 가져오지 않으며, 이미 있는 사이트는 기본으로 선택 해제됩니다.",
-                        "Xshell's subfolders are kept inside the folder below. Passwords are not imported, and sites that already exist are unchecked by default.",
-                    ),
-                    ImportSource::SecureCrt => t(
-                        "SecureCRT 의 하위 폴더는 아래 폴더 안에 그대로 만듭니다. 이미 있는 사이트는 기본으로 선택 해제됩니다.",
-                        "SecureCRT's subfolders are kept inside the folder below. Sites that already exist are unchecked by default.",
-                    ),
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.small_button(t("모두 선택", "Select all")).clicked() {
-                        for item in self.items.iter_mut().filter(|i| i.session.profile.is_ok()) {
-                            item.checked = true;
-                        }
+                self.location(ui, store);
+                if self.truncated {
+                    ui.colored_label(ui.visuals().warn_fg_color, tr!("import_dialog.the_folder_is_too_big_so_only_part", source = source));
+                }
+                if let Some(e) = &self.error {
+                    ui.colored_label(ui.visuals().error_fg_color, e);
+                } else if self.items.is_empty() {
+                    ui.label(tr!("import_dialog.there_are_no_sessions_to_import", source = source));
+                    if self.source == ImportSource::Putty {
+                        ui.weak(tr!("import_dialog.registry_hkey_current_user", arg0 = putty::sessions_key()));
                     }
-                    if ui.small_button(t("모두 해제", "Select none")).clicked() {
+                } else {
+                    ui.weak(match self.source {
+                        ImportSource::Putty => t!("import_dialog.passwords_are_not_imported_because_putty_does_not"),
+                        ImportSource::Xshell => t!("import_dialog.xshell_s_subfolders_are_kept_inside_the_folder"),
+                        ImportSource::SecureCrt => t!("import_dialog.securecrt_s_subfolders_are_kept_inside_the_folder"),
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.small_button(t!("common.select_all")).clicked() {
+                            for item in self.items.iter_mut().filter(|i| i.session.profile.is_ok()) {
+                                item.checked = true;
+                            }
+                        }
+                        if ui.small_button(t!("import_dialog.select_none")).clicked() {
+                            for item in &mut self.items {
+                                item.checked = false;
+                            }
+                        }
+                    });
+                    egui::ScrollArea::vertical().max_height(340.0).auto_shrink([false, true]).show(ui, |ui| {
                         for item in &mut self.items {
-                            item.checked = false;
+                            self::row(ui, item);
                         }
+                    });
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(t!("common.folder"));
+                    let edit = egui::TextEdit::singleline(&mut self.folder).hint_text(t!("common.none")).desired_width(160.0);
+                    if ui.add(edit).changed() {
+                        self.mark_duplicates(store, false);
                     }
                 });
-                egui::ScrollArea::vertical().max_height(340.0).auto_shrink([false, true]).show(ui, |ui| {
-                    for item in &mut self.items {
-                        self::row(ui, item);
+                ui.add_space(8.0);
+                let count = self.items.iter().filter(|i| i.checked).count();
+                let import = icon::primary(ui, icon::IMPORT, tr!("import_dialog.import", count = count));
+                let (main, cancel) = icon::ok_cancel_row(ui, import, count > 0, icon::cancel());
+                {
+                    if main.clicked() {
+                        let folder = normalize_folder(&self.folder);
+                        let profiles = self
+                            .items
+                            .iter()
+                            .filter(|i| i.checked)
+                            .filter_map(|i| {
+                                let folder = target_folder(&folder, &i.session.folder);
+                                i.session.profile.clone().ok().map(|p| SessionProfile { folder, ..p })
+                            })
+                            .collect();
+                        result = ImportResult::Import { source: self.source, folder, profiles };
                     }
-                });
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(t("폴더", "Folder"));
-                let edit = egui::TextEdit::singleline(&mut self.folder).hint_text(t("없음", "None")).desired_width(160.0);
-                if ui.add(edit).changed() {
-                    self.mark_duplicates(store, false);
+                    if cancel.clicked() {
+                        result = ImportResult::Cancel;
+                    }
                 }
-            });
-            ui.add_space(8.0);
-            let count = self.items.iter().filter(|i| i.checked).count();
-            let import = icon::primary(ui, icon::IMPORT, tr!("가져오기 ({count})", "Import ({count})"));
-            let (main, cancel) = icon::ok_cancel_row(ui, import, count > 0, icon::cancel());
-            {
-                if main.clicked() {
-                    let folder = normalize_folder(&self.folder);
-                    let profiles = self
-                        .items
-                        .iter()
-                        .filter(|i| i.checked)
-                        .filter_map(|i| {
-                            let folder = target_folder(&folder, &i.session.folder);
-                            i.session.profile.clone().ok().map(|p| SessionProfile { folder, ..p })
-                        })
-                        .collect();
-                    result = ImportResult::Import { source: self.source, folder, profiles };
-                }
-                if cancel.clicked() {
-                    result = ImportResult::Cancel;
-                }
-            }
-        });
+            },
+        );
         if matches!(result, ImportResult::Open) && modal.should_close() {
             result = ImportResult::Cancel;
         }
@@ -272,15 +256,12 @@ fn password_alert(ui: &mut egui::Ui) {
 
 /// Title of the notice that SecureCRT's saved passwords are not imported.
 pub fn password_notice_title() -> &'static str {
-    t("비밀번호는 가져오지 않습니다", "Passwords are not imported")
+    t!("import_dialog.passwords_are_not_imported")
 }
 
 /// The notice that SecureCRT's saved passwords are not imported, and what to do instead.
 pub fn password_notice_text() -> &'static str {
-    t(
-        "SecureCRT 에 저장된 비밀번호는 암호화되어 있어 가져오지 않습니다. 가져온 사이트에 처음 연결할 때 비밀번호를 입력하고 '비밀번호 저장' 을 선택하면 playterm 볼트(마스터 비밀번호로 암호화)에 저장됩니다.",
-        "The passwords SecureCRT saved are encrypted and are not imported. Type the password the first time you connect to an imported site and choose 'Save password': it is kept in playterm's vault (encrypted with the master password).",
-    )
+    t!("import_dialog.the_passwords_securecrt_saved_are_encrypted_and_are")
 }
 
 fn row(ui: &mut egui::Ui, item: &mut Item) {
@@ -293,7 +274,7 @@ fn row(ui: &mut egui::Ui, item: &mut Item) {
             ui.checkbox(&mut item.checked, RichText::new(name).strong());
             ui.weak(sidebar::summary(p));
             if item.duplicate {
-                ui.label(RichText::new(t("이미 있음", "Already exists")).color(ui.visuals().warn_fg_color));
+                ui.label(RichText::new(t!("import_dialog.already_exists")).color(ui.visuals().warn_fg_color));
             }
         }
         Err(reason) => {

@@ -14,7 +14,7 @@ impl PlaytermApp {
                 QuickConnectResult::Connect { profile, password, save } => {
                     if save {
                         let r = self.store.upsert((*profile).clone());
-                        self.report(t("사이트 저장 실패", "Could not save the site"), r);
+                        self.report(t!("common.could_not_save_the_site"), r);
                     }
                     let name = save.then(|| profile.display_name());
                     let target = self.dialog_target.take();
@@ -86,10 +86,10 @@ impl PlaytermApp {
                     let count = profiles.len();
                     for p in profiles {
                         let r = self.store.upsert(p);
-                        self.report(t("사이트 저장 실패", "Could not save the site"), r);
+                        self.report(t!("common.could_not_save_the_site"), r);
                     }
-                    let place = if folder.is_empty() { String::new() } else { tr!(" ('{folder}' 폴더)", " (folder '{folder}')") };
-                    let imported = tr!("{} 세션 {count}개를 가져왔습니다{place}", "Imported {count} {} sessions{place}", source.name());
+                    let place = if folder.is_empty() { String::new() } else { tr!("app.ui.folder", folder = folder) };
+                    let imported = tr!("app.ui.imported_sessions", arg0 = source.name(), count = count, place = place);
                     // SecureCRT keeps passwords for its sessions; they stay behind, which the user
                     // acknowledges rather than finds out at the first connection. The notice says
                     // what was imported too.
@@ -148,23 +148,20 @@ impl PlaytermApp {
                 TemplateResult::Save(template) => {
                     let name = template.name.clone();
                     let r = self.store.upsert_template(template);
-                    self.report(t("템플릿 저장 실패", "Could not save the template"), r);
-                    self.info = Some(tr!(
-                        "'{name}' 템플릿을 저장했습니다 (사이트 목록 위 '템플릿' 에서 더블클릭으로 엽니다)",
-                        "Saved template '{name}' (double-click it under 'Templates' in the site list)"
-                    ));
+                    self.report(t!("app.ui.could_not_save_the_template"), r);
+                    self.info = Some(tr!("app.ui.saved_template_double_click_it_under_templates_in", name = name));
                     self.show_sidebar = true;
                 }
             },
             Modal::ConfirmDeleteTemplate(id) => {
                 let name = self.store.template(&id).map(|tpl| tpl.name.clone()).unwrap_or_default();
-                let text = tr!("'{name}' 템플릿을 삭제할까요? (사이트는 그대로 남습니다)", "Delete template '{name}'? (Its sites stay.)");
-                match dialogs::confirm(ctx, t("템플릿 삭제", "Delete template"), &text, t("삭제", "Delete")) {
+                let text = tr!("app.ui.delete_template_its_sites_stay", name = name);
+                match dialogs::confirm(ctx, t!("app.ui.delete_template"), &text, t!("common.delete")) {
                     None => self.modal = Some(Modal::ConfirmDeleteTemplate(id)),
                     Some(false) => {}
                     Some(true) => {
                         let r = self.store.remove_template(&id);
-                        self.report(t("템플릿 삭제 실패", "Could not delete the template"), r);
+                        self.report(t!("app.ui.could_not_delete_the_template"), r);
                     }
                 }
             }
@@ -181,13 +178,13 @@ impl PlaytermApp {
             },
             Modal::ConfirmDelete(id) => {
                 let name = self.store.get(&id).map(|p| p.display_name()).unwrap_or_default();
-                let text = tr!("'{name}' 사이트를 삭제할까요?", "Delete site '{name}'?");
-                match dialogs::confirm(ctx, t("사이트 삭제", "Delete site"), &text, t("삭제", "Delete")) {
+                let text = tr!("app.ui.delete_site", name = name);
+                match dialogs::confirm(ctx, t!("app.ui.delete_site_2"), &text, t!("common.delete")) {
                     None => self.modal = Some(Modal::ConfirmDelete(id)),
                     Some(false) => {}
                     Some(true) => match self.store.remove(&id) {
                         Ok(()) => self.forget_secret(&id),
-                        Err(e) => self.report(t("사이트 삭제 실패", "Could not delete the site"), Err(e)),
+                        Err(e) => self.report(t!("app.ui.could_not_delete_the_site"), Err(e)),
                     },
                 }
             }
@@ -212,7 +209,7 @@ impl PlaytermApp {
                 {
                     profile.username = relogin.user.clone();
                     let r = self.store.upsert(profile);
-                    self.report(t("사이트 저장 실패", "Could not save the site"), r);
+                    self.report(t!("common.could_not_save_the_site"), r);
                 }
                 let waker = self.waker.clone();
                 self.sessions[index].relogin(relogin.user, relogin.password, &self.net, waker);
@@ -251,7 +248,7 @@ impl PlaytermApp {
                     self.quit_confirmed = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close)
                 }
-                Err(e) => self.status = Some(tr!("{} 를 시작할 수 없습니다: {e}", "Cannot start {}: {e}", exe.display())),
+                Err(e) => self.status = Some(tr!("app.ui.cannot_start", arg0 = exe.display(), e = e)),
             },
         }
     }
@@ -377,7 +374,7 @@ impl PlaytermApp {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(text).strong().color(theme::broadcast_color(ui.visuals()))).on_hover_text(tip);
                             if ui
-                                .add(icon::button(icon::TURN_OFF, t("끄기", "Turn off")).small())
+                                .add(icon::button(icon::TURN_OFF, t!("app.ui.turn_off")).small())
                                 .on_hover_text(crate::keys::hint(Shortcut::Broadcast))
                                 .clicked()
                             {
@@ -400,7 +397,7 @@ impl PlaytermApp {
                         ui.set_max_width((area.width() - 48.0).clamp(200.0, 520.0));
                         ui.horizontal_top(|ui| {
                             ui.add(egui::Label::new(RichText::new(&status).color(error)).wrap());
-                            dismiss = ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("닫기", "Dismiss")).clicked();
+                            dismiss = ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t!("app.ui.dismiss")).clicked();
                         });
                     });
                 });
@@ -438,10 +435,7 @@ impl PlaytermApp {
             Some(browser) => browser.upload_paths(paths),
             None => {
                 let keys = crate::keys::hint(Shortcut::SftpPanel);
-                self.status = Some(tr!(
-                    "파일을 올리려면 먼저 SFTP 탐색기({keys})를 여세요 (SFTP 가 없는 장비는 서버에서 rz 를 실행하세요)",
-                    "Open the SFTP explorer ({keys}) first to upload files (on devices without SFTP, run rz on the server)"
-                ))
+                self.status = Some(tr!("app.ui.open_the_sftp_explorer_first_to_upload_files", keys = keys))
             }
         }
     }
@@ -451,13 +445,11 @@ impl PlaytermApp {
         egui::Panel::right("sftp-strip").resizable(false).exact_size(SFTP_STRIP).show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(4.0);
-                ui.add(icon::icon_button(icon::SFTP).frame(false)).on_hover_text(t(
-                    "SFTP 탐색기: SSH 로 연결된 탭에서 원격 파일을 보고 올리거나 받을 수 있습니다.",
-                    "SFTP explorer: shows, uploads and downloads remote files in a tab connected over SSH.",
-                ));
+                ui.add(icon::icon_button(icon::SFTP).frame(false))
+                    .on_hover_text(t!("app.ui.sftp_explorer_shows_uploads_and_downloads_remote_files"));
                 if ui
                     .add(icon::icon_button(icon::CLOSE).small())
-                    .on_hover_text(format!("{} ({})", t("닫기", "Close"), crate::keys::hint(Shortcut::SftpPanel)))
+                    .on_hover_text(format!("{} ({})", t!("common.close"), crate::keys::hint(Shortcut::SftpPanel)))
                     .clicked()
                 {
                     self.sftp_panel = false;
@@ -470,11 +462,11 @@ impl PlaytermApp {
     pub(super) fn sftp_panel_ui(&mut self, ui: &mut egui::Ui) {
         let mut close = false;
         ui.horizontal(|ui| {
-            ui.strong(t("SFTP 탐색기", "SFTP explorer"));
+            ui.strong(t!("common.sftp_explorer"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 close = ui
                     .add(icon::icon_button(icon::CLOSE).small())
-                    .on_hover_text(format!("{} ({})", t("닫기", "Close"), crate::keys::hint(Shortcut::SftpPanel)))
+                    .on_hover_text(format!("{} ({})", t!("common.close"), crate::keys::hint(Shortcut::SftpPanel)))
                     .clicked();
             });
         });
@@ -485,24 +477,21 @@ impl PlaytermApp {
         ui.weak(session.tab_title());
         ui.separator();
         if session.sftp.is_none() && !session.can_sftp() {
-            ui.weak(t(
-                "SSH 로 연결된 탭에서 원격 파일을 보고 올리거나 받을 수 있습니다.",
-                "Shows, uploads and downloads remote files in a tab connected over SSH.",
-            ));
+            ui.weak(t!("app.ui.shows_uploads_and_downloads_remote_files_in_a"));
             return;
         }
         if let Some(browser) = &mut session.sftp {
             browser.panel(ui);
         } else if let Some(err) = session.sftp_error() {
-            ui.colored_label(ui.visuals().error_fg_color, tr!("SFTP 열기 실패: {err}", "Could not open SFTP: {err}"));
-            if ui.add(icon::button(icon::RETRY, t("다시 시도", "Try again"))).clicked() {
+            ui.colored_label(ui.visuals().error_fg_color, tr!("app.ui.could_not_open_sftp", err = err));
+            if ui.add(icon::button(icon::RETRY, t!("common.try_again"))).clicked() {
                 session.retry_sftp();
             }
         } else {
             session.ensure_sftp();
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.weak(t("SFTP 여는 중…", "Opening SFTP…"));
+                ui.weak(t!("app.ui.opening_sftp"));
             });
         }
     }

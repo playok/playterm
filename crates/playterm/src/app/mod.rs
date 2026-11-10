@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use eframe::egui::{self, Color32, RichText};
-use playterm_config::{AppSettings, Language, PreventSleep, ProfileStore, SessionProfile, TemplateLayout, UiTheme, Vault};
+use playterm_config::{AppSettings, PreventSleep, ProfileStore, SessionProfile, TemplateLayout, UiTheme, Vault};
 use playterm_i18n::{t, tr};
 use playterm_net::{ConnectParams, NetRuntime, Password, Protocol, Waker};
 use playterm_term::{LogMode, Palette, Theme};
@@ -256,7 +256,7 @@ pub struct PlaytermApp {
 
 impl PlaytermApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Vec<SessionProfile>) -> anyhow::Result<Self> {
-        let config_dir = config_dir().context(t("사용자 설정 폴더를 찾을 수 없습니다", "Cannot find the user settings folder"))?;
+        let config_dir = config_dir().context(t!("app.mod.cannot_find_the_user_settings_folder"))?;
         Self::new_in(cc, initial, &config_dir)
     }
 
@@ -267,16 +267,12 @@ impl PlaytermApp {
 
         // Settings first: they choose the language of the messages below.
         let settings_path = config_dir.join("settings.toml");
-        let (settings, settings_backup) = AppSettings::load_preserving(&settings_path)
-            .context(t("설정 파일을 안전하게 읽거나 보존할 수 없습니다", "Cannot safely read or preserve the settings file"))?;
+        let (settings, settings_backup) =
+            AppSettings::load_preserving(&settings_path).context(t!("app.mod.cannot_safely_read_or_preserve_the_settings_file"))?;
         apply_ui(&cc.egui_ctx, &settings);
         let (store, mut status) = load_profiles(&config_dir.join("sessions.toml"));
         if let Some(backup) = settings_backup {
-            status = Some(tr!(
-                "손상된 설정 파일을 {}에 보존하고 기본값을 씁니다",
-                "Preserved malformed settings at {} and using defaults",
-                backup.display()
-            ));
+            status = Some(tr!("app.mod.preserved_malformed_settings_at_and_using_defaults", arg0 = backup.display()));
         }
         if let Err(e) = fonts::install(&cc.egui_ctx, &settings.font) {
             status = Some(e);
@@ -284,7 +280,7 @@ impl PlaytermApp {
 
         let ctx = cc.egui_ctx.clone();
         let mut app = Self {
-            net: NetRuntime::new().context(t("네트워크 런타임 시작 실패", "Could not start the network runtime"))?,
+            net: NetRuntime::new().context(t!("app.mod.could_not_start_the_network_runtime"))?,
             waker: Arc::new(move || ctx.request_repaint()),
             known_hosts: config_dir.join("known_hosts"),
             vault: Vault::new(config_dir.join("vault.toml")),
@@ -366,18 +362,14 @@ fn load_profiles(path: &Path) -> (ProfileStore, Option<String>) {
     match ProfileStore::recover_invalid(path) {
         Ok((store, None)) => (store, None),
         Ok((store, Some(backup))) => {
-            let msg = tr!(
-                "세션 파일을 읽을 수 없어 {} 로 옮겼습니다: {err}",
-                "Cannot read the sessions file, moved it to {}: {err}",
-                backup.display()
-            );
+            let msg = tr!("app.mod.cannot_read_the_sessions_file_moved_it_to", arg0 = backup.display(), err = err);
             (store, Some(msg))
         }
         Err(recovery_err) => {
             // Could not preserve it: keep working in memory but write elsewhere.
             let mut fallback = path.as_os_str().to_owned();
             fallback.push(".recovered");
-            let msg = tr!("세션 파일을 읽을 수 없습니다: {err}", "Cannot read the sessions file: {err}");
+            let msg = tr!("app.mod.cannot_read_the_sessions_file", err = err);
             (ProfileStore::empty(PathBuf::from(fallback)), Some(format!("{msg}: {recovery_err}")))
         }
     }

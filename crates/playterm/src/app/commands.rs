@@ -107,10 +107,10 @@ impl PlaytermApp {
                 let Some(session) = self.sessions.get_mut(i) else { return };
                 let dir = logging::default_log_dir();
                 let _ = std::fs::create_dir_all(&dir);
-                if let Some(path) = crate::picker::Picker::new(crate::picker::Kind::Save, t("로그 파일", "Log file"))
+                if let Some(path) = crate::picker::Picker::new(crate::picker::Kind::Save, t!("app.commands.log_file"))
                     .directory(&dir)
                     .file_name(logging::file_name(&session.tab_title()))
-                    .filter(t("로그", "Logs"), &["log", "txt"])
+                    .filter(t!("app.commands.logs"), &["log", "txt"])
                     .pick_one()
                 {
                     session.start_log(&path, mode);
@@ -149,7 +149,7 @@ impl PlaytermApp {
             Command::MoveToMain(i) => self.move_tab(ctx, i, MAIN_WINDOW),
             Command::NewWindow => {
                 let r = open_new_window();
-                self.report(t("새 창을 열 수 없습니다", "Cannot open a new window"), r);
+                self.report(t!("app.commands.cannot_open_a_new_window"), r);
             }
             Command::Duplicate(i) => match self.sessions.get(i).map(Session::spec) {
                 // Always a new tab, even when the current one is an unused prompt.

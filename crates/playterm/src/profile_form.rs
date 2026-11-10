@@ -24,20 +24,18 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
             "telnet" => (Protocol::Telnet, rest),
             "serial" | "com" => (Protocol::Serial, rest),
             "rdp" => (Protocol::Rdp, rest),
-            other => return Err(tr!("지원하지 않는 프로토콜: {other}", "Unsupported protocol: {other}")),
+            other => return Err(tr!("profile_form.unsupported_protocol", other = other)),
         },
         None => (Protocol::Ssh, url),
     };
     let rest = rest.trim_end_matches('/');
     if protocol == Protocol::Serial {
         let (port, baud) = match rest.split_once(':') {
-            Some((port, baud)) => {
-                (port, baud.parse().ok().filter(|&b: &u32| b > 0).ok_or(tr!("잘못된 속도: {baud}", "Invalid speed: {baud}"))?)
-            }
+            Some((port, baud)) => (port, baud.parse().ok().filter(|&b: &u32| b > 0).ok_or(tr!("profile_form.invalid_speed", baud = baud))?),
             None => (rest, SerialSettings::default().baud),
         };
         if port.is_empty() {
-            return Err(tr!("시리얼 포트가 없습니다: {url}", "Missing serial port: {url}"));
+            return Err(tr!("profile_form.missing_serial_port", url = url));
         }
         let serial = SerialSettings { port: port.to_owned(), baud, ..Default::default() };
         return Ok(SessionProfile {
@@ -54,7 +52,7 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
     };
 
     let (host, port) = if let Some(after) = hostport.strip_prefix('[') {
-        let (host, tail) = after.split_once(']').ok_or_else(|| tr!("잘못된 주소: {url}", "Invalid address: {url}"))?;
+        let (host, tail) = after.split_once(']').ok_or_else(|| tr!("profile_form.invalid_address", url = url))?;
         (host, tail.strip_prefix(':'))
     } else {
         match hostport.split_once(':') {
@@ -63,14 +61,14 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
         }
     };
     if host.is_empty() {
-        return Err(tr!("호스트가 없습니다: {url}", "Missing host: {url}"));
+        return Err(tr!("profile_form.missing_host", url = url));
     }
     let port = match port {
-        Some(p) => p.parse().ok().filter(|&p: &u16| p > 0).ok_or_else(|| tr!("잘못된 포트: {p}", "Invalid port: {p}"))?,
+        Some(p) => p.parse().ok().filter(|&p: &u16| p > 0).ok_or_else(|| tr!("profile_form.invalid_port", p = p))?,
         None => protocol.default_port(),
     };
     if protocol == Protocol::Ssh && username.is_empty() {
-        return Err(tr!("SSH 주소에는 사용자 이름이 필요합니다: {url}", "An SSH address needs a user name: {url}"));
+        return Err(tr!("profile_form.an_ssh_address_needs_a_user_name", url = url));
     }
 
     Ok(SessionProfile { protocol, host: host.to_owned(), port, username, ..SessionProfile::new().map_err(|e| e.to_string())? })
@@ -93,10 +91,10 @@ fn pick_key_file(current: &str) -> Option<PathBuf> {
         "" => expand_home("~/.ssh"),
         c => expand_home(c).parent().map(PathBuf::from).unwrap_or_default(),
     };
-    crate::picker::Picker::new(crate::picker::Kind::File, t("SSH 개인 키 선택", "Choose an SSH private key"))
+    crate::picker::Picker::new(crate::picker::Kind::File, t!("profile_form.choose_an_ssh_private_key"))
         .directory(start)
-        .filter(t("모든 파일", "All files"), &["*"])
-        .filter(t("PuTTY 키 (*.ppk)", "PuTTY keys (*.ppk)"), &["ppk"])
+        .filter(t!("profile_form.all_files"), &["*"])
+        .filter(t!("profile_form.putty_keys_ppk"), &["ppk"])
         .pick_one()
 }
 
@@ -111,7 +109,7 @@ fn serial_rows(
     let enter = |ui: &egui::Ui, r: &egui::Response| r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     let mut submit = false;
 
-    ui.label(t("시리얼 포트", "Serial port"));
+    ui.label(t!("profile_form.serial_port"));
     ui.horizontal(|ui| {
         let port = ui.add(egui::TextEdit::singleline(&mut s.port).hint_text("COM3").desired_width(90.0));
         if !*focus_requested {
@@ -119,9 +117,9 @@ fn serial_rows(
             *focus_requested = true;
         }
         submit |= enter(ui, &port);
-        egui::ComboBox::from_id_salt("serial-ports").selected_text(t("목록", "List")).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("serial-ports").selected_text(t!("profile_form.list")).show_ui(ui, |ui| {
             if ports.is_empty() {
-                ui.weak(t("COM 포트가 없습니다", "No COM ports"));
+                ui.weak(t!("profile_form.no_com_ports"));
             }
             for entry in ports.iter() {
                 let label =
@@ -131,17 +129,17 @@ fn serial_rows(
                 }
             }
         });
-        if ui.add(icon::button(icon::REFRESH, t("새로고침", "Refresh"))).clicked() {
+        if ui.add(icon::button(icon::REFRESH, t!("common.refresh"))).clicked() {
             *ports = list_ports();
         }
     });
     ui.end_row();
 
-    ui.label(t("속도 (baud)", "Speed (baud)"));
+    ui.label(t!("profile_form.speed_baud"));
     ui.horizontal(|ui| {
         let r = ui.add(egui::TextEdit::singleline(baud).desired_width(90.0));
         submit |= enter(ui, &r);
-        ui.menu_button(t("선택", "Choose"), |ui| {
+        ui.menu_button(t!("profile_form.choose"), |ui| {
             for rate in SerialSettings::COMMON_BAUD_RATES {
                 if ui.button(rate.to_string()).clicked() {
                     *baud = rate.to_string();
@@ -152,7 +150,7 @@ fn serial_rows(
     });
     ui.end_row();
 
-    ui.label(t("데이터 비트", "Data bits"));
+    ui.label(t!("profile_form.data_bits"));
     egui::ComboBox::from_id_salt("data-bits").selected_text(s.data_bits.to_string()).show_ui(ui, |ui| {
         for bits in [8u8, 7, 6, 5] {
             ui.selectable_value(&mut s.data_bits, bits, bits.to_string());
@@ -160,7 +158,7 @@ fn serial_rows(
     });
     ui.end_row();
 
-    ui.label(t("패리티", "Parity"));
+    ui.label(t!("profile_form.parity"));
     egui::ComboBox::from_id_salt("parity").selected_text(s.parity.to_string()).show_ui(ui, |ui| {
         for parity in SerialParity::ALL {
             ui.selectable_value(&mut s.parity, parity, parity.to_string());
@@ -168,7 +166,7 @@ fn serial_rows(
     });
     ui.end_row();
 
-    ui.label(t("정지 비트", "Stop bits"));
+    ui.label(t!("profile_form.stop_bits"));
     egui::ComboBox::from_id_salt("stop-bits").selected_text(s.stop_bits.to_string()).show_ui(ui, |ui| {
         for bits in [1u8, 2] {
             ui.selectable_value(&mut s.stop_bits, bits, bits.to_string());
@@ -176,7 +174,7 @@ fn serial_rows(
     });
     ui.end_row();
 
-    ui.label(t("흐름 제어", "Flow control"));
+    ui.label(t!("profile_form.flow_control"));
     egui::ComboBox::from_id_salt("flow").selected_text(s.flow.to_string()).show_ui(ui, |ui| {
         for flow in SerialFlow::ALL {
             ui.selectable_value(&mut s.flow, flow, flow.to_string());
@@ -187,19 +185,19 @@ fn serial_rows(
 }
 
 fn log_ui(ui: &mut egui::Ui, log: &mut playterm_config::LogSettings) {
-    egui::CollapsingHeader::new(t("세션 로그", "Session log")).id_salt("log-settings").default_open(log.auto).show(ui, |ui| {
-        ui.checkbox(&mut log.auto, t("접속하면 자동으로 로그 기록", "Start logging automatically on connect"));
+    egui::CollapsingHeader::new(t!("profile_form.session_log")).id_salt("log-settings").default_open(log.auto).show(ui, |ui| {
+        ui.checkbox(&mut log.auto, t!("profile_form.start_logging_automatically_on_connect"));
         ui.horizontal(|ui| {
-            ui.radio_value(&mut log.raw, false, t("텍스트 (제어 문자 제거)", "Text (control characters removed)"));
-            ui.radio_value(&mut log.raw, true, t("원본 (받은 바이트 그대로)", "Raw (bytes as received)"));
+            ui.radio_value(&mut log.raw, false, t!("profile_form.text_control_characters_removed"));
+            ui.radio_value(&mut log.raw, true, t!("profile_form.raw_bytes_as_received"));
         });
-        ui.add_enabled(!log.raw, egui::Checkbox::new(&mut log.timestamps, t("줄마다 시각 표시", "Timestamp each line")));
+        ui.add_enabled(!log.raw, egui::Checkbox::new(&mut log.timestamps, t!("profile_form.timestamp_each_line")));
         ui.horizontal(|ui| {
-            ui.label(t("폴더", "Folder"));
+            ui.label(t!("common.folder"));
             let default_dir = crate::logging::default_log_dir().display().to_string();
             ui.add(egui::TextEdit::singleline(&mut log.dir).hint_text(default_dir).desired_width(240.0));
-            if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
-                && let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t("로그 폴더", "Log folder")).pick_one()
+            if ui.add(icon::button(icon::BROWSE, t!("profile_form.browse"))).clicked()
+                && let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t!("profile_form.log_folder")).pick_one()
             {
                 log.dir = dir.display().to_string();
             }
@@ -209,7 +207,7 @@ fn log_ui(ui: &mut egui::Ui, log: &mut playterm_config::LogSettings) {
 
 fn size_label(size: (u16, u16)) -> String {
     if size.0 == 0 || size.1 == 0 {
-        t("탭 크기에 맞춤 (창 크기를 바꾸면 따라감)", "Fit the tab (follows the window size)").into()
+        t!("profile_form.fit_the_tab_follows_the_window_size").into()
     } else {
         format!("{} × {}", size.0, size.1)
     }
@@ -217,7 +215,7 @@ fn size_label(size: (u16, u16)) -> String {
 
 /// Desktop size and clipboard of an RDP site.
 fn rdp_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
-    ui.label(t("화면 크기", "Screen size"));
+    ui.label(t!("profile_form.screen_size"));
     let current = (rdp.width, rdp.height);
     egui::ComboBox::from_id_salt("rdp-size").width(260.0).selected_text(size_label(current)).show_ui(ui, |ui| {
         for size in playterm_net::RdpSettings::SIZES {
@@ -229,11 +227,11 @@ fn rdp_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
     ui.end_row();
 
     ui.label("");
-    ui.checkbox(&mut rdp.clipboard, t("클립보드 공유 (복사·붙여넣기)", "Share the clipboard (copy and paste)"));
+    ui.checkbox(&mut rdp.clipboard, t!("profile_form.share_the_clipboard_copy_and_paste"));
     ui.end_row();
 
     ui.label("");
-    ui.checkbox(&mut rdp.sound, t("원격 컴퓨터의 소리를 이 PC 에서 재생", "Play the remote computer's sound on this PC"));
+    ui.checkbox(&mut rdp.sound, t!("profile_form.play_the_remote_computer_s_sound_on_this"));
     ui.end_row();
 
     // The device redirection backend is Windows-only.
@@ -246,38 +244,30 @@ fn rdp_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
 
 /// The RD Gateway to connect through, and its own user when it does not take the site's.
 fn rdp_gateway_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
-    ui.label(t("RD 게이트웨이", "RD Gateway"));
-    ui.add(
-        egui::TextEdit::singleline(&mut rdp.gateway).hint_text(t("사용 안 함 (직접 연결)", "None (connect directly)")).desired_width(220.0),
-    )
-    .on_hover_text(t(
-        "gateway.example.com 또는 gateway.example.com:8443 (HTTPS, 기본 443)",
-        "gateway.example.com or gateway.example.com:8443 (HTTPS, 443 by default)",
-    ));
+    ui.label(t!("profile_form.rd_gateway"));
+    ui.add(egui::TextEdit::singleline(&mut rdp.gateway).hint_text(t!("profile_form.none_connect_directly")).desired_width(220.0))
+        .on_hover_text(t!("profile_form.gateway_example_com_or_gateway_example_com_8443"));
     ui.end_row();
 
-    ui.label(t("게이트웨이 사용자", "Gateway user"));
+    ui.label(t!("profile_form.gateway_user"));
     ui.add_enabled(
         rdp.gateway().is_some(),
         egui::TextEdit::singleline(&mut rdp.gateway_user)
-            .hint_text(t("사이트와 같은 사용자·비밀번호", "Same user and password as the site"))
+            .hint_text(t!("profile_form.same_user_and_password_as_the_site"))
             .desired_width(220.0),
     )
-    .on_hover_text(t(
-        "다른 계정으로 게이트웨이에 로그인할 때만 적습니다. 비밀번호는 연결할 때 묻습니다",
-        "Only for logging on to the gateway with another account; its password is asked when connecting",
-    ));
+    .on_hover_text(t!("profile_form.only_for_logging_on_to_the_gateway_with"));
     ui.end_row();
 }
 
 /// The folder shown as a drive in the remote desktop, and the printer.
 fn rdp_device_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
-    ui.label(t("공유 폴더", "Shared folder"));
+    ui.label(t!("profile_form.shared_folder"));
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut rdp.drive_folder).hint_text(t("공유 안 함", "Not shared")).desired_width(220.0))
-            .on_hover_text(t("원격 데스크톱의 \"내 PC\" 에 드라이브로 보입니다", "Shown as a drive in \"This PC\" of the remote desktop"));
-        if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
-            && let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t("공유 폴더", "Shared folder")).pick_one()
+        ui.add(egui::TextEdit::singleline(&mut rdp.drive_folder).hint_text(t!("profile_form.not_shared")).desired_width(220.0))
+            .on_hover_text(t!("profile_form.shown_as_a_drive_in_this_pc_of"));
+        if ui.add(icon::button(icon::BROWSE, t!("profile_form.browse"))).clicked()
+            && let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t!("profile_form.shared_folder")).pick_one()
         {
             rdp.drive_folder = dir.display().to_string();
         }
@@ -287,15 +277,13 @@ fn rdp_device_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
     ui.label("");
     ui.add_enabled(
         rdp.shared_folder().is_some(),
-        egui::Checkbox::new(&mut rdp.drive_read_only, t("읽기 전용 (원격에서 바꿀 수 없음)", "Read-only (cannot be changed remotely)")),
+        egui::Checkbox::new(&mut rdp.drive_read_only, t!("profile_form.read_only_cannot_be_changed_remotely")),
     );
     ui.end_row();
 
     ui.label("");
-    ui.checkbox(&mut rdp.printer, t("이 PC 의 기본 프린터로 인쇄", "Print on this PC's default printer")).on_hover_text(t(
-        "원격 컴퓨터에 같은 이름의 프린터 드라이버가 있어야 프린터가 보입니다",
-        "The printer appears only if the remote computer has a driver of the same name",
-    ));
+    ui.checkbox(&mut rdp.printer, t!("profile_form.print_on_this_pc_s_default_printer"))
+        .on_hover_text(t!("profile_form.the_printer_appears_only_if_the_remote_computer"));
     ui.end_row();
 }
 
@@ -303,7 +291,7 @@ fn rdp_device_rows(ui: &mut egui::Ui, rdp: &mut playterm_net::RdpSettings) {
 fn tab_color_row(ui: &mut egui::Ui, color: &mut Option<TabColor>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        let none = ui.add(egui::Button::selectable(color.is_none(), t("없음", "None")));
+        let none = ui.add(egui::Button::selectable(color.is_none(), t!("common.none")));
         if none.clicked() {
             *color = None;
         }
@@ -326,13 +314,13 @@ fn tab_color_row(ui: &mut egui::Ui, color: &mut Option<TabColor>) {
 
 fn keepalive_ui(ui: &mut egui::Ui, k: &mut KeepAlive, protocol: Protocol) {
     let mode_name = |m: KeepAliveMode| match m {
-        KeepAliveMode::Off => t("끔", "Off"),
-        KeepAliveMode::Protocol => t("프로토콜 신호", "Protocol keep-alive"),
-        KeepAliveMode::Text => t("문자열 입력", "Type text"),
+        KeepAliveMode::Off => t!("common.off"),
+        KeepAliveMode::Protocol => t!("profile_form.protocol_keep_alive"),
+        KeepAliveMode::Text => t!("profile_form.type_text"),
     };
     let title = match k.mode {
-        KeepAliveMode::Off => t("접속 유지: 끔", "Keep-alive: off").to_owned(),
-        m => tr!("접속 유지: {} · {}초", "Keep-alive: {} · {} s", mode_name(m), k.interval),
+        KeepAliveMode::Off => t!("profile_form.keep_alive_off").to_owned(),
+        m => tr!("profile_form.keep_alive_s", arg0 = mode_name(m), arg1 = k.interval),
     };
     egui::CollapsingHeader::new(title).id_salt("keepalive").show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -341,32 +329,26 @@ fn keepalive_ui(ui: &mut egui::Ui, k: &mut KeepAlive, protocol: Protocol) {
             }
         });
         ui.weak(match k.mode {
-            KeepAliveMode::Off => t("아무것도 보내지 않습니다.", "Nothing is sent."),
-            KeepAliveMode::Protocol => t(
-                "SSH keepalive / Telnet NOP 를 보냅니다. 방화벽·공유기·서버의 무통신 끊김을 막고, 끊긴 SSH 연결을 알아챕니다.\n장비의 입력 대기 시간 제한(exec-timeout 등)에는 '문자열 입력' 을 쓰세요.",
-                "Sends SSH keepalives / Telnet NOP. Stops firewalls, routers and servers from dropping a quiet connection, and notices dead SSH connections.\nFor device input timeouts (exec-timeout etc.) use 'Type text'.",
-            ),
-            KeepAliveMode::Text => t(
-                "아래 문자열을 입력한 것처럼 보내 장비·셸의 자동 로그아웃(exec-timeout, TMOUT)을 막습니다.\n\\r Enter, \\b 백스페이스, \\e Esc, \\xHH 바이트. 기본값 \\x20\\b (스페이스+백스페이스)는 치던 명령을 건드리지 않습니다.",
-                "Types the text below to stop devices and shells from logging you out (exec-timeout, TMOUT).\n\\r Enter, \\b backspace, \\e Esc, \\xHH a byte. The default \\x20\\b (space + backspace) leaves a half-typed command alone.",
-            ),
+            KeepAliveMode::Off => t!("profile_form.nothing_is_sent"),
+            KeepAliveMode::Protocol => t!("profile_form.sends_ssh_keepalives_telnet_nop_stops_firewalls_routers"),
+            KeepAliveMode::Text => t!("profile_form.types_the_text_below_to_stop_devices_and"),
         });
         ui.add_enabled_ui(k.mode != KeepAliveMode::Off, |ui| {
             ui.horizontal(|ui| {
-                ui.label(t("보내는 간격", "Interval"));
+                ui.label(t!("profile_form.interval"));
                 ui.add(
                     egui::DragValue::new(&mut k.interval)
                         .range(KeepAlive::MIN_INTERVAL..=KeepAlive::MAX_INTERVAL)
                         .speed(1)
-                        .suffix(t(" 초", " s")),
+                        .suffix(t!("common.s")),
                 );
-                ui.weak(t("(이 시간 동안 보낸 것이 없을 때)", "(after this long with nothing sent)"));
+                ui.weak(t!("profile_form.after_this_long_with_nothing_sent"));
             });
             if k.mode == KeepAliveMode::Text {
                 ui.horizontal(|ui| {
-                    ui.label(t("문자열", "Text"));
+                    ui.label(t!("profile_form.text"));
                     ui.add(egui::TextEdit::singleline(&mut k.text).hint_text(KeepAlive::DEFAULT_TEXT).desired_width(160.0));
-                    if ui.add(icon::button(icon::RESET, t("기본값", "Default")).small()).clicked() {
+                    if ui.add(icon::button(icon::RESET, t!("profile_form.default")).small()).clicked() {
                         k.text = KeepAlive::DEFAULT_TEXT.into();
                     }
                 });
@@ -375,10 +357,7 @@ fn keepalive_ui(ui: &mut egui::Ui, k: &mut KeepAlive, protocol: Protocol) {
                 }
             }
             if protocol == Protocol::Serial && k.mode == KeepAliveMode::Protocol {
-                ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    t("시리얼에는 프로토콜 신호가 없습니다. '문자열 입력' 을 쓰세요", "Serial lines have no protocol keep-alive; use 'Type text'"),
-                );
+                ui.colored_label(ui.visuals().warn_fg_color, t!("profile_form.serial_lines_have_no_protocol_keep_alive_use"));
             }
         });
     });
@@ -388,9 +367,9 @@ fn validate_keepalive(k: &KeepAlive) -> Result<KeepAlive, String> {
     let mut k = k.clone();
     k.interval = k.interval.clamp(KeepAlive::MIN_INTERVAL, KeepAlive::MAX_INTERVAL);
     if k.mode == KeepAliveMode::Text {
-        let bytes = decode_escapes(&k.text).map_err(|e| tr!("접속 유지 문자열: {e}", "Keep-alive text: {e}"))?;
+        let bytes = decode_escapes(&k.text).map_err(|e| tr!("profile_form.keep_alive_text", e = e))?;
         if bytes.is_empty() {
-            return Err(t("접속 유지로 보낼 문자열을 입력하세요", "Enter the keep-alive text to send").into());
+            return Err(t!("profile_form.enter_the_keep_alive_text_to_send").into());
         }
     }
     Ok(k)
@@ -398,15 +377,15 @@ fn validate_keepalive(k: &KeepAlive) -> Result<KeepAlive, String> {
 
 /// The macro a site runs once connected (and logged in automatically, if it does).
 fn after_connect_row(ui: &mut egui::Ui, p: &mut SessionProfile, macros: &[String]) {
-    ui.label(t("연결 후 매크로", "Macro after connecting"));
-    let none = t("없음", "None");
+    ui.label(t!("profile_form.macro_after_connecting"));
+    let none = t!("common.none");
     let current = p.after_connect_macro.clone();
     let shown = if current.is_empty() {
         none.to_owned()
     } else if macros.contains(&current) {
         current.clone()
     } else {
-        tr!("{current} (없는 매크로)", "{current} (no such macro)")
+        tr!("profile_form.no_such_macro", current = current)
     };
     egui::ComboBox::from_id_salt("after-connect-macro")
         .selected_text(shown)
@@ -417,10 +396,7 @@ fn after_connect_row(ui: &mut egui::Ui, p: &mut SessionProfile, macros: &[String
             }
         })
         .response
-        .on_hover_text(t(
-            "연결되고 자동 로그인이 끝나면 이 매크로를 실행합니다 (도구 → 매크로 → 매크로 관리 에서 만듭니다). 매크로의 {user}, {password} 는 이 사이트의 사용자와 비밀번호입니다.",
-            "Runs this macro once connected and the automatic login is done (create macros in Tools → Macros → Manage macros). {user} and {password} in it are this site's user and password.",
-        ));
+        .on_hover_text(t!("profile_form.runs_this_macro_once_connected_and_the_automatic"));
     ui.end_row();
 }
 
@@ -433,15 +409,15 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
     let rdp = p.protocol == Protocol::Rdp;
     let mut submit = false;
     if ssh {
-        ui.label(t("키 파일", "Key file"));
+        ui.label(t!("profile_form.key_file"));
         ui.horizontal(|ui| {
             let key = ui.add(
                 egui::TextEdit::singleline(&mut p.identity_file)
-                    .hint_text(t("없음 (에이전트·기본 키 사용)", "None (agent and default keys)"))
+                    .hint_text(t!("profile_form.none_agent_and_default_keys"))
                     .desired_width(220.0),
             );
             submit |= enter(ui, &key);
-            if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
+            if ui.add(icon::button(icon::BROWSE, t!("profile_form.browse"))).clicked()
                 && let Some(path) = pick_key_file(&p.identity_file)
             {
                 p.identity_file = path.display().to_string();
@@ -449,100 +425,79 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
         });
         ui.end_row();
 
-        ui.label(t("사용자 인증서", "User certificate"));
+        ui.label(t!("profile_form.user_certificate"));
         ui.horizontal(|ui| {
             let cert = ui.add(
                 egui::TextEdit::singleline(&mut p.certificate_file)
-                    .hint_text(t("자동: 키 경로 + -cert.pub", "Auto: key path + -cert.pub"))
+                    .hint_text(t!("profile_form.auto_key_path_cert_pub"))
                     .desired_width(220.0),
             );
             submit |= enter(ui, &cert);
-            if ui.add(icon::button(icon::BROWSE, t("찾아보기", "Browse…"))).clicked()
-                && let Some(path) =
-                    crate::picker::Picker::new(crate::picker::Kind::File, t("SSH 사용자 인증서 선택", "Choose an SSH user certificate"))
-                        .directory(expand_home("~/.ssh"))
-                        .filter("OpenSSH (*.pub)", &["pub"])
-                        .pick_one()
+            if ui.add(icon::button(icon::BROWSE, t!("profile_form.browse"))).clicked()
+                && let Some(path) = crate::picker::Picker::new(crate::picker::Kind::File, t!("profile_form.choose_an_ssh_user_certificate"))
+                    .directory(expand_home("~/.ssh"))
+                    .filter("OpenSSH (*.pub)", &["pub"])
+                    .pick_one()
             {
                 p.certificate_file = path.display().to_string();
             }
         })
         .response
-        .on_hover_text(t(
-            "일치하는 개인 키 또는 SSH 에이전트로 서명합니다. 서버가 사용자 인증서의 CA와 권한을 검증합니다.",
-            "Signed with the matching private key or SSH agent. The server validates the certificate CA and permissions.",
-        ));
+        .on_hover_text(t!("profile_form.signed_with_the_matching_private_key_or_ssh"));
         ui.end_row();
 
-        ui.label(t("점프 호스트", "Jump host"));
-        let jump = ui.add(
-            egui::TextEdit::singleline(&mut p.jump_host)
-                .hint_text(t("없음 · 사이트 이름 또는 user@host:port", "None · a site name or user@host:port"))
-                .desired_width(260.0),
-        )
-        .on_hover_text(t(
-            "이 서버를 거쳐 접속합니다 (OpenSSH 의 ProxyJump / -J). 저장된 사이트 이름을 쓰면 그 사이트의 키·저장된 비밀번호·점프 호스트를 씁니다.",
-            "Connects through this server (OpenSSH ProxyJump / -J). With a saved site's name, that site's key, saved password and jump host are used.",
-        ));
+        ui.label(t!("profile_form.jump_host"));
+        let jump = ui
+            .add(
+                egui::TextEdit::singleline(&mut p.jump_host)
+                    .hint_text(t!("profile_form.none_a_site_name_or_user_host_port"))
+                    .desired_width(260.0),
+            )
+            .on_hover_text(t!("profile_form.connects_through_this_server_openssh_proxyjump_j_with"));
         submit |= enter(ui, &jump);
         ui.end_row();
 
-        ui.label(t("X11 포워딩", "X11 forwarding"));
+        ui.label(t!("profile_form.x11_forwarding"));
         ui.horizontal(|ui| {
-            ui.checkbox(&mut p.x11_forwarding, "")
-                .on_hover_text(t(
-                    "서버의 X 프로그램(xterm, 설치 도구 등)을 이 PC 의 X 서버에 띄웁니다 (ssh -X). Windows: VcXsrv·Xming, macOS: XQuartz 를 먼저 실행하세요.",
-                    "Shows X programs of the server (xterm, installers…) on the X server of this PC (ssh -X). Start VcXsrv or Xming (Windows) or XQuartz (macOS) first.",
-                ));
-            let hint = tr!("DISPLAY (기본 {})", "DISPLAY (default {})", playterm_net::x11::default_display());
-            let display = ui.add_enabled(
-                p.x11_forwarding,
-                egui::TextEdit::singleline(&mut p.x11_display).hint_text(hint).desired_width(180.0),
-            );
+            ui.checkbox(&mut p.x11_forwarding, "").on_hover_text(t!("profile_form.shows_x_programs_of_the_server_xterm_installers"));
+            let hint = tr!("profile_form.display_default", arg0 = playterm_net::x11::default_display());
+            let display =
+                ui.add_enabled(p.x11_forwarding, egui::TextEdit::singleline(&mut p.x11_display).hint_text(hint).desired_width(180.0));
             submit |= enter(ui, &display);
-            ui.add_enabled(p.x11_forwarding, egui::Checkbox::new(&mut p.x11_trusted, t("신뢰 (-Y)", "Trusted (-Y)")))
-                .on_hover_text(t(
-                    "켜면 서버의 X 프로그램이 이 PC 화면 전체와 키 입력까지 접근할 수 있습니다. 믿는 서버에만 켜세요. 끄면(-X) 제한된(untrusted) 권한으로, 만들 수 없으면 X 연결을 막습니다 (xauth 와 SECURITY 확장을 지원하는 X 서버 필요).",
-                    "On, the server's X programs can reach the whole display of this PC, keyboard included: only for servers you trust. Off (-X), they get limited (untrusted) access, or none when it cannot be set up (needs xauth and an X server with the SECURITY extension).",
-                ));
+            ui.add_enabled(p.x11_forwarding, egui::Checkbox::new(&mut p.x11_trusted, t!("profile_form.trusted_y")))
+                .on_hover_text(t!("profile_form.on_the_server_s_x_programs_can_reach"));
         });
         ui.end_row();
 
         ui.label("");
-        ui.checkbox(&mut p.use_agent, tr!("SSH 에이전트 사용 ({})", "Use the SSH agent ({})", crate::platform::ssh_agents()))
-            .on_hover_text(t(
-                "로그인할 때 에이전트의 키와 인증서를 사용합니다. 에이전트 포워딩은 별도 옵션입니다.",
-                "Use agent keys and certificates to log in. Agent forwarding is a separate option.",
-            ));
+        ui.checkbox(&mut p.use_agent, tr!("profile_form.use_the_ssh_agent", arg0 = crate::platform::ssh_agents()))
+            .on_hover_text(t!("profile_form.use_agent_keys_and_certificates_to_log_in"));
         ui.end_row();
 
         ui.label("");
-        ui.checkbox(&mut p.agent_forwarding, t("SSH 에이전트 포워딩 (-A)", "SSH agent forwarding (-A)"));
+        ui.checkbox(&mut p.agent_forwarding, t!("profile_form.ssh_agent_forwarding_a"));
         ui.end_row();
         if p.agent_forwarding {
             ui.label("");
             ui.vertical(|ui| {
                 ui.set_max_width(400.0);
-                ui.add(egui::Label::new(egui::RichText::new(t(
-                    "원격 서버가 이 PC의 에이전트로 인증 서명을 요청할 수 있습니다. 신뢰하는 서버에만 켜세요. 점프 호스트에는 전달하지 않습니다.",
-                    "The remote server can request authentication signatures from this PC's agent. Enable only for trusted servers. Not forwarded to jump hosts."
-                )).color(egui::Color32::YELLOW)).wrap());
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(t!("profile_form.the_remote_server_can_request_authentication_signatures_from"))
+                            .color(egui::Color32::YELLOW),
+                    )
+                    .wrap(),
+                );
             });
             ui.end_row();
         }
 
         ui.label("");
-        ui.checkbox(&mut p.ssh_legacy_algorithms, t("이전 SSH 장비 호환", "Legacy SSH equipment compatibility"));
+        ui.checkbox(&mut p.ssh_legacy_algorithms, t!("profile_form.legacy_ssh_equipment_compatibility"));
         ui.end_row();
         if p.ssh_legacy_algorithms {
             ui.label("");
-            ui.colored_label(
-                egui::Color32::YELLOW,
-                t(
-                    "SHA-1 키 교환/MAC와 AES-CBC를 허용합니다. 필요한 구형 장비에만 사용하세요.",
-                    "Allows SHA-1 key exchange/MAC and AES-CBC. Enable only for older equipment that needs it.",
-                ),
-            );
+            ui.colored_label(egui::Color32::YELLOW, t!("profile_form.allows_sha_1_key_exchange_mac_and_aes"));
             ui.end_row();
         }
     }
@@ -550,7 +505,7 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
     if rdp {
         rdp_rows(ui, &mut p.rdp);
     } else {
-        ui.label(t("인코딩", "Encoding"));
+        ui.label(t!("profile_form.encoding")).on_hover_text(t!("profile_form.auto_detect_distinguishes_utf_8_and_cp949_select"));
         egui::ComboBox::from_id_salt("charset").selected_text(p.charset.to_string()).show_ui(ui, |ui| {
             for c in Charset::ALL {
                 ui.selectable_value(&mut p.charset, c, c.to_string());
@@ -558,7 +513,7 @@ fn advanced_rows(ui: &mut egui::Ui, p: &mut SessionProfile) -> bool {
         });
         ui.end_row();
 
-        ui.label(t("터미널 타입", "Terminal type"));
+        ui.label(t!("profile_form.terminal_type"));
         ui.text_edit_singleline(&mut p.term_type);
         ui.end_row();
     }
@@ -636,20 +591,20 @@ impl ForwardRow {
                 .parse::<u16>()
                 .ok()
                 .filter(|&p| p > 0)
-                .ok_or_else(|| tr!("포워딩 {n}: {what} 포트가 잘못되었습니다", "Port forwarding {n}: invalid {what} port"))
+                .ok_or_else(|| tr!("profile_form.port_forwarding_invalid_port", n = n, what = what))
         };
         let mut rule = ForwardRule {
             kind: self.kind,
             bind_host: self.bind_host.trim().to_owned(),
-            bind_port: port(&self.bind_port, t("수신", "listening"))?,
+            bind_port: port(&self.bind_port, t!("profile_form.listening"))?,
             ..Default::default()
         };
         if self.kind != ForwardKind::Dynamic {
             rule.dest_host = self.dest_host.trim().to_owned();
             if rule.dest_host.is_empty() {
-                return Err(tr!("포워딩 {n}: 대상 호스트를 입력하세요", "Port forwarding {n}: enter the destination host"));
+                return Err(tr!("profile_form.port_forwarding_enter_the_destination_host", n = n));
             }
-            rule.dest_port = port(&self.dest_port, t("대상", "destination"))?;
+            rule.dest_port = port(&self.dest_port, t!("profile_form.destination"))?;
         }
         Ok(rule)
     }
@@ -710,8 +665,8 @@ impl ProfileForm {
 
         egui::Grid::new("profile-form").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             if opts.meta {
-                ui.label(t("이름", "Name"));
-                let name = ui.add(egui::TextEdit::singleline(&mut p.name).hint_text(t("비우면 user@host", "user@host if empty")));
+                ui.label(t!("common.name"));
+                let name = ui.add(egui::TextEdit::singleline(&mut p.name).hint_text(t!("profile_form.user_host_if_empty")));
                 if !self.focus_requested {
                     name.request_focus();
                     self.focus_requested = true;
@@ -719,13 +674,13 @@ impl ProfileForm {
                 submit |= enter(ui, &name);
                 ui.end_row();
 
-                ui.label(t("폴더", "Folder"));
+                ui.label(t!("common.folder"));
                 ui.horizontal(|ui| {
-                    let folder = ui.add(egui::TextEdit::singleline(&mut p.folder).hint_text(t("없음", "None")).desired_width(150.0));
+                    let folder = ui.add(egui::TextEdit::singleline(&mut p.folder).hint_text(t!("common.none")).desired_width(150.0));
                     submit |= enter(ui, &folder);
                     let existing: Vec<&String> = opts.folders.iter().filter(|f| !f.is_empty()).collect();
                     if !existing.is_empty() {
-                        ui.menu_button(t("선택", "Choose"), |ui| {
+                        ui.menu_button(t!("profile_form.choose"), |ui| {
                             for f in existing {
                                 if ui.button(f).clicked() {
                                     p.folder = f.clone();
@@ -737,27 +692,24 @@ impl ProfileForm {
                 });
                 ui.end_row();
 
-                ui.label(t("탭 색상", "Tab color"));
+                ui.label(t!("common.tab_color"));
                 ui.horizontal(|ui| {
                     tab_color_row(ui, &mut p.tab_color);
                     // Named, so it reads as the label even when filled in (#151).
                     ui.add_space(8.0);
-                    ui.label(t("라벨", "Label"));
+                    ui.label(t!("profile_form.label"));
                     ui.add(
                         egui::TextEdit::singleline(&mut p.tab_label)
-                            .hint_text(t("라벨 (예: 운영)", "Label (e.g. PROD)"))
+                            .hint_text(t!("profile_form.label_e_g_prod"))
                             .char_limit(12)
                             .desired_width(110.0),
                     )
-                    .on_hover_text(t(
-                        "탭, 터미널 위 연결 줄, 창 제목에 함께 보입니다",
-                        "Shown with the tab, the connection line and the window title",
-                    ));
+                    .on_hover_text(t!("profile_form.shown_with_the_tab_the_connection_line_and"));
                 });
                 ui.end_row();
             }
 
-            ui.label(t("프로토콜", "Protocol"));
+            ui.label(t!("profile_form.protocol"));
             ui.horizontal(|ui| {
                 for proto in Protocol::ALL {
                     let old = p.protocol;
@@ -776,11 +728,8 @@ impl ProfileForm {
                 let ports = self.serial_ports.get_or_insert_with(list_ports);
                 submit |= serial_rows(ui, &mut p.serial, &mut self.baud, ports, &mut self.focus_requested);
             } else {
-                ui.label(t("호스트", "Host"));
-                let host = ui.add(
-                    egui::TextEdit::singleline(&mut p.host)
-                        .hint_text(t("example.com, IP 또는 user@host:port", "example.com, IP or user@host:port")),
-                );
+                ui.label(t!("profile_form.host"));
+                let host = ui.add(egui::TextEdit::singleline(&mut p.host).hint_text(t!("profile_form.example_com_ip_or_user_host_port")));
                 if host.changed() {
                     // user@host:port pasted or typed: fill in the user and port fields.
                     let address = split_address(&p.host);
@@ -801,7 +750,7 @@ impl ProfileForm {
                 submit |= enter(ui, &host);
                 ui.end_row();
 
-                ui.label(t("포트", "Port"));
+                ui.label(t!("profile_form.port"));
                 let port = ui.add(egui::TextEdit::singleline(&mut self.port).desired_width(80.0));
                 submit |= enter(ui, &port);
                 ui.end_row();
@@ -812,25 +761,25 @@ impl ProfileForm {
             let ssh = p.protocol == Protocol::Ssh;
             let rdp = p.protocol == Protocol::Rdp;
             if ssh || rdp || opts.meta {
-                ui.label(t("사용자", "User"));
+                ui.label(t!("common.user"));
                 let hint = if ssh {
                     ""
                 } else if rdp {
-                    t(r"사용자 또는 DOMAIN\사용자", r"user or DOMAIN\user")
+                    t!("profile_form.user_or_domain_user")
                 } else {
-                    t("자동 로그인의 {user}", "{user} in the automatic login")
+                    t!("profile_form.in_the_automatic_login")
                 };
                 let user = ui.add(egui::TextEdit::singleline(&mut p.username).hint_text(hint));
                 submit |= enter(ui, &user);
                 ui.end_row();
 
-                ui.label(t("비밀번호", "Password"));
+                ui.label(t!("common.password"));
                 let hint = if self.has_saved_password && p.save_password {
-                    t("저장된 비밀번호 유지 (바꾸려면 입력)", "Saved password kept (type to change)")
+                    t!("profile_form.saved_password_kept_type_to_change")
                 } else if ssh || rdp {
-                    t("비워두면 접속 시 물어봅니다", "Asked on connect if empty")
+                    t!("profile_form.asked_on_connect_if_empty")
                 } else {
-                    t("자동 로그인의 {password}", "{password} in the automatic login")
+                    t!("profile_form.in_the_automatic_login_2")
                 };
                 let pw = ui.add(egui::TextEdit::singleline(&mut *self.password).password(true).hint_text(hint));
                 crate::dialogs::secret_field(ui, &pw);
@@ -839,10 +788,7 @@ impl ProfileForm {
 
                 if opts.save_password {
                     ui.label("");
-                    ui.checkbox(
-                        &mut p.save_password,
-                        t("비밀번호 저장 (마스터 비밀번호로 암호화)", "Save password (encrypted with the master password)"),
-                    );
+                    ui.checkbox(&mut p.save_password, t!("profile_form.save_password_encrypted_with_the_master_password"));
                     ui.end_row();
                 }
             }
@@ -863,7 +809,7 @@ impl ProfileForm {
         } else {
             // Quick connect: what most connections leave as it is, folded away.
             ui.add_space(4.0);
-            egui::CollapsingHeader::new(t("고급 설정", "Advanced")).id_salt("quick-advanced").show(ui, |ui| {
+            egui::CollapsingHeader::new(t!("profile_form.advanced")).id_salt("quick-advanced").show(ui, |ui| {
                 egui::Grid::new("profile-form-advanced").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     submit |= advanced_rows(ui, &mut self.profile);
                 });
@@ -891,35 +837,29 @@ impl ProfileForm {
         let save_password = self.profile.save_password;
         let a = &mut self.profile.auto_login;
         let title = if a.enabled {
-            tr!("자동 로그인 ({}단계)", "Automatic login ({} steps)", a.steps.len())
+            tr!("profile_form.automatic_login_steps", arg0 = a.steps.len())
         } else {
-            t("자동 로그인", "Automatic login").to_owned()
+            t!("profile_form.automatic_login").to_owned()
         };
         egui::CollapsingHeader::new(title).id_salt("auto-login").default_open(a.enabled).show(ui, |ui| {
-            let label = t("접속하면 프롬프트에 맞춰 자동으로 입력", "Type at the prompts automatically on connect");
+            let label = t!("profile_form.type_at_the_prompts_automatically_on_connect");
             if ui.checkbox(&mut a.enabled, label).changed() && a.enabled && a.steps.is_empty() {
                 a.steps = AutoLogin::standard_steps();
             }
-            ui.colored_label(ui.visuals().warn_fg_color, t(
-                "보낼 내용은 sessions.toml에 평문으로 저장됩니다. 비밀번호는 직접 입력하지 말고 {password}를 사용하세요.",
-                "Send text is saved as plain text in sessions.toml. Use {password} instead of typing a password here.",
-            ));
+            ui.colored_label(ui.visuals().warn_fg_color, t!("profile_form.send_text_is_saved_as_plain_text_in"));
             ui.add_enabled_ui(a.enabled, |ui| {
-                ui.weak(t(
-                    "화면의 줄이 [기다릴 문자열] 로 끝나면 [보낼 내용] 과 Enter 를 입력합니다.\n{user}, {password} 는 위의 사용자 이름과 저장된 비밀번호로 바뀝니다.",
-                    "When a screen line ends with [Wait for], types [Send] and Enter.\n{user} and {password} become the user name and saved password above.",
-                ));
+                ui.weak(t!("profile_form.when_a_screen_line_ends_with_wait_for"));
                 let mut remove = None;
                 egui::Grid::new("login-steps").num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
                     ui.weak("");
-                    ui.weak(t("기다릴 문자열", "Wait for"));
-                    ui.weak(t("보낼 내용", "Send"));
+                    ui.weak(t!("profile_form.wait_for"));
+                    ui.weak(t!("profile_form.send"));
                     ui.end_row();
                     for (i, step) in a.steps.iter_mut().enumerate() {
                         ui.label(format!("{}.", i + 1));
                         ui.add(egui::TextEdit::singleline(&mut step.expect).hint_text("login:").desired_width(150.0));
                         ui.add(egui::TextEdit::singleline(&mut step.send).hint_text("{user}").desired_width(170.0));
-                        if ui.add(icon::icon_button(icon::DELETE).small()).on_hover_text(t("삭제", "Delete")).clicked() {
+                        if ui.add(icon::icon_button(icon::DELETE).small()).on_hover_text(t!("common.delete")).clicked() {
                             remove = Some(i);
                         }
                         ui.end_row();
@@ -929,28 +869,22 @@ impl ProfileForm {
                     a.steps.remove(i);
                 }
                 ui.horizontal(|ui| {
-                    if ui.add(icon::button(icon::ADD, t("단계 추가", "Add step"))).clicked() {
+                    if ui.add(icon::button(icon::ADD, t!("profile_form.add_step"))).clicked() {
                         a.steps.push(LoginStep::default());
                     }
-                    if ui.add(icon::button(icon::RESET, t("기본값 (login: / Password:)", "Defaults (login: / Password:)"))).clicked() {
+                    if ui.add(icon::button(icon::RESET, t!("profile_form.defaults_login_password"))).clicked() {
                         a.steps = AutoLogin::standard_steps();
                     }
                 });
                 if a.uses_password() && !save_password {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        t(
-                            "{password} 를 쓰려면 위에서 '비밀번호 저장' 을 켜세요",
-                            "Turn on 'Save password' above to use {password}",
-                        ),
-                    );
+                    ui.colored_label(ui.visuals().warn_fg_color, t!("profile_form.turn_on_save_password_above_to_use"));
                 }
             });
         });
     }
 
     fn forwards_ui(&mut self, ui: &mut egui::Ui) {
-        let title = tr!("포트 포워딩 ({})", "Port forwarding ({})", self.forwards.len());
+        let title = tr!("profile_form.port_forwarding", arg0 = self.forwards.len());
         egui::CollapsingHeader::new(title).id_salt("forwards").default_open(!self.forwards.is_empty()).show(ui, |ui| {
             let mut remove = None;
             egui::Grid::new("forward-rows").num_columns(5).spacing([6.0, 4.0]).show(ui, |ui| {
@@ -961,10 +895,10 @@ impl ProfileForm {
                         }
                     });
                     ui.horizontal(|ui| {
-                        let hint = if row.kind == ForwardKind::Remote { t("(서버)", "(server)") } else { "127.0.0.1" };
+                        let hint = if row.kind == ForwardKind::Remote { t!("profile_form.server") } else { "127.0.0.1" };
                         ui.add(egui::TextEdit::singleline(&mut row.bind_host).hint_text(hint).desired_width(80.0));
                         ui.label(":");
-                        ui.add(egui::TextEdit::singleline(&mut row.bind_port).hint_text(t("포트", "port")).desired_width(45.0));
+                        ui.add(egui::TextEdit::singleline(&mut row.bind_port).hint_text(t!("common.port")).desired_width(45.0));
                     });
                     if row.kind == ForwardKind::Dynamic {
                         ui.label("SOCKS5");
@@ -972,12 +906,12 @@ impl ProfileForm {
                     } else {
                         ui.label("→");
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut row.dest_host).hint_text(t("호스트", "host")).desired_width(90.0));
+                            ui.add(egui::TextEdit::singleline(&mut row.dest_host).hint_text(t!("profile_form.host_2")).desired_width(90.0));
                             ui.label(":");
-                            ui.add(egui::TextEdit::singleline(&mut row.dest_port).hint_text(t("포트", "port")).desired_width(45.0));
+                            ui.add(egui::TextEdit::singleline(&mut row.dest_port).hint_text(t!("common.port")).desired_width(45.0));
                         });
                     }
-                    if ui.add(icon::icon_button(icon::DELETE).small()).on_hover_text(t("삭제", "Delete")).clicked() {
+                    if ui.add(icon::icon_button(icon::DELETE).small()).on_hover_text(t!("common.delete")).clicked() {
                         remove = Some(i);
                     }
                     ui.end_row();
@@ -986,7 +920,7 @@ impl ProfileForm {
             if let Some(i) = remove {
                 self.forwards.remove(i);
             }
-            if ui.add(icon::button(icon::ADD, t("포워딩 추가", "Add forwarding"))).clicked() {
+            if ui.add(icon::button(icon::ADD, t!("profile_form.add_forwarding"))).clicked() {
                 self.forwards.push(ForwardRow {
                     kind: ForwardKind::Local,
                     bind_host: String::new(),
@@ -1029,7 +963,7 @@ impl ProfileForm {
         if p.protocol == Protocol::Serial {
             p.serial.port = p.serial.port.trim().to_uppercase();
             if p.serial.port.is_empty() {
-                return Err(t("시리얼 포트를 입력하세요 (예: COM3)", "Enter a serial port (e.g. COM3)").into());
+                return Err(t!("profile_form.enter_a_serial_port_e_g_com3").into());
             }
             p.serial.baud = self
                 .baud
@@ -1037,7 +971,7 @@ impl ProfileForm {
                 .parse()
                 .ok()
                 .filter(|&b: &u32| b > 0)
-                .ok_or(t("속도(baud)는 양의 정수여야 합니다", "The speed (baud) must be a positive integer"))?;
+                .ok_or(t!("profile_form.the_speed_baud_must_be_a_positive_integer"))?;
             p.host = p.serial.port.clone();
             p.port = 0;
             p.identity_file.clear();
@@ -1049,22 +983,16 @@ impl ProfileForm {
             return Ok((p, password));
         }
         if p.host.is_empty() {
-            return Err(t("호스트를 입력하세요", "Enter a host").into());
+            return Err(t!("profile_form.enter_a_host").into());
         }
-        p.port = self
-            .port
-            .trim()
-            .parse()
-            .ok()
-            .filter(|&port: &u16| port > 0)
-            .ok_or(t("포트는 1~65535 사이의 숫자여야 합니다", "The port must be a number from 1 to 65535"))?;
+        p.port = self.port.trim().parse().ok().filter(|&port: &u16| port > 0).ok_or(t!("profile_form.the_port_must_be_a_number_from_1"))?;
         if p.term_type.trim().is_empty() {
             p.term_type = "xterm-256color".into();
         }
         match p.protocol {
             Protocol::Ssh => {
                 if p.username.is_empty() {
-                    return Err(t("SSH 사용자 이름을 입력하세요", "Enter the SSH user name").into());
+                    return Err(t!("profile_form.enter_the_ssh_user_name").into());
                 }
                 p.forwards = self.forwards.iter().enumerate().map(|(i, r)| r.to_rule(i + 1)).collect::<Result<_, _>>()?;
             }
@@ -1092,14 +1020,10 @@ fn validate_auto_login(a: &AutoLogin) -> Result<AutoLogin, String> {
         .filter(|s| !s.expect.is_empty() || !s.send.trim().is_empty())
         .collect();
     if let Some(n) = steps.iter().position(|s| s.expect.is_empty()) {
-        return Err(tr!("자동 로그인 {}단계: 기다릴 문자열을 입력하세요", "Automatic login step {}: enter the text to wait for", n + 1));
+        return Err(tr!("profile_form.automatic_login_step_enter_the_text_to_wait", arg0 = n + 1));
     }
     if a.enabled && steps.is_empty() {
-        return Err(t(
-            "자동 로그인 단계를 하나 이상 넣거나 자동 로그인을 끄세요",
-            "Add at least one automatic login step or turn automatic login off",
-        )
-        .into());
+        return Err(t!("profile_form.add_at_least_one_automatic_login_step_or").into());
     }
     Ok(AutoLogin { enabled: a.enabled, steps })
 }

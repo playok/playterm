@@ -43,7 +43,7 @@ pub enum DisplayTarget {
 /// and its screen.
 pub fn parse_display(value: &str) -> Result<(DisplayTarget, u32), String> {
     let value = value.trim();
-    let bad = || tr!("DISPLAY 형식이 아닙니다: '{value}' (예: localhost:0.0)", "Not a DISPLAY value: '{value}' (e.g. localhost:0.0)");
+    let bad = || tr!("x11.not_a_display_value_e_g_localhost_0", value = value);
     let (host, rest) = value.rsplit_once(':').ok_or_else(bad)?;
     let (display, screen) = match rest.split_once('.') {
         Some((d, s)) => (d, s.parse::<u32>().map_err(|_| bad())?),
@@ -101,10 +101,7 @@ impl X11Forward {
         } else {
             match untrusted_cookie(display).await {
                 Ok(cookie) => DisplayAuth::Cookie(cookie),
-                Err(why) => DisplayAuth::Refuse(tr!(
-                    "신뢰하지 않는(untrusted) X11 쿠키를 만들 수 없어 X 연결을 막습니다 ({why}). 이 서버를 믿는다면 사이트 설정에서 X11 '신뢰 (-Y)' 를 켜세요.",
-                    "No untrusted X11 cookie could be made, so X connections are refused ({why}). If you trust this server, turn on X11 'Trusted (-Y)' in the site's settings."
-                )),
+                Err(why) => DisplayAuth::Refuse(tr!("x11.no_untrusted_x11_cookie_could_be_made_so", why = why)),
             }
         };
         Ok(Self { display: display.to_owned(), target, screen, fake, auth })
@@ -134,10 +131,7 @@ impl X11Forward {
     pub async fn relay<S: AsyncRead + AsyncWrite + Unpin>(&self, mut remote: S) -> anyhow::Result<()> {
         let setup = read_setup(&mut remote).await?;
         if setup.auth_name != AUTH_PROTOCOL.as_bytes() || setup.auth_data != self.fake {
-            bail!(tr!(
-                "서버의 X11 연결이 이 세션의 쿠키를 갖고 있지 않아 거부했습니다",
-                "An X11 connection from the server did not carry this session's cookie; refused"
-            ));
+            bail!(tr!("x11.an_x11_connection_from_the_server_did_not"));
         }
         let first = match &self.auth {
             DisplayAuth::Cookie(cookie) => setup.with_auth(AUTH_PROTOCOL.as_bytes(), cookie),
@@ -167,11 +161,7 @@ impl X11Forward {
             }
             #[cfg(not(unix))]
             DisplayTarget::Local { .. } | DisplayTarget::Socket { .. } => {
-                bail!(tr!(
-                    "Windows 에서는 X 서버를 localhost:0.0 처럼 TCP 주소로 지정하세요 (지금: {})",
-                    "On Windows, give the X server as a TCP address such as localhost:0.0 (now: {})",
-                    self.display
-                ));
+                bail!(tr!("x11.on_windows_give_the_x_server_as_a", arg0 = self.display));
             }
         }
         Ok(())
@@ -179,10 +169,7 @@ impl X11Forward {
 }
 
 fn no_server(display: &str) -> String {
-    tr!(
-        "X 서버({display})에 연결할 수 없습니다. X 서버가 실행 중인지 확인하세요 (Windows: VcXsrv·Xming, macOS: XQuartz)",
-        "Cannot reach the X server ({display}). Is one running? (Windows: VcXsrv or Xming, macOS: XQuartz)"
-    )
+    tr!("x11.cannot_reach_the_x_server_is_one_running", display = display)
 }
 
 /// The X11 connection setup packet a client sends first.
@@ -242,23 +229,11 @@ fn xauth_program(configured: Option<std::ffi::OsString>) -> Result<std::path::Pa
     if let Some(path) = configured {
         let path = std::path::PathBuf::from(path);
         if !path.is_absolute() {
-            return Err(t(
-                "PLAYTERM_XAUTH 는 xauth 실행 파일의 절대 경로여야 합니다",
-                "PLAYTERM_XAUTH must be an absolute path to the xauth executable",
-            )
-            .into());
+            return Err(t!("x11.playterm_xauth_must_be_an_absolute_path_to").into());
         }
         return Ok(path);
     }
-    if cfg!(windows) {
-        Err(t(
-            "PLAYTERM_XAUTH 에 신뢰하는 xauth.exe 절대 경로를 설정하세요",
-            "Set PLAYTERM_XAUTH to the absolute path of a trusted xauth.exe",
-        )
-        .into())
-    } else {
-        Ok("xauth".into())
-    }
+    if cfg!(windows) { Err(t!("x11.set_playterm_xauth_to_the_absolute_path_of").into()) } else { Ok("xauth".into()) }
 }
 
 /// An untrusted cookie generated into its own file, as with OpenSSH's `ssh -X`.
@@ -275,14 +250,13 @@ async fn untrusted_cookie(display: &str) -> Result<Vec<u8>, String> {
         let generated = run(&["generate", &display, AUTH_PROTOCOL, "untrusted", "timeout", "43200"]);
         let listed = run(&["list"]);
         let _ = std::fs::remove_file(&file);
-        let generated = generated.map_err(|e| tr!("xauth 를 실행할 수 없습니다: {e}", "cannot run xauth: {e}"))?;
+        let generated = generated.map_err(|e| tr!("x11.cannot_run_xauth", e = e))?;
         if !generated.status.success() {
             let err = String::from_utf8_lossy(&generated.stderr).trim().to_owned();
-            return Err(tr!("xauth generate 실패: {err}", "xauth generate failed: {err}"));
+            return Err(tr!("x11.xauth_generate_failed", err = err));
         }
         let listed = listed.map_err(|e| e.to_string())?;
-        cookie_from_xauth(&String::from_utf8_lossy(&listed.stdout))
-            .ok_or_else(|| t("xauth 가 쿠키를 만들지 않았습니다", "xauth made no cookie").into())
+        cookie_from_xauth(&String::from_utf8_lossy(&listed.stdout)).ok_or_else(|| t!("x11.xauth_made_no_cookie").into())
     })
     .await
     .map_err(|e| e.to_string())?

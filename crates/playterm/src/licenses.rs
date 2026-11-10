@@ -60,42 +60,31 @@ impl LicensesDialog {
     /// Shows the dialog. Returns `true` once it is closed.
     pub fn show(&mut self, ctx: &egui::Context) -> bool {
         let mut done = false;
-        let close = egui::Modal::new(egui::Id::unique("licenses")).backdrop_color(crate::app::theme::MODAL_BACKDROP)
+        let close = egui::Modal::new(egui::Id::unique("licenses"))
+            .backdrop_color(crate::app::theme::MODAL_BACKDROP)
             .show(ctx, |ui| {
                 ui.set_width(WIDTH);
-                ui.heading(t("오픈소스 라이선스", "Open-source licenses"));
+                ui.heading(t!("common.open_source_licenses"));
                 ui.add_space(6.0);
-                ui.label(t(
-                    "playterm 은 MIT 라이선스로 배포되는 오픈소스 소프트웨어입니다.",
-                    "playterm is open-source software released under the MIT License.",
-                ));
-                egui::CollapsingHeader::new(t("playterm 라이선스 (MIT)", "playterm license (MIT)"))
+                ui.label(t!("licenses.playterm_is_open_source_software_released_under_the"));
+                egui::CollapsingHeader::new(t!("licenses.playterm_license_mit"))
                     .id_salt("own-license")
                     .show(ui, |ui| license_text(ui, OWN_LICENSE));
                 ui.add_space(8.0);
-                ui.label(tr!(
-                    "이 프로그램에는 아래 오픈소스 구성 요소 {}개가 포함되어 있으며, 각각 표시된 라이선스를 따릅니다. 항목을 펼치면 라이선스 전문과 소스 저장소가 보입니다.",
-                    "This program includes the {} open-source components below, each under the license shown. Expand one to see its full license text and source repository.",
-                    COMPONENTS.len()
-                ));
+                ui.label(tr!("licenses.this_program_includes_the_open_source_components_below", arg0 = COMPONENTS.len()));
                 ui.add_space(4.0);
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.filter)
-                        .hint_text(t("이름 또는 라이선스로 찾기", "Search by name or license"))
-                        .desired_width(WIDTH),
+                    egui::TextEdit::singleline(&mut self.filter).hint_text(t!("licenses.search_by_name_or_license")).desired_width(WIDTH),
                 );
                 ui.add_space(4.0);
                 egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, false]).show(ui, |ui| {
                     for c in COMPONENTS.iter().filter(|c| matches(c, &self.filter)) {
                         let title = format!("{} {}  —  {}", c.name, c.versions.join(" · "), shorten(c.license, 48));
                         egui::CollapsingHeader::new(title).id_salt(("component", c.name)).show(ui, |ui| {
-                            ui.add(egui::Label::new(tr!("라이선스: {}", "License: {}", c.license)).wrap());
+                            ui.add(egui::Label::new(tr!("licenses.license", arg0 = c.license)).wrap());
                             ui.hyperlink(c.url);
                             if c.texts.is_empty() {
-                                ui.weak(t(
-                                    "라이선스 전문은 위 저장소를 참고하세요.",
-                                    "See the repository above for the full license text.",
-                                ));
+                                ui.weak(t!("licenses.see_the_repository_above_for_the_full_license"));
                             }
                             for (i, &text) in c.texts.iter().enumerate() {
                                 if i > 0 {
@@ -107,7 +96,7 @@ impl LicensesDialog {
                     }
                 });
                 ui.add_space(8.0);
-                done = ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked();
+                done = ui.add(icon::button(icon::CLOSE, t!("common.close"))).clicked();
             })
             .should_close();
         done || close

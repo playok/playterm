@@ -17,56 +17,8 @@ pub const PROMPT: &str = "\x1b[1mplayterm\x1b[0m> ";
 
 /// The `help` text in the current language.
 pub fn help() -> &'static str {
-    t(HELP_KO, HELP_EN)
+    t!("console.help")
 }
-
-const HELP_KO: &str = "\
-\x1b[1m사용할 수 있는 명령\x1b[0m
-  ssh [-p 포트] [-l 사용자] [-i 키파일] [-J 점프호스트] [-A|-a] [-X|-Y] [-L|-R 포트:호스트:포트] [-D 포트] [--cp949] [사용자@]호스트[:포트]
-                                    -A: 에이전트 포워딩 (신뢰하는 서버에만), -a: 끔
-  telnet 호스트 [포트]              Telnet 접속 (--cp949: 한글 구형 장비)
-  serial COM3 [속도]                시리얼 콘솔 (기본 9600 8N1)
-  rdp [사용자@]호스트[:포트]         원격 데스크톱 (Windows RDP)
-  ping [-t] [-n 횟수] [-w 밀리초] [-l 크기] [-4|-6] 호스트
-                                    응답 확인 (기본 4번, -t: Ctrl+C 로 멈출 때까지)
-  open                              사이트 관리 창 열기
-  open 이름|번호                    저장된 사이트에 접속 (번호는 sites 의 번호)
-  sites [검색어]                    저장된 사이트 목록
-  ls [-l] [-a] [경로]               파일 목록 (-l: 자세히, -a: 숨김 파일 포함, *.log 같은 패턴 가능)
-  dir [/a] [경로]                   파일 목록 (자세히)
-  cd [경로], pwd                    폴더 이동 (cd 만 쓰면 홈, cd .., cd D:) / 현재 폴더
-  new                               새 사이트 만들기
-  quick                             빠른 연결 창
-  r, reconnect                      마지막 연결 다시 접속
-  clear, cls                        화면 지우기
-  exit                              탭 닫기
-  help, ?                           이 도움말
-
-  ←/→, Home/End: 커서 이동   ↑/↓: 이전 명령   Ctrl+C: 입력 취소   Ctrl+L: 화면 지우기";
-
-const HELP_EN: &str = "\
-\x1b[1mAvailable commands\x1b[0m
-  ssh [-p port] [-l user] [-i keyfile] [-J jumphost] [-A|-a] [-X|-Y] [-L|-R port:host:port] [-D port] [--cp949] [user@]host[:port]
-                                    -A: forward the agent (trusted servers only), -a: disable
-  telnet host [port]                Telnet connection (--cp949: older Korean devices)
-  serial COM3 [speed]               Serial console (default 9600 8N1)
-  rdp [user@]host[:port]            Remote desktop (Windows RDP)
-  ping [-t] [-n count] [-w ms] [-l size] [-4|-6] host
-                                    Check that a host answers (4 times, -t: until Ctrl+C)
-  open                              Open the Site Manager
-  open name|number                  Connect to a saved site (number as listed by sites)
-  sites [filter]                    List saved sites
-  ls [-l] [-a] [path]               List files (-l: details, -a: include hidden files, patterns like *.log)
-  dir [/a] [path]                   List files (details)
-  cd [path], pwd                    Change folder (cd alone: home, cd .., cd D:) / current folder
-  new                               Create a new site
-  quick                             Quick Connect
-  r, reconnect                      Reconnect to the last connection
-  clear, cls                        Clear the screen
-  exit                              Close the tab
-  help, ?                           This help
-
-  ←/→, Home/End: move cursor   ↑/↓: previous command   Ctrl+C: cancel input   Ctrl+L: clear screen";
 
 /// Something a command asks the app to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,7 +82,7 @@ fn split_args(line: &str) -> Vec<String> {
 }
 
 fn parse_port(s: &str) -> Result<u16, String> {
-    s.parse().ok().filter(|&p: &u16| p > 0).ok_or_else(|| tr!("잘못된 포트: {s}", "Invalid port: {s}"))
+    s.parse().ok().filter(|&p: &u16| p > 0).ok_or_else(|| tr!("console.invalid_port", s = s))
 }
 
 /// Local user name, the default SSH user (like OpenSSH): `USERNAME` on Windows, `USER` elsewhere.
@@ -152,13 +104,12 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
     let mut target = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let mut value =
-            |what: &str| it.next().cloned().ok_or_else(|| tr!("{arg} 다음에 {what}이(가) 필요합니다", "Missing {what} after {arg}"));
+        let mut value = |what: &str| it.next().cloned().ok_or_else(|| tr!("console.missing_after", arg = arg, what = what));
         match arg.as_str() {
-            "-p" => port = Some(parse_port(&value(t("포트", "port"))?)?),
-            "-l" => user = Some(value(t("사용자 이름", "user name"))?),
-            "-i" => identity = value(t("키 파일", "key file"))?,
-            "-J" => jump = value(t("점프 호스트", "jump host"))?,
+            "-p" => port = Some(parse_port(&value(t!("common.port"))?)?),
+            "-l" => user = Some(value(t!("console.user_name"))?),
+            "-i" => identity = value(t!("console.key_file"))?,
+            "-J" => jump = value(t!("console.jump_host"))?,
             "-X" => x11 = true,
             "-Y" => (x11, x11_trusted) = (true, true),
             "-A" => agent_forwarding = true,
@@ -169,15 +120,15 @@ fn parse_ssh(args: &[String]) -> Result<SessionProfile, String> {
                     "-R" => ForwardKind::Remote,
                     _ => ForwardKind::Dynamic,
                 };
-                forwards.push(ForwardRule::parse(kind, &value(t("포워딩 설정", "forwarding spec"))?)?);
+                forwards.push(ForwardRule::parse(kind, &value(t!("console.forwarding_spec"))?)?);
             }
             "--cp949" | "--euc-kr" => charset = Charset::Cp949,
-            a if a.starts_with('-') => return Err(tr!("알 수 없는 옵션: {a}", "Unknown option: {a}")),
+            a if a.starts_with('-') => return Err(tr!("console.unknown_option", a = a)),
             a if target.is_none() => target = Some(a.to_owned()),
-            a => return Err(tr!("인수가 너무 많습니다: {a}", "Too many arguments: {a}")),
+            a => return Err(tr!("console.too_many_arguments", a = a)),
         }
     }
-    let target = target.ok_or(t("사용법: ssh [옵션] [사용자@]호스트[:포트]", "Usage: ssh [options] [user@]host[:port]"))?;
+    let target = target.ok_or(t!("console.usage_ssh_options_user_host_port"))?;
     let target = match (target.contains('@'), user) {
         (true, _) => target,
         (false, Some(u)) => format!("{u}@{target}"),
@@ -203,14 +154,14 @@ fn parse_telnet(args: &[String]) -> Result<SessionProfile, String> {
     for a in args {
         match a.as_str() {
             "--cp949" | "--euc-kr" => charset = Charset::Cp949,
-            a if a.starts_with('-') => return Err(tr!("알 수 없는 옵션: {a}", "Unknown option: {a}")),
+            a if a.starts_with('-') => return Err(tr!("console.unknown_option", a = a)),
             a => rest.push(a),
         }
     }
     let (host, port) = match rest.as_slice() {
         [host] => (*host, None),
         [host, port] => (*host, Some(parse_port(port)?)),
-        _ => return Err(t("사용법: telnet 호스트 [포트]", "Usage: telnet host [port]").into()),
+        _ => return Err(t!("console.usage_telnet_host_port").into()),
     };
     let mut profile = parse_url(&format!("telnet://{host}"))?;
     if let Some(port) = port {
@@ -224,7 +175,7 @@ fn parse_serial(args: &[String]) -> Result<SessionProfile, String> {
     match args {
         [port] => parse_url(&format!("serial://{port}")),
         [port, baud] => parse_url(&format!("serial://{port}:{baud}")),
-        _ => Err(t("사용법: serial COM3 [속도]", "Usage: serial COM3 [speed]").into()),
+        _ => Err(t!("console.usage_serial_com3_speed").into()),
     }
 }
 
@@ -245,7 +196,7 @@ pub fn parse(line: &str) -> Parsed {
         "serial" | "com" => connect(parse_serial(rest)),
         "rdp" | "mstsc" => connect(match rest {
             [target] => parse_url(&format!("rdp://{target}")),
-            _ => Err(t("사용법: rdp [사용자@]호스트[:포트]", "Usage: rdp [user@]host[:port]").into()),
+            _ => Err(t!("console.usage_rdp_user_host_port").into()),
         }),
         "open" | "connect" | "o" if text.is_empty() => Parsed::Request(Request::SiteManager),
         "open" | "connect" | "o" => Parsed::Request(Request::OpenSite(text)),
@@ -262,22 +213,14 @@ pub fn parse(line: &str) -> Parsed {
         "r" | "reconnect" => Parsed::Request(Request::Reconnect),
         "ping" => parse_ping(rest),
         "exit" | "quit" | "close" => Parsed::Request(Request::Exit),
-        other => Parsed::Error(tr!("알 수 없는 명령: {other}  (help 로 목록 보기)", "Unknown command: {other}  (type help for a list)")),
+        other => Parsed::Error(tr!("console.unknown_command_type_help_for_a_list", other = other)),
     }
 }
 
 /// `ping [-t] [-n count] [-w ms] [-l size] [-4|-6] host`, the options of Windows' `ping`
 /// (`/t` works too), and `-c count` as on Linux.
 fn parse_ping(args: &[String]) -> Parsed {
-    let usage = || {
-        Parsed::Error(
-            t(
-                "사용법: ping [-t] [-n 횟수] [-w 밀리초] [-l 크기] [-4|-6] 호스트",
-                "Usage: ping [-t] [-n count] [-w ms] [-l size] [-4|-6] host",
-            )
-            .into(),
-        )
-    };
+    let usage = || Parsed::Error(t!("console.usage_ping_t_n_count_w_ms_l").into());
     let mut options = PingOptions::default();
     let mut host = None;
     let mut it = args.iter();
@@ -287,26 +230,26 @@ fn parse_ping(args: &[String]) -> Parsed {
             it.next()
                 .and_then(|v| v.parse::<u32>().ok())
                 .filter(|n| (1..=max).contains(n))
-                .ok_or_else(|| Parsed::Error(tr!("{flag} 다음에는 1~{max} 의 {what}", "{flag} needs {what} from 1 to {max}")))
+                .ok_or_else(|| Parsed::Error(tr!("console.needs_from_1_to", flag = flag, max = max, what = what)))
         };
         match flag.as_str() {
             "-t" => options.count = None,
-            "-n" | "-c" => match number(u32::MAX, t("횟수", "a count")) {
+            "-n" | "-c" => match number(u32::MAX, t!("console.a_count")) {
                 Ok(n) => options.count = Some(n),
                 Err(e) => return e,
             },
-            "-w" => match number(ping::MAX_TIMEOUT_MS, t("밀리초", "milliseconds")) {
+            "-w" => match number(ping::MAX_TIMEOUT_MS, t!("console.milliseconds")) {
                 Ok(ms) => options.timeout_ms = ms,
                 Err(e) => return e,
             },
-            "-l" => match number(ping::MAX_SIZE.into(), t("바이트 수", "a size in bytes")) {
+            "-l" => match number(ping::MAX_SIZE.into(), t!("console.a_size_in_bytes")) {
                 Ok(size) => options.size = size as u16,
                 Err(e) => return e,
             },
             "-4" => options.family = Some(Family::V4),
             "-6" => options.family = Some(Family::V6),
             _ if flag.starts_with('-') => {
-                return Parsed::Error(tr!("ping: 알 수 없는 옵션 {arg}", "ping: unknown option {arg}"));
+                return Parsed::Error(tr!("console.ping_unknown_option", arg = arg));
             }
             _ if host.is_none() => host = Some(arg.clone()),
             _ => return usage(),
@@ -331,9 +274,9 @@ fn parse_ls(args: &[String], dir: bool) -> Parsed {
                 opts.long |= f.contains(['l', 'L']);
                 opts.all |= f.contains(['a', 'A']);
             }
-            Some(_) if dash.is_some() => return Parsed::Error(tr!("알 수 없는 옵션: {a}", "Unknown option: {a}")),
+            Some(_) if dash.is_some() => return Parsed::Error(tr!("console.unknown_option", a = a)),
             _ if opts.path.is_none() => opts.path = Some(a.clone()),
-            _ => return Parsed::Error(t("경로는 하나만 쓸 수 있습니다", "Only one path is allowed").into()),
+            _ => return Parsed::Error(t!("console.only_one_path_is_allowed").into()),
         }
     }
     Parsed::Ls(opts)

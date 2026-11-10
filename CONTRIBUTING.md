@@ -32,10 +32,14 @@ Executables are in `target/debug/`, or `target/release/` after `cargo build --lo
 | `crates/playterm-config` | 프로필·설정·암호화 볼트 / Profiles, settings, encrypted vault |
 | `crates/playterm-net` | SSH·Telnet·시리얼·RDP·SFTP·포워딩·ZMODEM / Transports and transfers |
 | `crates/playterm-term` | 터미널 화면·문자셋 / Terminal model and encoding |
-| `crates/playterm-i18n` | 한국어·영어 문구 / Korean and English strings |
+| `crates/playterm-i18n` | 번역 리소스·언어 선택·키 검증 / Translation catalogs, locale selection and key validation |
 | `crates/playterm-sign` | 릴리스 체크섬 서명 / Release checksum signer |
 | `scripts/` | 릴리스·상호운용·부하 시험 도구 / Release and test tools |
 | `docs/releases/` | 버전별 변경 내역과 다음 릴리스 초안 / Release notes and next draft |
+
+번역 문구·새 언어 추가는 [다국어 구조 안내](docs/i18n.md)를 따릅니다. UI 코드에는 번역 키를 사용합니다.
+
+For translation changes and new languages, follow the [i18n guide](docs/i18n.md). Use translation keys in UI code.
 
 ## 검증 / Validation
 

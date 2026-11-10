@@ -52,10 +52,7 @@ pub fn decode_escapes(text: &str) -> Result<Vec<u8>, String> {
     while let Some(c) = chars.next() {
         if c != '\\' {
             if !c.is_ascii() || c.is_ascii_control() {
-                return Err(tr!(
-                    "'{c}' 는 쓸 수 없습니다 (ASCII 문자와 \\x 이스케이프만)",
-                    "'{c}' cannot be used (ASCII characters and \\x escapes only)"
-                ));
+                return Err(tr!("keepalive.cannot_be_used_ascii_characters_and_x_escapes", c = c));
             }
             out.push(c as u8);
             continue;
@@ -72,12 +69,12 @@ pub fn decode_escapes(text: &str) -> Result<Vec<u8>, String> {
                 u8::from_str_radix(&hex, 16)
                     .ok()
                     .filter(|_| hex.len() == 2)
-                    .ok_or_else(|| tr!("\\x 뒤에는 16진수 두 자리가 와야 합니다", "\\x must be followed by two hex digits"))?
+                    .ok_or_else(|| tr!("keepalive.x_must_be_followed_by_two_hex_digits"))?
             }
             Some(other) => {
-                return Err(tr!("알 수 없는 이스케이프 \\{other}", "Unknown escape \\{other}"));
+                return Err(tr!("keepalive.unknown_escape", other = other));
             }
-            None => return Err(t("문자열이 \\ 로 끝납니다", "The text ends with \\").into()),
+            None => return Err(t!("keepalive.the_text_ends_with").into()),
         };
         out.push(byte);
     }

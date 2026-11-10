@@ -43,9 +43,9 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
     let i = st.i;
     let fullscreen = ui.input(|inp| inp.viewport().fullscreen.unwrap_or(false));
     let sidebar = if st.sidebar {
-        tool(icon::SIDEBAR_HIDE, t("사이트 목록 숨기기", "Hide the site list"), hint(Shortcut::Sidebar), true, None, Command::ToggleSidebar)
+        tool(icon::SIDEBAR_HIDE, t!("common.hide_the_site_list"), hint(Shortcut::Sidebar), true, None, Command::ToggleSidebar)
     } else {
-        tool(icon::SIDEBAR_SHOW, t("사이트 목록 보이기", "Show the site list"), hint(Shortcut::Sidebar), true, None, Command::ToggleSidebar)
+        tool(icon::SIDEBAR_SHOW, t!("toolbar.show_the_site_list"), hint(Shortcut::Sidebar), true, None, Command::ToggleSidebar)
     };
     // One click on the toolbar must not end a working session: reconnecting is for a closed
     // tab here (the menus still offer it for a connected one).
@@ -53,51 +53,37 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
     let can_disconnect = active.is_some_and(Session::can_disconnect);
     let has_selection = active.is_some_and(|s| s.terminal.has_selection());
     let full = if fullscreen {
-        tool(
-            icon::FULLSCREEN_EXIT,
-            t("전체 화면 끝내기", "Exit full screen"),
-            hint(Shortcut::Fullscreen),
-            true,
-            None,
-            Command::ToggleFullscreen,
-        )
+        tool(icon::FULLSCREEN_EXIT, t!("toolbar.exit_full_screen"), hint(Shortcut::Fullscreen), true, None, Command::ToggleFullscreen)
     } else {
-        tool(icon::FULLSCREEN, t("전체 화면", "Full screen"), hint(Shortcut::Fullscreen), true, None, Command::ToggleFullscreen)
+        tool(icon::FULLSCREEN, t!("common.full_screen"), hint(Shortcut::Fullscreen), true, None, Command::ToggleFullscreen)
     };
     vec![
         vec![sidebar],
         vec![
-            tool(icon::NEW_TAB, t("새 탭", "New tab"), hint(Shortcut::NewTab), true, None, Command::NewTab),
-            tool(icon::QUICK_CONNECT, t("빠른 연결", "Quick Connect"), hint(Shortcut::QuickConnect), true, None, Command::QuickConnect),
-            tool(icon::SITE_MANAGER, t("사이트 관리", "Site Manager"), hint(Shortcut::SiteManager), true, None, Command::SiteManager),
+            tool(icon::NEW_TAB, t!("common.new_tab"), hint(Shortcut::NewTab), true, None, Command::NewTab),
+            tool(icon::QUICK_CONNECT, t!("common.quick_connect"), hint(Shortcut::QuickConnect), true, None, Command::QuickConnect),
+            tool(icon::SITE_MANAGER, t!("common.site_manager"), hint(Shortcut::SiteManager), true, None, Command::SiteManager),
         ],
         vec![
-            tool(icon::RECONNECT, t("다시 연결", "Reconnect"), "", can_reconnect, None, Command::Reconnect(i)),
-            tool(icon::DISCONNECT, t("연결 끊기", "Disconnect"), "", can_disconnect, None, Command::Disconnect(i)),
+            tool(icon::RECONNECT, t!("common.reconnect"), "", can_reconnect, None, Command::Reconnect(i)),
+            tool(icon::DISCONNECT, t!("common.disconnect"), "", can_disconnect, None, Command::Disconnect(i)),
         ],
         vec![
-            tool(icon::COPY, t("복사", "Copy"), st.copy_hint, has_selection, None, Command::Copy),
-            tool(icon::PASTE, t("붙여넣기", "Paste"), st.paste_hint, active.is_some(), None, Command::Paste),
-            tool(icon::FIND, t("찾기", "Find"), hint(Shortcut::Find), active.is_some(), None, Command::Find),
+            tool(icon::COPY, t!("common.copy"), st.copy_hint, has_selection, None, Command::Copy),
+            tool(icon::PASTE, t!("common.paste"), st.paste_hint, active.is_some(), None, Command::Paste),
+            tool(icon::FIND, t!("toolbar.find"), hint(Shortcut::Find), active.is_some(), None, Command::Find),
         ],
         vec![
-            tool(icon::FONT_SMALLER, t("글꼴 작게", "Smaller font"), hint(Shortcut::ZoomOut), true, None, Command::ZoomOut),
-            tool(icon::FONT_LARGER, t("글꼴 크게", "Larger font"), hint(Shortcut::ZoomIn), true, None, Command::ZoomIn),
+            tool(icon::FONT_SMALLER, t!("common.smaller_font"), hint(Shortcut::ZoomOut), true, None, Command::ZoomOut),
+            tool(icon::FONT_LARGER, t!("common.larger_font"), hint(Shortcut::ZoomIn), true, None, Command::ZoomIn),
         ],
         vec![
             // Always on, as the menu item is (#119): on a tab without SFTP the panel folds into a
             // strip and opens on the next SSH tab.
-            tool(
-                icon::SFTP,
-                t("SFTP 탐색기", "SFTP explorer"),
-                hint(Shortcut::SftpPanel),
-                true,
-                Some(st.sftp_panel),
-                Command::ToggleSftpPanel,
-            ),
+            tool(icon::SFTP, t!("common.sftp_explorer"), hint(Shortcut::SftpPanel), true, Some(st.sftp_panel), Command::ToggleSftpPanel),
             tool(
                 icon::COMPOSE_BAR,
-                t("명령 입력창", "Command input bar"),
+                t!("common.command_input_bar"),
                 hint(Shortcut::ComposeBar),
                 true,
                 Some(st.compose_bar),
@@ -105,14 +91,14 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
             ),
             tool(
                 icon::BROADCAST,
-                t("모든 탭에 동시 입력", "Type into all tabs"),
+                t!("common.type_into_all_tabs"),
                 hint(Shortcut::Broadcast),
                 true,
                 Some(st.broadcast),
                 Command::ToggleBroadcast,
             ),
         ],
-        vec![full, tool(icon::SETTINGS, t("설정", "Settings"), hint(Shortcut::Settings), true, None, Command::Settings)],
+        vec![full, tool(icon::SETTINGS, t!("common.settings"), hint(Shortcut::Settings), true, None, Command::Settings)],
     ]
 }
 
@@ -162,7 +148,7 @@ pub fn show(ui: &mut egui::Ui, st: &ToolbarState<'_>) -> Option<Command> {
                 }
             }
         });
-        more.response.on_hover_text(t("더 보기", "More"));
+        more.response.on_hover_text(t!("toolbar.more"));
     }
     out
 }
@@ -228,15 +214,15 @@ mod tests {
         };
         let names = names(&state);
         let expected = [
-            t("사이트 목록 숨기기", "Hide the site list"),
-            t("새 탭", "New tab"),
-            t("빠른 연결", "Quick Connect"),
-            t("다시 연결", "Reconnect"),
-            t("연결 끊기", "Disconnect"),
-            t("복사", "Copy"),
-            t("붙여넣기", "Paste"),
-            t("SFTP 탐색기", "SFTP explorer"),
-            t("설정", "Settings"),
+            t!("common.hide_the_site_list"),
+            t!("common.new_tab"),
+            t!("common.quick_connect"),
+            t!("common.reconnect"),
+            t!("common.disconnect"),
+            t!("common.copy"),
+            t!("common.paste"),
+            t!("common.sftp_explorer"),
+            t!("common.settings"),
         ];
         for name in expected {
             assert!(names.iter().any(|n| n == name), "{name} missing from {names:?}");
@@ -260,7 +246,7 @@ mod tests {
         assert!(!wide.iter().any(|n| n == "»"), "all fit: {wide:?}");
         let narrow = names_in(&state, 260.0);
         assert!(narrow.iter().any(|n| n == "»"), "the rest in a menu: {narrow:?}");
-        assert!(!narrow.iter().any(|n| n == t("설정", "Settings")), "settings went into the menu: {narrow:?}");
-        assert!(narrow.iter().any(|n| n == t("새 탭", "New tab")), "the first groups stay: {narrow:?}");
+        assert!(!narrow.iter().any(|n| n == t!("common.settings")), "settings went into the menu: {narrow:?}");
+        assert!(narrow.iter().any(|n| n == t!("common.new_tab")), "the first groups stay: {narrow:?}");
     }
 }

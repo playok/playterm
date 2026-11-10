@@ -11,8 +11,7 @@ impl PlaytermApp {
             if !session.take_zmodem_question() {
                 continue;
             }
-            let title =
-                tr!("ZMODEM 으로 받은 파일을 저장할 폴더 - {}", "Folder for the files received with ZMODEM - {}", session.tab_title());
+            let title = tr!("app.zmodem.folder_for_the_files_received_with_zmodem", arg0 = session.tab_title());
             let (start, ctx) = (start.clone(), ctx.clone());
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
@@ -52,7 +51,7 @@ impl PlaytermApp {
             if !session.take_upload_question() {
                 continue;
             }
-            let title = tr!("ZMODEM 으로 보낼 파일 - {}", "Files to send with ZMODEM - {}", session.tab_title());
+            let title = tr!("app.zmodem.files_to_send_with_zmodem", arg0 = session.tab_title());
             let (start, ctx) = (start.clone(), ctx.clone());
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {

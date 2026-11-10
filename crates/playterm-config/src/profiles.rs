@@ -100,15 +100,15 @@ impl TabColor {
     pub fn name(self) -> &'static str {
         use playterm_i18n::t;
         match self {
-            TabColor::Red => t("빨강", "Red"),
-            TabColor::Orange => t("주황", "Orange"),
-            TabColor::Yellow => t("노랑", "Yellow"),
-            TabColor::Green => t("초록", "Green"),
-            TabColor::Teal => t("청록", "Teal"),
-            TabColor::Blue => t("파랑", "Blue"),
-            TabColor::Purple => t("보라", "Purple"),
-            TabColor::Pink => t("분홍", "Pink"),
-            TabColor::Gray => t("회색", "Gray"),
+            TabColor::Red => t!("profiles.red"),
+            TabColor::Orange => t!("profiles.orange"),
+            TabColor::Yellow => t!("profiles.yellow"),
+            TabColor::Green => t!("profiles.green"),
+            TabColor::Teal => t!("profiles.teal"),
+            TabColor::Blue => t!("profiles.blue"),
+            TabColor::Purple => t!("profiles.purple"),
+            TabColor::Pink => t!("profiles.pink"),
+            TabColor::Gray => t!("profiles.gray"),
         }
     }
 }
@@ -242,7 +242,7 @@ impl SessionProfile {
 
     /// A copy with a fresh id, for "duplicate".
     pub fn duplicate(&self) -> io::Result<Self> {
-        Ok(Self { id: random_id()?, name: playterm_i18n::tr!("{} (복사본)", "{} (copy)", self.display_name()), ..self.clone() })
+        Ok(Self { id: random_id()?, name: playterm_i18n::tr!("profiles.copy", arg0 = self.display_name()), ..self.clone() })
     }
 }
 
@@ -266,10 +266,10 @@ impl TemplateLayout {
     pub fn label(self) -> &'static str {
         use playterm_i18n::t;
         match self {
-            Self::Tabs => t("탭으로", "As tabs"),
-            Self::Columns => t("좌우로 나란히", "Side by side"),
-            Self::Rows => t("위아래로", "Stacked"),
-            Self::Grid => t("격자", "Grid"),
+            Self::Tabs => t!("profiles.as_tabs"),
+            Self::Columns => t!("profiles.side_by_side"),
+            Self::Rows => t!("profiles.stacked"),
+            Self::Grid => t!("profiles.grid"),
         }
     }
 }
@@ -624,6 +624,16 @@ impl ProfileStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_charset_survives_profile_serialization() {
+        for charset in Charset::ALL {
+            let profile = SessionProfile { charset, ..SessionProfile::new().unwrap() };
+            let encoded = toml::to_string(&profile).unwrap();
+            let decoded: SessionProfile = toml::from_str(&encoded).unwrap();
+            assert_eq!(decoded.charset, charset);
+        }
+    }
+
     #[test]
     fn recovery_rechecks_repairs_and_preserves_each_malformed_file() {
         let dir = tempfile::tempdir().unwrap();
