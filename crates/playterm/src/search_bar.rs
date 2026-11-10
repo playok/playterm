@@ -43,7 +43,7 @@ pub fn count_label(current: Option<usize>, total: usize, capped: bool) -> String
     let total = if capped { format!("{total}+") } else { total.to_string() };
     match current {
         Some(i) => format!("{} / {total}", i + 1),
-        None => tr!("{}개", "{} found", total),
+        None => tr!("search_bar.found", arg0 = total),
     }
 }
 
@@ -110,10 +110,10 @@ impl SearchBar {
     fn status(&self, ui: &egui::Ui) -> Option<RichText> {
         if let Some(e) = &self.error {
             let first = e.lines().next().unwrap_or_default().to_owned();
-            return Some(RichText::new(tr!("정규식 오류: {first}", "Bad regular expression: {first}")).color(ui.visuals().error_fg_color));
+            return Some(RichText::new(tr!("search_bar.bad_regular_expression", first = first)).color(ui.visuals().error_fg_color));
         }
         if self.not_found {
-            return Some(RichText::new(t("없음", "No matches")).color(ui.visuals().error_fg_color));
+            return Some(RichText::new(t!("search_bar.no_matches")).color(ui.visuals().error_fg_color));
         }
         self.search.as_ref()?;
         let current = self.current.as_ref().and_then(|c| self.matches.iter().position(|m| m == c));
@@ -128,18 +128,15 @@ impl SearchBar {
         ui.scope_builder(UiBuilder::new().max_rect(strip.shrink2(egui::vec2(6.0, 4.0))), |ui| {
             ui.horizontal_centered(|ui| {
                 let edit = ui.add(
-                    egui::TextEdit::singleline(&mut self.query)
-                        .hint_text(t("찾기 (스크롤백 포함)", "Find (including scrollback)"))
-                        .desired_width(220.0),
+                    egui::TextEdit::singleline(&mut self.query).hint_text(t!("search_bar.find_including_scrollback")).desired_width(220.0),
                 );
                 if !self.focus_requested {
                     edit.request_focus();
                     self.focus_requested = true;
                 }
                 let mut changed = edit.changed();
-                changed |=
-                    ui.toggle_value(&mut self.options.case_sensitive, "Aa").on_hover_text(t("대소문자 구분", "Match case")).changed();
-                changed |= ui.toggle_value(&mut self.options.regex, ".*").on_hover_text(t("정규식", "Regular expression")).changed();
+                changed |= ui.toggle_value(&mut self.options.case_sensitive, "Aa").on_hover_text(t!("search_bar.match_case")).changed();
+                changed |= ui.toggle_value(&mut self.options.regex, ".*").on_hover_text(t!("search_bar.regular_expression")).changed();
                 if changed {
                     self.compile();
                     step = Some(SearchDirection::Older);
@@ -153,18 +150,17 @@ impl SearchBar {
                     action = BarAction::Close;
                 }
 
-                if ui.add(icon::icon_button(icon::UP).small()).on_hover_text(t("위로 (Enter)", "Up (Enter)")).clicked() {
+                if ui.add(icon::icon_button(icon::UP).small()).on_hover_text(t!("search_bar.up_enter")).clicked() {
                     step = Some(SearchDirection::Older);
                 }
-                if ui.add(icon::icon_button(icon::DOWN).small()).on_hover_text(t("아래로 (Shift+Enter)", "Down (Shift+Enter)")).clicked()
-                {
+                if ui.add(icon::icon_button(icon::DOWN).small()).on_hover_text(t!("search_bar.down_shift_enter")).clicked() {
                     step = Some(SearchDirection::Newer);
                 }
                 if let Some(status) = self.status(ui) {
                     ui.label(status);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t("닫기 (Esc)", "Close (Esc)")).clicked() {
+                    if ui.add(icon::icon_button(icon::CLOSE).small()).on_hover_text(t!("search_bar.close_esc")).clicked() {
                         action = BarAction::Close;
                     }
                 });

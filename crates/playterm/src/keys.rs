@@ -163,30 +163,30 @@ pub fn hint(what: Shortcut) -> String {
 /// What `what` does, for the shortcut list.
 pub fn describe(what: Shortcut) -> &'static str {
     match what {
-        Shortcut::NewTab => t("새 탭 (로컬 명령 프롬프트)", "New tab (local prompt)"),
-        Shortcut::QuickConnect => t("빠른 연결", "Quick Connect"),
-        Shortcut::ReopenClosed => t("닫은 탭 다시 열기", "Reopen closed tab"),
-        Shortcut::SiteManager => t("사이트 관리", "Site Manager"),
-        Shortcut::Sidebar => t("사이트 목록 표시/숨김", "Show/hide the site list"),
+        Shortcut::NewTab => t!("keys.new_tab_local_prompt"),
+        Shortcut::QuickConnect => t!("common.quick_connect"),
+        Shortcut::ReopenClosed => t!("common.reopen_closed_tab"),
+        Shortcut::SiteManager => t!("common.site_manager"),
+        Shortcut::Sidebar => t!("keys.show_hide_the_site_list"),
         Shortcut::Find => {
-            t("찾기 (스크롤백 포함, Enter: 위로 · Shift+Enter: 아래로)", "Find (including scrollback, Enter: up · Shift+Enter: down)")
+            t!("keys.find_including_scrollback_enter_up_shift_enter_down")
         }
-        Shortcut::Broadcast => t("모든 탭에 동시 입력 (켜기/끄기)", "Type into all tabs (on/off)"),
-        Shortcut::SftpPanel => t("SFTP 탐색기 (옆 패널) 열기/닫기", "SFTP explorer (side panel) on/off"),
-        Shortcut::ComposeBar => t("명령 입력창 (하단) 열기/닫기", "Command input bar on/off"),
-        Shortcut::PrevTab => t("이전 탭", "Previous tab"),
-        Shortcut::NextTab => t("다음 탭", "Next tab"),
-        Shortcut::CloseTab => t("탭 닫기", "Close tab"),
-        Shortcut::DuplicateTab => t("탭 복제", "Duplicate tab"),
-        Shortcut::Copy => t("복사", "Copy"),
-        Shortcut::Paste => t("붙여넣기", "Paste"),
-        Shortcut::Fullscreen => t("전체 화면", "Full screen"),
-        Shortcut::ZoomIn => t("글꼴 크게", "Larger font"),
-        Shortcut::ZoomOut => t("글꼴 작게", "Smaller font"),
-        Shortcut::ZoomReset => t("글꼴 기본 크기", "Default font size"),
-        Shortcut::NewWindow => t("새 창", "New window"),
-        Shortcut::Settings => t("설정", "Settings"),
-        Shortcut::Quit => t("끝내기", "Quit"),
+        Shortcut::Broadcast => t!("keys.type_into_all_tabs_on_off"),
+        Shortcut::SftpPanel => t!("keys.sftp_explorer_side_panel_on_off"),
+        Shortcut::ComposeBar => t!("keys.command_input_bar_on_off"),
+        Shortcut::PrevTab => t!("common.previous_tab"),
+        Shortcut::NextTab => t!("common.next_tab"),
+        Shortcut::CloseTab => t!("common.close_tab"),
+        Shortcut::DuplicateTab => t!("common.duplicate_tab"),
+        Shortcut::Copy => t!("common.copy"),
+        Shortcut::Paste => t!("common.paste"),
+        Shortcut::Fullscreen => t!("common.full_screen"),
+        Shortcut::ZoomIn => t!("common.larger_font"),
+        Shortcut::ZoomOut => t!("common.smaller_font"),
+        Shortcut::ZoomReset => t!("keys.default_font_size"),
+        Shortcut::NewWindow => t!("common.new_window"),
+        Shortcut::Settings => t!("common.settings"),
+        Shortcut::Quit => t!("common.quit"),
     }
 }
 

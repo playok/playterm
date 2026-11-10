@@ -5062,6 +5062,11 @@ dependencies = [
 [[package]]
 name = "playterm-i18n"
 version = "0.7.0"
+dependencies = [
+ "serde",
+ "sys-locale",
+ "toml",
+]
 
 [[package]]
 name = "playterm-net"

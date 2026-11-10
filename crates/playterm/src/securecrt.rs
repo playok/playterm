@@ -58,6 +58,9 @@ pub fn parse(text: &str) -> Values {
 /// `Output Transformer Name`: `UTF-8`, a Korean code page, or `Default` (the PC's code page,
 /// detected here from the output).
 fn charset(name: &str) -> Charset {
+    if let Some(charset) = Charset::from_label(name) {
+        return charset;
+    }
     let lower = name.trim().to_lowercase();
     if lower.contains("utf-8") || lower.contains("utf8") {
         Charset::Utf8
@@ -86,10 +89,7 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
     };
     let mut notes = Vec::new();
     if has_saved_password(values) {
-        notes.push(
-            t("SecureCRT 가 암호화해 저장한 비밀번호는 가져오지 않습니다", "The password SecureCRT saved (encrypted) is not imported")
-                .into(),
-        );
+        notes.push(t!("securecrt.the_password_securecrt_saved_encrypted_is_not_imported").into());
     }
 
     let protocol_name = get("protocol name");
@@ -99,7 +99,7 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
         "serial" => Protocol::Serial,
         _ => {
             let other = protocol_name;
-            return done(Err(tr!("{other} 프로토콜은 지원하지 않습니다", "The {other} protocol is not supported")), notes);
+            return done(Err(tr!("common.the_protocol_is_not_supported", other = other)), notes);
         }
     };
     let base = match SessionProfile::new() {
@@ -117,16 +117,12 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
     if protocol == Protocol::Serial {
         let port = get("com port").trim().to_uppercase();
         if port.is_empty() {
-            return done(Err(t("시리얼 포트가 비어 있습니다", "The serial port is empty").into()), notes);
+            return done(Err(t!("common.the_serial_port_is_empty").into()), notes);
         }
         let mut s = SerialSettings { port, ..Default::default() };
         match number("baud rate") {
             Some(b) if b >= 110 => s.baud = b,
-            _ => notes.push(tr!(
-                "통신 속도를 읽지 못해 {}bps 로 두었습니다. 확인하세요",
-                "Could not read the speed, left at {} bps. Please check it",
-                s.baud
-            )),
+            _ => notes.push(tr!("common.could_not_read_the_speed_left_at_bps", arg0 = s.baud)),
         }
         if let Some(bits) = number("data bits").and_then(|b| u8::try_from(b).ok()).filter(|b| (5..=8).contains(b)) {
             s.data_bits = bits;
@@ -136,9 +132,7 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
             1 => SerialParity::Odd,
             2 => SerialParity::Even,
             _ => {
-                notes.push(
-                    t("Mark/Space 패리티는 지원하지 않아 None 으로 설정했습니다", "Mark/Space parity is not supported, set to None").into(),
-                );
+                notes.push(t!("common.mark_space_parity_is_not_supported_set_to").into());
                 SerialParity::None
             }
         };
@@ -160,7 +154,7 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
 
     let host = get("hostname").trim();
     if host.is_empty() {
-        return done(Err(t("호스트가 비어 있습니다", "The host is empty").into()), notes);
+        return done(Err(t!("common.the_host_is_empty").into()), notes);
     }
     p.host = host.to_owned();
     let port_key = if protocol == Protocol::Ssh { "[ssh2] port" } else { "port" };
@@ -169,21 +163,12 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
 
     let firewall = get("firewall name").trim();
     if !firewall.is_empty() && !firewall.eq_ignore_ascii_case("none") {
-        notes.push(tr!(
-            "방화벽·프록시 설정 '{firewall}' 은(는) 가져오지 않습니다",
-            "The firewall / proxy setting '{firewall}' is not imported"
-        ));
+        notes.push(tr!("securecrt.the_firewall_proxy_setting_is_not_imported", firewall = firewall));
     }
 
     if protocol == Protocol::Ssh {
         if p.username.is_empty() {
-            notes.push(
-                t(
-                    "사용자 이름이 없습니다. 가져온 뒤 사이트 관리에서 입력하세요",
-                    "No user name. Enter it in the Site Manager after the import",
-                )
-                .into(),
-            );
+            notes.push(t!("common.no_user_name_enter_it_in_the_site").into());
         }
         // `C:\keys\id_rsa::rawkey`: the path, then how SecureCRT reads the key.
         let key = ["identity filename v2", "identity filename"]
@@ -195,17 +180,11 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
         if !key.is_empty() && !global_key {
             p.identity_file = key.to_owned();
         } else if global_key {
-            notes.push(
-                t(
-                    "SecureCRT 전체 설정의 공개 키는 가져오지 않습니다. 사이트 관리에서 키 파일을 지정하세요",
-                    "SecureCRT's global public key is not imported. Set the key file in the Site Manager",
-                )
-                .into(),
-            );
+            notes.push(t!("securecrt.securecrt_s_global_public_key_is_not_imported").into());
         }
         let forwards = ["port forward table v2", "reverse forward table v2"].iter().any(|k| number(k).is_some_and(|n| n > 0));
         if forwards {
-            notes.push(t("포트 포워딩은 가져오지 않습니다", "Port forwardings are not imported").into());
+            notes.push(t!("common.port_forwardings_are_not_imported").into());
         }
     }
     done(Ok(p), notes)
@@ -225,7 +204,7 @@ pub fn load(dir: &Path) -> Result<Loaded, String> {
 
 fn load_with(dir: &Path, limits: Limits) -> Result<Loaded, String> {
     if !dir.is_dir() {
-        return Err(tr!("폴더가 없습니다: {}", "Folder not found: {}", dir.display()));
+        return Err(tr!("common.folder_not_found", arg0 = dir.display()));
     }
     let (files, truncated) = session_files(dir, ".ini", limits);
     let sessions = files
@@ -252,6 +231,14 @@ mod tests {
         S:\"Identity Filename V2\"=C:\\keys\\db_ed25519::rawkey\r\nD:\"Use Global Public Key\"=00000000\r\n\
         S:\"Emulation\"=Xterm\r\nS:\"Output Transformer Name\"=UTF-8\r\n\
         Z:\"Port Forward Table V2\"=00000001\r\n 3306|127.0.0.1|3306|db|0\r\nB:\"Keyword Set\"=00000002\r\n 00 01\r\n";
+
+    #[test]
+    fn imports_international_encoding_labels() {
+        assert_eq!(charset("Shift_JIS"), Charset::ShiftJis);
+        assert_eq!(charset("936"), Charset::Gbk);
+        assert_eq!(charset("windows-1251"), Charset::Windows1251);
+        assert_eq!(charset("unsupported"), Charset::Auto);
+    }
 
     #[test]
     fn parses_typed_lines() {

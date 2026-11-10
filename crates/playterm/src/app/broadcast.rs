@@ -57,7 +57,7 @@ impl PlaytermApp {
         let steps = match crate::macros::parse(&m.script) {
             Ok(steps) => steps,
             Err(e) => {
-                self.status = Some(tr!("매크로 '{}' 를 실행할 수 없습니다: {e}", "Cannot run macro '{}': {e}", m.name));
+                self.status = Some(tr!("app.broadcast.cannot_run_macro", arg0 = m.name, e = e));
                 return;
             }
         };
@@ -105,21 +105,9 @@ impl PlaytermApp {
 /// What the simultaneous-input indicator says with `others` tabs receiving, and its tooltip.
 pub(super) fn broadcast_status(others: usize) -> (String, &'static str) {
     if others == 0 {
-        (
-            t("동시 입력 켜짐 · 받을 탭 없음", "Typing into all tabs · no other tab").into(),
-            t(
-                "입력을 함께 받을 연결된 탭이 없습니다. 다른 탭을 연결하거나, 탭 우클릭 → 동시 입력에 포함으로 넣으세요.",
-                "No other connected tab takes the input. Connect another tab, or right-click a tab → Include in simultaneous input.",
-            ),
-        )
+        (t!("app.broadcast.typing_into_all_tabs_no_other_tab").into(), t!("app.broadcast.no_other_connected_tab_takes_the_input_connect"))
     } else {
-        (
-            tr!("동시 입력 켜짐 · 다른 탭 {others}개", "Typing into all tabs · {others} other"),
-            t(
-                "이 탭에 치는 내용이 주황색 테두리의 탭에도 똑같이 입력됩니다. 탭 우클릭으로 뺄 수 있습니다.",
-                "What you type here also goes to the tabs framed in orange. Right-click a tab to leave it out.",
-            ),
-        )
+        (tr!("app.broadcast.typing_into_all_tabs_other", others = others), t!("app.broadcast.what_you_type_here_also_goes_to_the"))
     }
 }
 
@@ -129,7 +117,7 @@ mod tests {
 
     #[test]
     fn broadcast_status_says_when_nothing_receives() {
-        playterm_i18n::set_english(false);
+        playterm_i18n::set_language(playterm_i18n::Language::KOREAN);
         assert!(broadcast_status(0).0.contains("받을 탭 없음"));
         assert!(broadcast_status(3).0.contains("다른 탭 3개"));
     }

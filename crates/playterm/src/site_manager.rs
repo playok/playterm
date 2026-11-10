@@ -84,14 +84,10 @@ impl FolderPrompt {
             FolderPrompt::New { parent, name, .. } | FolderPrompt::Rename { parent, name, .. } => {
                 let name = name.trim();
                 if name.is_empty() {
-                    return Err(t("폴더 이름을 입력하세요", "Enter a folder name").into());
+                    return Err(t!("site_manager.enter_a_folder_name").into());
                 }
                 if name.contains('/') {
-                    return Err(t(
-                        "폴더 이름에 / 는 쓸 수 없습니다 (폴더 단계 구분 기호)",
-                        "A folder name cannot contain / (it separates levels)",
-                    )
-                    .into());
+                    return Err(t!("site_manager.a_folder_name_cannot_contain_it_separates_levels").into());
                 }
                 let path = normalize_folder(&format!("{parent}/{name}"));
                 if let FolderPrompt::Rename { path: from, .. } = self
@@ -100,7 +96,7 @@ impl FolderPrompt {
                     return Ok(SiteManagerResult::Open);
                 }
                 if store.folders().contains(&path) {
-                    return Err(t("같은 이름의 폴더가 있습니다", "A folder with this name exists").into());
+                    return Err(t!("site_manager.a_folder_with_this_name_exists").into());
                 }
                 Ok(match self {
                     FolderPrompt::Rename { path: from, .. } => SiteManagerResult::RenameFolder { from: from.clone(), to: path },
@@ -262,7 +258,7 @@ impl SiteManager {
         let mut result = SiteManagerResult::Open;
         let folders = store.folders();
         let mut open = true;
-        let window = egui::Window::new(t("사이트 관리", "Site Manager"))
+        let window = egui::Window::new(t!("common.site_manager"))
             .id(egui::Id::unique("site-manager"))
             .open(&mut open)
             .collapsible(false)
@@ -291,9 +287,9 @@ impl SiteManager {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.weak(tr!("사이트 {}개", "{} sites", store.profiles().len()));
+                    ui.weak(tr!("site_manager.sites", arg0 = store.profiles().len()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(icon::button(icon::CLOSE, t("닫기", "Close"))).clicked() {
+                        if ui.add(icon::button(icon::CLOSE, t!("common.close"))).clicked() {
                             next = Some(Next::Close);
                         }
                     });
@@ -330,23 +326,20 @@ impl SiteManager {
         let dirty = self.is_dirty();
         // One line (#157): duplicate and delete as icons, named in their tooltips.
         ui.horizontal(|ui| {
-            if ui.add(icon::button(icon::NEW_SITE, t("새 사이트", "New site"))).clicked() {
+            if ui.add(icon::button(icon::NEW_SITE, t!("common.new_site"))).clicked() {
                 *next = Some(Next::Select(Some(Selection::New(self.target_folder()))));
             }
-            if ui.add(icon::button(icon::NEW_FOLDER, t("새 폴더", "New folder"))).clicked() {
+            if ui.add(icon::button(icon::NEW_FOLDER, t!("common.new_folder"))).clicked() {
                 self.folder_prompt = Some(FolderPrompt::new_in(self.target_folder()));
             }
-            if icon::named_icon_button(ui, icon::DUPLICATE, t("복제", "Duplicate"), site.is_some() && !dirty)
-                .on_disabled_hover_text(t(
-                    "저장된 사이트를 선택하세요 (변경 사항은 먼저 저장)",
-                    "Select a saved site (save your changes first)",
-                ))
+            if icon::named_icon_button(ui, icon::DUPLICATE, t!("common.duplicate"), site.is_some() && !dirty)
+                .on_disabled_hover_text(t!("site_manager.select_a_saved_site_save_your_changes_first"))
                 .clicked()
                 && let Some(id) = &site
             {
                 *result = SiteManagerResult::Duplicate(id.clone());
             }
-            if icon::named_icon_button(ui, icon::DELETE, t("삭제", "Delete"), self.selected.is_some()).clicked() {
+            if icon::named_icon_button(ui, icon::DELETE, t!("common.delete"), self.selected.is_some()).clicked() {
                 match &site {
                     Some(id) => *result = SiteManagerResult::Delete(id.clone()),
                     // An unsaved site is simply dropped.
@@ -355,20 +348,20 @@ impl SiteManager {
             }
         });
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.view, SiteView::Tree, t("트리", "Tree")).on_hover_text(t("폴더별로 보기", "By folder"));
-            ui.selectable_value(&mut self.view, SiteView::Grid, t("그리드", "Grid"))
-                .on_hover_text(t("사이트마다 한 줄: 종류, 접속 대상, 폴더", "One row per site: type, target, folder"));
-            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t("검색", "Search")).desired_width(f32::INFINITY));
+            ui.selectable_value(&mut self.view, SiteView::Tree, t!("site_manager.tree")).on_hover_text(t!("site_manager.by_folder"));
+            ui.selectable_value(&mut self.view, SiteView::Grid, t!("site_manager.grid"))
+                .on_hover_text(t!("site_manager.one_row_per_site_type_target_folder"));
+            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t!("common.search")).desired_width(f32::INFINITY));
         });
         ui.add_space(2.0);
 
         let folders = store.folders();
         egui::ScrollArea::both().id_salt("site-tree").auto_shrink([false, false]).show(ui, |ui| {
             if matches!(self.selected, Some(Selection::New(_))) {
-                let _ = ui.selectable_label(true, RichText::new(t("새 사이트", "New site")).italics());
+                let _ = ui.selectable_label(true, RichText::new(t!("common.new_site")).italics());
             }
             if store.profiles().is_empty() && folders.len() <= 1 {
-                ui.weak(t("저장된 사이트가 없습니다.\n[새 사이트] 로 추가하세요.", "No saved sites.\nAdd one with [New site]."));
+                ui.weak(t!("site_manager.no_saved_sites_add_one_with_new_site"));
             }
             let tree = site_tree::build(store, &self.filter);
             match self.view {
@@ -378,11 +371,11 @@ impl SiteManager {
             // The empty space below: new site or folder at the top level.
             let rest = ui.allocate_response(ui.available_size().max(egui::vec2(0.0, 24.0)), egui::Sense::click());
             rest.context_menu(|ui| {
-                if ui.button(t("새 사이트", "New site")).clicked() {
+                if ui.button(t!("common.new_site")).clicked() {
                     *next = Some(Next::Select(Some(Selection::New(String::new()))));
                     ui.close();
                 }
-                if ui.button(t("새 폴더…", "New folder…")).clicked() {
+                if ui.button(t!("site_manager.new_folder")).clicked() {
                     self.folder_prompt = Some(FolderPrompt::new_in(String::new()));
                     ui.close();
                 }
@@ -405,20 +398,20 @@ impl SiteManager {
                 self.focus_folder = Some(sub.path.clone());
             }
             response.context_menu(|ui| {
-                if ui.button(t("이 폴더에 새 사이트", "New site here")).clicked() {
+                if ui.button(t!("site_manager.new_site_here")).clicked() {
                     *next = Some(Next::Select(Some(Selection::New(sub.path.clone()))));
                     ui.close();
                 }
-                if ui.button(t("새 하위 폴더…", "New folder inside…")).clicked() {
+                if ui.button(t!("site_manager.new_folder_inside")).clicked() {
                     self.folder_prompt = Some(FolderPrompt::new_in(sub.path.clone()));
                     ui.close();
                 }
                 ui.separator();
-                if ui.button(t("이름 바꾸기…", "Rename…")).clicked() {
+                if ui.button(t!("site_manager.rename")).clicked() {
                     self.folder_prompt = Some(FolderPrompt::rename(&sub.path));
                     ui.close();
                 }
-                if ui.button(t("삭제…", "Delete…")).clicked() {
+                if ui.button(t!("site_manager.delete")).clicked() {
                     self.folder_prompt = Some(FolderPrompt::Delete { path: sub.path.clone() });
                     ui.close();
                 }
@@ -461,10 +454,10 @@ impl SiteManager {
         sites.sort_by_key(|p| (p.folder.to_lowercase(), p.display_name().to_lowercase()));
         egui::Grid::new("site-grid").num_columns(5).striped(true).spacing([10.0, 4.0]).show(ui, |ui| {
             ui.label("");
-            ui.strong(t("이름", "Name"));
-            ui.strong(t("접속 대상", "Target"));
-            ui.strong(t("사용자", "User"));
-            ui.strong(t("폴더", "Folder"));
+            ui.strong(t!("common.name"));
+            ui.strong(t!("site_manager.target"));
+            ui.strong(t!("common.user"));
+            ui.strong(t!("common.folder"));
             ui.end_row();
             for p in sites {
                 let selected = self.selected_site() == Some(p.id.as_str());
@@ -489,7 +482,7 @@ impl SiteManager {
         next: &mut Option<Next>,
         result: &mut SiteManagerResult,
     ) {
-        let response = response.on_hover_text(tr!("{}  (더블클릭: 연결)", "{}  (double-click: connect)", sidebar::summary(p)));
+        let response = response.on_hover_text(tr!("site_manager.double_click_connect", arg0 = sidebar::summary(p)));
         if response.clicked() && !selected {
             *next = Some(Next::Select(Some(Selection::Site(p.id.clone()))));
         }
@@ -501,19 +494,19 @@ impl SiteManager {
         // Changing other sites is fine; the one being edited must be saved first.
         let free = idle || !selected;
         response.context_menu(|ui| {
-            if ui.add_enabled(idle, icon::button(icon::CONNECT, t("연결", "Connect"))).clicked() {
+            if ui.add_enabled(idle, icon::button(icon::CONNECT, t!("common.connect"))).clicked() {
                 *result = SiteManagerResult::Connect(p.id.clone());
                 ui.close();
             }
-            if ui.add_enabled(idle, icon::button(icon::DUPLICATE, t("복제", "Duplicate"))).clicked() {
+            if ui.add_enabled(idle, icon::button(icon::DUPLICATE, t!("common.duplicate"))).clicked() {
                 *result = SiteManagerResult::Duplicate(p.id.clone());
                 ui.close();
             }
             ui.add_enabled_ui(free, |ui| {
-                ui.menu_button(t("폴더로 이동", "Move to folder"), |ui| {
+                ui.menu_button(t!("site_manager.move_to_folder"), |ui| {
                     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                         for folder in folders {
-                            let label = if folder.is_empty() { t("(최상위)", "(top level)").to_owned() } else { folder.clone() };
+                            let label = if folder.is_empty() { t!("site_manager.top_level").to_owned() } else { folder.clone() };
                             if ui.add_enabled(folder != &p.folder, Button::new(label)).clicked() {
                                 *result = SiteManagerResult::MoveSite { id: p.id.clone(), folder: folder.clone() };
                                 ui.close();
@@ -523,7 +516,7 @@ impl SiteManager {
                 });
             });
             ui.separator();
-            if ui.add_enabled(free, icon::button(icon::DELETE, t("삭제", "Delete"))).clicked() {
+            if ui.add_enabled(free, icon::button(icon::DELETE, t!("common.delete"))).clicked() {
                 *result = SiteManagerResult::Delete(p.id.clone());
                 ui.close();
             }
@@ -545,11 +538,11 @@ impl SiteManager {
                 ui.set_width(360.0);
                 match prompt {
                     FolderPrompt::New { parent, name, error } | FolderPrompt::Rename { parent, name, error, .. } => {
-                        ui.heading(if renaming { t("폴더 이름 바꾸기", "Rename folder") } else { t("새 폴더", "New folder") });
+                        ui.heading(if renaming { t!("site_manager.rename_folder") } else { t!("common.new_folder") });
                         if !parent.is_empty() {
-                            ui.weak(tr!("위치: {parent}", "In: {parent}"));
+                            ui.weak(tr!("site_manager.in", parent = parent));
                         }
-                        let field = ui.add(egui::TextEdit::singleline(name).hint_text(t("폴더 이름", "Folder name")));
+                        let field = ui.add(egui::TextEdit::singleline(name).hint_text(t!("site_manager.folder_name")));
                         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                         if !enter {
                             field.request_focus();
@@ -557,7 +550,7 @@ impl SiteManager {
                         if let Some(e) = error {
                             ui.colored_label(ui.visuals().error_fg_color, e.as_str());
                         }
-                        let ok = icon::primary(ui, icon::OK, t("확인", "OK"));
+                        let ok = icon::primary(ui, icon::OK, t!("common.ok"));
                         let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
                         if main.clicked() || enter {
                             answer = Some(true);
@@ -567,20 +560,16 @@ impl SiteManager {
                         }
                     }
                     FolderPrompt::Delete { path } => {
-                        ui.heading(t("폴더 삭제", "Delete folder"));
+                        ui.heading(t!("site_manager.delete_folder"));
                         let parent = parent_folder(path);
                         let up = if parent.is_empty() {
-                            t("최상위로", "the top level").to_owned()
+                            t!("site_manager.the_top_level").to_owned()
                         } else {
-                            tr!("'{}' 폴더로", "'{}'", parent)
+                            tr!("site_manager.message", arg0 = parent)
                         };
-                        ui.label(tr!("'{}' 폴더를 삭제할까요?", "Delete the folder '{}'?", folder_name(path)));
-                        ui.weak(tr!(
-                            "안의 사이트 {}개와 하위 폴더는 지워지지 않고 {up} 옮겨집니다.",
-                            "Its {} sites and the folders inside it are not deleted: they move to {up}.",
-                            store.sites_in_folder(path)
-                        ));
-                        let delete = icon::danger(ui, icon::DELETE, t("삭제", "Delete"));
+                        ui.label(tr!("site_manager.delete_the_folder", arg0 = folder_name(path)));
+                        ui.weak(tr!("site_manager.its_sites_and_the_folders_inside_it_are", arg0 = store.sites_in_folder(path), up = up));
+                        let delete = icon::danger(ui, icon::DELETE, t!("common.delete"));
                         let (main, cancel) = icon::ok_cancel_row(ui, delete, true, icon::cancel());
                         if main.clicked() {
                             answer = Some(true);
@@ -623,24 +612,19 @@ impl SiteManager {
         let site = self.selected_site().map(str::to_owned);
         let Some(form) = &mut self.form else {
             ui.add_space(40.0);
-            ui.vertical_centered(|ui| {
-                ui.weak(t("왼쪽에서 사이트를 선택하거나 [새 사이트] 를 누르세요.", "Select a site on the left or click [New site]."))
-            });
+            ui.vertical_centered(|ui| ui.weak(t!("site_manager.select_a_site_on_the_left_or_click")));
             return;
         };
 
         let dirty = form.is_dirty();
         ui.horizontal(|ui| {
-            let title = if is_new && form.profile.name.trim().is_empty() {
-                t("새 사이트", "New site").to_owned()
-            } else {
-                form.profile.display_name()
-            };
+            let title =
+                if is_new && form.profile.name.trim().is_empty() { t!("common.new_site").to_owned() } else { form.profile.display_name() };
             ui.strong(title);
             if is_new {
-                ui.weak(t("(저장 안 됨)", "(not saved)"));
+                ui.weak(t!("site_manager.not_saved"));
             } else if dirty {
-                ui.weak(t("(수정됨)", "(modified)"));
+                ui.weak(t!("site_manager.modified"));
             }
         });
         ui.separator();
@@ -654,9 +638,9 @@ impl SiteManager {
         let mut connect = false;
         let mut revert = false;
         ui.horizontal(|ui| {
-            connect = ui.add(icon::button(icon::CONNECT, t("연결", "Connect"))).clicked();
-            submit |= ui.add_enabled(dirty || is_new, icon::primary(ui, icon::SAVE, t("저장", "Save"))).clicked();
-            revert = ui.add_enabled(dirty && !is_new, icon::button(icon::REVERT, t("되돌리기", "Revert"))).clicked();
+            connect = ui.add(icon::button(icon::CONNECT, t!("common.connect"))).clicked();
+            submit |= ui.add_enabled(dirty || is_new, icon::primary(ui, icon::SAVE, t!("common.save"))).clicked();
+            revert = ui.add_enabled(dirty && !is_new, icon::button(icon::REVERT, t!("site_manager.revert"))).clicked();
         });
 
         if connect {
@@ -683,7 +667,7 @@ impl SiteManager {
     fn unsaved_prompt(&mut self, ctx: &egui::Context, store: &ProfileStore, has_secret: SecretCheck<'_>) -> Option<SiteManagerResult> {
         let next = self.unsaved.clone()?;
         let name = match (&self.selected, &self.form) {
-            (Some(Selection::New(_)), Some(f)) if f.profile.name.trim().is_empty() => t("새 사이트", "New site").to_owned(),
+            (Some(Selection::New(_)), Some(f)) if f.profile.name.trim().is_empty() => t!("common.new_site").to_owned(),
             (_, Some(f)) => f.profile.display_name(),
             _ => String::new(),
         };
@@ -697,17 +681,17 @@ impl SiteManager {
         let modal =
             egui::Modal::new(egui::Id::unique("site-manager-unsaved")).backdrop_color(crate::app::theme::MODAL_BACKDROP).show(ctx, |ui| {
                 ui.set_width(340.0);
-                ui.heading(t("저장하지 않은 변경 사항", "Unsaved changes"));
-                ui.label(tr!("'{name}' 의 변경 사항을 저장할까요?", "Save the changes to '{name}'?"));
+                ui.heading(t!("site_manager.unsaved_changes"));
+                ui.label(tr!("site_manager.save_the_changes_to", name = name));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.add(icon::primary(ui, icon::SAVE, t("저장", "Save"))).clicked() {
+                    if ui.add(icon::primary(ui, icon::SAVE, t!("common.save"))).clicked() {
                         answer = Some(Answer::Save);
                     }
-                    if ui.add(icon::button(icon::DONT_SAVE, t("저장 안 함", "Don't save"))).clicked() {
+                    if ui.add(icon::button(icon::DONT_SAVE, t!("site_manager.don_t_save"))).clicked() {
                         answer = Some(Answer::Discard);
                     }
-                    if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
+                    if ui.add(icon::button(icon::CANCEL, t!("common.cancel"))).clicked() {
                         answer = Some(Answer::Cancel);
                     }
                 });

@@ -38,7 +38,7 @@ pub struct FontChoice {
 impl FontChoice {
     /// The name to show: Korean when the UI is Korean and the font has a Korean name.
     pub fn display(&self) -> &str {
-        if playterm_i18n::english() { &self.key } else { &self.name }
+        if playterm_i18n::language() != playterm_i18n::Language::KOREAN { &self.key } else { &self.name }
     }
 
     pub fn matches(&self, name: &str) -> bool {
@@ -387,9 +387,9 @@ pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
     let choice = find(font).or_else(|| {
         let found = if font.trim().eq_ignore_ascii_case(fallback) { None } else { find(fallback) };
         error = Some(match &found {
-            Some(_) => playterm_i18n::tr!("'{font}' 글꼴을 찾을 수 없어 {fallback} 를 씁니다", "Font '{font}' not found, using {fallback}"),
+            Some(_) => playterm_i18n::tr!("fonts.font_not_found_using", fallback = fallback, font = font),
             None => {
-                playterm_i18n::tr!("'{font}' 글꼴을 찾을 수 없어 내장 글꼴을 씁니다", "Font '{font}' not found, using the built-in font")
+                playterm_i18n::tr!("fonts.font_not_found_using_the_built_in_font", font = font)
             }
         });
         found
@@ -413,7 +413,7 @@ pub fn install(ctx: &egui::Context, font: &str) -> Result<(), String> {
         if add(&mut defs, "term", &c.regular) {
             regular.push("term".to_owned());
         } else {
-            error = Some(playterm_i18n::tr!("글꼴을 불러올 수 없습니다: {font}", "Cannot load the font: {font}"));
+            error = Some(playterm_i18n::tr!("fonts.cannot_load_the_font", font = font));
         }
         if let Some(b) = &c.bold
             && add(&mut defs, "term-bold", b)

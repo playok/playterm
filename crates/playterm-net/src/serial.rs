@@ -22,12 +22,12 @@ fn serial_builder(settings: &SerialSettings) -> anyhow::Result<tokio_serial::Ser
         6 => DataBits::Six,
         7 => DataBits::Seven,
         8 => DataBits::Eight,
-        n => anyhow::bail!(tr!("데이터 비트는 5~8 이어야 합니다 ({n})", "Data bits must be 5 to 8 ({n})")),
+        n => anyhow::bail!(tr!("serial.data_bits_must_be_5_to_8", n = n)),
     };
     let stop_bits = match settings.stop_bits {
         1 => StopBits::One,
         2 => StopBits::Two,
-        n => anyhow::bail!(tr!("정지 비트는 1 또는 2 여야 합니다 ({n})", "Stop bits must be 1 or 2 ({n})")),
+        n => anyhow::bail!(tr!("serial.stop_bits_must_be_1_or_2", n = n)),
     };
     let parity = match settings.parity {
         SerialParity::None => Parity::None,
@@ -90,11 +90,11 @@ impl SendBreak for tokio_serial::SerialStream {
 pub(crate) async fn run(params: ConnectParams, commands: mpsc::UnboundedReceiver<SessionCommand>, sink: EventSink) -> anyhow::Result<()> {
     let settings = &params.serial;
     if settings.port.is_empty() {
-        anyhow::bail!(t("시리얼 포트를 지정하세요", "Choose a serial port"));
+        anyhow::bail!(t!("serial.choose_a_serial_port"));
     }
     let stream = {
         use tokio_serial::SerialPortBuilderExt as _;
-        serial_builder(settings)?.open_native_async().with_context(|| tr!("{} 을(를) 열 수 없습니다", "Cannot open {}", settings.port))?
+        serial_builder(settings)?.open_native_async().with_context(|| tr!("common.cannot_open", arg0 = settings.port))?
     };
     sink.send(SessionEvent::Connected);
     let idle = IdleTimer::new(&params.keepalive, false, &sink);
@@ -115,10 +115,7 @@ where
     loop {
         tokio::select! {
             n = stream.read(&mut buf) => {
-                let n = n.context(t(
-                    "수신 오류 (장치가 분리되었을 수 있습니다)",
-                    "Receive error (the device may have been disconnected)",
-                ))?;
+                let n = n.context(t!("serial.receive_error_the_device_may_have_been_disconnected"))?;
                 if n == 0 {
                     // Some drivers report an empty read on timeout; the line is still open.
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -132,16 +129,13 @@ where
                     idle.touch();
                 }
                 Some(SessionCommand::SendBreak) => {
-                    stream.send_break().await.context(t("BREAK 신호를 보낼 수 없습니다", "Cannot send BREAK"))?;
-                    sink.notice(t("BREAK 신호를 보냈습니다", "Sent BREAK"));
+                    stream.send_break().await.context(t!("serial.cannot_send_break"))?;
+                    sink.notice(t!("common.sent_break"));
                 }
                 Some(SessionCommand::Resize { .. } | SessionCommand::Rdp(_)) => {}
                 Some(SessionCommand::ShellDir) => sink.send(SessionEvent::ShellDir(None)),
                 Some(SessionCommand::OpenSftp) => {
-                    sink.send(SessionEvent::Sftp(Err(t(
-                        "시리얼 세션에서는 SFTP를 쓸 수 없습니다",
-                        "SFTP is not available in serial sessions",
-                    )
+                    sink.send(SessionEvent::Sftp(Err(t!("serial.sftp_is_not_available_in_serial_sessions")
                     .into())));
                 }
                 Some(SessionCommand::Close) | None => return Ok(()),

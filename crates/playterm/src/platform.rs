@@ -5,11 +5,11 @@ use playterm_i18n::t;
 /// The system's file manager: Explorer, Finder, or a generic name.
 pub fn file_manager() -> &'static str {
     if cfg!(windows) {
-        t("탐색기", "Explorer")
+        t!("platform.explorer")
     } else if cfg!(target_os = "macos") {
         "Finder"
     } else {
-        t("파일 관리자", "the file manager")
+        t!("platform.the_file_manager")
     }
 }
 

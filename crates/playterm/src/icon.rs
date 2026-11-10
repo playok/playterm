@@ -131,7 +131,7 @@ pub fn ok_cancel_row(
 
 /// Cancel, as every dialog has it.
 pub fn cancel<'a>() -> Button<'a> {
-    button(CANCEL, playterm_i18n::t("취소", "Cancel"))
+    button(CANCEL, playterm_i18n::t!("common.cancel"))
 }
 
 /// Smallest size of a button that shows only an icon: the recommended minimum target, so a

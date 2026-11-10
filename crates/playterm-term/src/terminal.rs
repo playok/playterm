@@ -483,6 +483,19 @@ mod tests {
     }
 
     #[test]
+    fn international_charsets_render_text_and_vt_commands() {
+        for (charset, text) in [(Charset::ShiftJis, "日本語"), (Charset::Gb18030, "中文"), (Charset::Windows1251, "Привет")] {
+            let mut terminal = Terminal::new(30, 5, charset, 100);
+            let bytes = terminal.encode_input(&format!("\x1b[31m{text}\x1b[0m\r\nnext"));
+            for byte in bytes {
+                terminal.feed(&[byte]);
+            }
+            assert_eq!(row_text(&terminal, 0), text, "{charset}");
+            assert_eq!(row_text(&terminal, 1), "next", "{charset}");
+        }
+    }
+
+    #[test]
     fn prints_text_and_moves_cursor() {
         let mut t = Terminal::new(20, 5, Charset::Utf8, 100);
         t.feed(b"hello\r\nworld");

@@ -48,10 +48,7 @@ use crate::session::{ConnectParams, EventSink, PromptField, SessionCommand, Sess
 /// memory, up to 65535 x 65535) ends the session instead of the whole program.
 fn check_desktop_size(width: u16, height: u16) -> anyhow::Result<()> {
     if width == 0 || height == 0 || width > MAX_DESKTOP_SIDE || height > MAX_DESKTOP_SIDE {
-        bail!(tr!(
-            "서버가 지원할 수 없는 화면 크기를 보냈습니다 ({width} x {height}, 최대 {MAX_DESKTOP_SIDE})",
-            "The server sent a desktop size that cannot be shown ({width} x {height}, at most {MAX_DESKTOP_SIDE})"
-        ));
+        bail!(tr!("rdp.the_server_sent_a_desktop_size_that_cannot", MAX_DESKTOP_SIDE = MAX_DESKTOP_SIDE, height = height, width = width));
     }
     Ok(())
 }
@@ -476,7 +473,7 @@ async fn run(params: ConnectParams, mut commands: mpsc::UnboundedReceiver<Sessio
         match ClipboardThread::start(ClipboardProxy(clip_tx)) {
             Ok(c) => Some(c),
             Err(e) => {
-                sink.notice(tr!("클립보드 공유를 시작하지 못했습니다: {e}", "Clipboard sharing could not start: {e}"));
+                sink.notice(tr!("rdp.clipboard_sharing_could_not_start", e = e));
                 None
             }
         }
@@ -508,14 +505,14 @@ async fn run(params: ConnectParams, mut commands: mpsc::UnboundedReceiver<Sessio
                 let target = if params.username.is_empty() { params.host.clone() } else { format!("{}@{}", params.username, params.host) };
                 let answers = sink
                     .prompt(
-                        tr!("{target} 비밀번호", "Password for {target}"),
+                        tr!("common.password_for", target = target),
                         String::new(),
-                        vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
+                        vec![PromptField { label: t!("common.password").into(), echo: false }],
                         Some(&params.username),
                         true,
                     )
                     .await
-                    .ok_or_else(|| anyhow!(t("인증이 취소되었습니다", "Authentication cancelled")))?;
+                    .ok_or_else(|| anyhow!(t!("common.authentication_cancelled")))?;
                 Zeroizing::new(answers.into_iter().next().unwrap_or_default())
             }
         };
@@ -523,16 +520,16 @@ async fn run(params: ConnectParams, mut commands: mpsc::UnboundedReceiver<Sessio
         let logins = Logins { password: &current, gateway_password: gateway_password.as_deref().map(String::as_str) };
         match session(&params, logins, factory, &mut commands, clip, &sink).await? {
             Outcome::Ended => return Ok(()),
-            Outcome::BadPassword => sink.notice(t("인증 실패, 다시 시도하세요.", "Authentication failed, try again.")),
+            Outcome::BadPassword => sink.notice(t!("common.authentication_failed_try_again")),
             Outcome::BadGatewayPassword => {
-                sink.notice(t("RD 게이트웨이 인증 실패, 다시 시도하세요.", "RD Gateway authentication failed, try again."));
+                sink.notice(t!("rdp.rd_gateway_authentication_failed_try_again"));
                 gateway_password = None;
                 // The site's password was not the problem.
                 password = Some(current);
             }
         }
     }
-    bail!(t("인증 실패: 시도 횟수를 초과했습니다", "Authentication failed: too many attempts"))
+    bail!(t!("common.authentication_failed_too_many_attempts"))
 }
 
 /// Status codes in a CredSSP error that mean "wrong user name or password".
@@ -563,19 +560,17 @@ fn classify(e: &ConnectorError) -> Failure {
         return Failure::BadPassword;
     }
     let reason = match status {
-        Some(0xC000_0072) => Some(t("계정이 사용 중지되어 있습니다", "The account is disabled")),
-        Some(0xC000_0234) => Some(t("계정이 잠겨 있습니다", "The account is locked out")),
-        Some(0xC000_0071) => Some(t("비밀번호가 만료되었습니다", "The password has expired")),
-        Some(0xC000_0224) => {
-            Some(t("비밀번호를 바꿔야 합니다 (서버에서 먼저 변경하세요)", "The password must be changed (change it on the server first)"))
-        }
-        Some(0xC000_006E) => Some(t("계정 제한으로 로그온할 수 없습니다", "Logon is not allowed by an account restriction")),
-        Some(0xC000_015B) => Some(t("이 계정은 원격 로그온 권한이 없습니다", "The account is not allowed to log on remotely")),
+        Some(0xC000_0072) => Some(t!("rdp.the_account_is_disabled")),
+        Some(0xC000_0234) => Some(t!("rdp.the_account_is_locked_out")),
+        Some(0xC000_0071) => Some(t!("rdp.the_password_has_expired")),
+        Some(0xC000_0224) => Some(t!("rdp.the_password_must_be_changed_change_it_on")),
+        Some(0xC000_006E) => Some(t!("rdp.logon_is_not_allowed_by_an_account_restriction")),
+        Some(0xC000_015B) => Some(t!("rdp.the_account_is_not_allowed_to_log_on")),
         _ => None,
     };
     match reason {
         Some(r) => Failure::Error(r.into()),
-        None => Failure::Error(tr!("NLA 인증 오류: {err}", "NLA authentication error: {err}")),
+        None => Failure::Error(tr!("rdp.nla_authentication_error", err = err)),
     }
 }
 
@@ -683,13 +678,8 @@ fn device_redirection(rdp: &RdpSettings) -> anyhow::Result<Option<ironrdp_rdpdr:
     let mut drives = Vec::new();
     if let Some(folder) = rdp.shared_folder() {
         let folder = Path::new(folder);
-        let drive = RedirectedDrive::new(FIRST_NAMED_DRIVE_DEVICE_ID, drive_name(folder), folder, rdp.drive_read_only).map_err(|_| {
-            anyhow!(tr!(
-                "공유 폴더를 열 수 없습니다: {} (C:\\폴더 처럼 드라이브 문자로 시작하는 폴더여야 합니다)",
-                "Cannot open the shared folder: {} (it must be a folder on a drive letter, like C:\\folder)",
-                folder.display()
-            ))
-        })?;
+        let drive = RedirectedDrive::new(FIRST_NAMED_DRIVE_DEVICE_ID, drive_name(folder), folder, rdp.drive_read_only)
+            .map_err(|_| anyhow!(tr!("rdp.cannot_open_the_shared_folder_it_must_be", arg0 = folder.display())))?;
         drives.push(drive);
     }
     let factory = WindowsRdpdrBackendFactory::from_drives(drives).map_err(|e| anyhow!(e))?.with_default_printer(rdp.printer);
@@ -738,7 +728,7 @@ struct GatewayAuthFailed;
 
 impl std::fmt::Display for GatewayAuthFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(t("RD 게이트웨이 인증 실패", "RD Gateway authentication failed"))
+        f.write_str(t!("rdp.rd_gateway_authentication_failed"))
     }
 }
 
@@ -762,15 +752,15 @@ fn apply_gateway_policy(rdp: &mut RdpSettings, flags: Option<u32>) -> Vec<&'stat
     let mut off = Vec::new();
     if (all || flags & GATEWAY_REDIR_DISABLE_CLIPBOARD != 0) && rdp.clipboard {
         rdp.clipboard = false;
-        off.push(t("클립보드", "clipboard"));
+        off.push(t!("rdp.clipboard"));
     }
     if (all || flags & GATEWAY_REDIR_DISABLE_DRIVE != 0) && rdp.shared_folder().is_some() {
         rdp.drive_folder.clear();
-        off.push(t("공유 폴더", "shared folder"));
+        off.push(t!("rdp.shared_folder"));
     }
     if (all || flags & GATEWAY_REDIR_DISABLE_PRINTER != 0) && rdp.printer {
         rdp.printer = false;
-        off.push(t("프린터", "printer"));
+        off.push(t!("rdp.printer"));
     }
     off
 }
@@ -783,18 +773,14 @@ fn apply_gateway_policy(rdp: &mut RdpSettings, flags: Option<u32>) -> Vec<&'stat
 async fn ask_gateway_password(sink: &EventSink, user: &str, gateway: &str) -> anyhow::Result<Zeroizing<String>> {
     let answers = sink
         .prompt(
-            tr!("RD 게이트웨이 {user}@{gateway} 비밀번호", "Password for RD Gateway {user}@{gateway}"),
-            t(
-                "게이트웨이 사용자는 사이트 설정의 '게이트웨이 사용자' 에서 바꿀 수 있습니다.",
-                "The gateway user is changed in the site's settings ('Gateway user').",
-            )
-            .into(),
-            vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
+            tr!("rdp.password_for_rd_gateway", gateway = gateway, user = user),
+            t!("rdp.the_gateway_user_is_changed_in_the_site").into(),
+            vec![PromptField { label: t!("common.password").into(), echo: false }],
             None,
             false,
         )
         .await
-        .ok_or_else(|| anyhow!(t("인증이 취소되었습니다", "Authentication cancelled")))?;
+        .ok_or_else(|| anyhow!(t!("common.authentication_cancelled")))?;
     Ok(Zeroizing::new(answers.into_iter().next().unwrap_or_default()))
 }
 
@@ -834,13 +820,12 @@ async fn open_gateway(
         Ok(connected) => connected,
         Err(e) if matches!(e.kind(), ironrdp_mstsgu::GwErrorKind::HttpStatus(401)) => return Err(GatewayAuthFailed.into()),
         Err(e) => {
-            return Err(anyhow!(e.to_string())
-                .context(tr!("RD 게이트웨이 {gateway} 를 거쳐 연결할 수 없습니다", "Cannot connect through RD Gateway {gateway}")));
+            return Err(anyhow!(e.to_string()).context(tr!("rdp.cannot_connect_through_rd_gateway", gateway = gateway)));
         }
     };
     let off = apply_gateway_policy(rdp, client.tunnel_policy().redirection_flags);
     if !off.is_empty() {
-        sink.notice(tr!("RD 게이트웨이 정책으로 꺼짐: {}", "Turned off by the RD Gateway's policy: {}", off.join(", ")));
+        sink.notice(tr!("rdp.turned_off_by_the_rd_gateway_s_policy", arg0 = off.join(", ")));
     }
     Ok((Box::new(client), addr))
 }
@@ -871,10 +856,7 @@ async fn connect(
     // A shared folder that is gone (a removed USB drive, say) is left out rather than shown as a
     // broken drive, and does not keep the desktop from connecting.
     if let Some(folder) = missing_folder(&rdp) {
-        sink.notice(tr!(
-            "공유 폴더가 없어 공유하지 않고 연결합니다: {folder}",
-            "The shared folder does not exist; connecting without it: {folder}"
-        ));
+        sink.notice(tr!("rdp.the_shared_folder_does_not_exist_connecting_without", folder = folder));
         rdp.drive_folder.clear();
     }
     let params = &ConnectParams { rdp, ..params.clone() };
@@ -892,7 +874,7 @@ async fn connect(
         ironrdp_tls::CertificateValidation::DangerouslyAcceptInvalidCertificate,
     )
     .await
-    .context(t("TLS 연결 실패", "TLS connection failed"))?;
+    .context(t!("rdp.tls_connection_failed"))?;
     check_certificate(params, &cert, sink).await?;
 
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
@@ -923,19 +905,13 @@ async fn check_certificate(params: &ConnectParams, cert: &x509_cert::Certificate
     let target = format!("{}:{}", params.host, params.port);
     match check_known(&file, &target, &fp)? {
         Known::Match => Ok(()),
-        Known::Changed(line) => bail!(tr!(
-            "경고: 서버 인증서가 변경되었습니다! 중간자 공격일 수 있습니다. \
-             정상적인 변경이라면 {} 의 {line}번째 줄을 삭제하세요.",
-            "WARNING: the server certificate has changed! This could be a man-in-the-middle attack. \
-             If the change is legitimate, delete line {line} of {}.",
-            file.display()
-        )),
+        Known::Changed(line) => bail!(tr!("rdp.warning_the_server_certificate_has_changed_this_could", arg0 = file.display(), line = line)),
         Known::Unknown => {
             let accepted = sink.confirm_certificate(&params.host, params.port, fp.clone()).await;
             if !accepted {
-                bail!(t("서버 인증서를 신뢰하지 않아 연결하지 않았습니다", "The server certificate was not trusted"));
+                bail!(t!("rdp.the_server_certificate_was_not_trusted"));
             }
-            learn_known(&file, &target, &fp).context(t("known_rdp_hosts 저장 실패", "Could not save known_rdp_hosts"))?;
+            learn_known(&file, &target, &fp).context(t!("rdp.could_not_save_known_rdp_hosts"))?;
             Ok(())
         }
     }
@@ -1002,7 +978,7 @@ async fn session(
                     Ok(p) => p,
                     // The server closed the connection after our goodbye.
                     Err(_) if closing.is_some() => break 'session None,
-                    Err(e) => return Err(anyhow!(e).context(t("수신 오류", "Receive error"))),
+                    Err(e) => return Err(anyhow!(e).context(t!("common.receive_error"))),
                 };
                 stage.process(&mut lock(&screen).image, action, &payload, None)?
             }
@@ -1018,7 +994,7 @@ async fn session(
                 Some(SessionCommand::Input(bytes)) => input(&mut stage, &screen, &bytes_to_inputs(&bytes))?,
                 Some(SessionCommand::Resize { .. }) => Vec::new(),
                 Some(SessionCommand::SendBreak) => {
-                    sink.notice(t("RDP 세션에서는 BREAK 신호를 지원하지 않습니다", "RDP sessions do not support BREAK"));
+                    sink.notice(t!("rdp.rdp_sessions_do_not_support_break"));
                     Vec::new()
                 }
                 Some(SessionCommand::ShellDir) => {
@@ -1026,10 +1002,7 @@ async fn session(
                     Vec::new()
                 }
                 Some(SessionCommand::OpenSftp) => {
-                    sink.send(SessionEvent::Sftp(Err(t(
-                        "RDP 세션에서는 SFTP를 쓸 수 없습니다",
-                        "SFTP is not available in RDP sessions",
-                    )
+                    sink.send(SessionEvent::Sftp(Err(t!("rdp.sftp_is_not_available_in_rdp_sessions")
                     .into())));
                     Vec::new()
                 }
@@ -1080,7 +1053,7 @@ async fn session(
         for output in outputs {
             match output {
                 ActiveStageOutput::ResponseFrame(frame) => {
-                    writer.write_all(&frame).await.context(t("전송 오류", "Send error"))?;
+                    writer.write_all(&frame).await.context(t!("rdp.send_error"))?;
                 }
                 ActiveStageOutput::GraphicsUpdate(r) => {
                     // Inclusive in the PDU; exclusive here.
@@ -1142,7 +1115,7 @@ async fn session(
         }
     };
     if let Some(reason) = reason.filter(|_| ended_by_server) {
-        sink.notice(tr!("원격 데스크톱 종료: {}", "Remote desktop ended: {}", reason.description()));
+        sink.notice(tr!("rdp.remote_desktop_ended", arg0 = reason.description()));
     }
     Ok(Outcome::Ended)
 }
@@ -1159,11 +1132,7 @@ async fn interruptible<T>(
     tokio::select! {
         result = tokio::time::timeout(limit, step) => match result {
             Ok(result) => result.map(Some),
-            Err(_) => Err(anyhow!(tr!(
-                "원격 데스크톱이 {}초 안에 다시 활성화되지 않았습니다",
-                "The remote desktop did not reactivate within {} seconds",
-                limit.as_secs()
-            ))),
+            Err(_) => Err(anyhow!(tr!("rdp.the_remote_desktop_did_not_reactivate_within_seconds", arg0 = limit.as_secs()))),
         },
         () = sink.cancelled() => Ok(None),
         () = async { tokio::time::sleep_until(closing.unwrap_or_else(tokio::time::Instant::now)).await }, if closing.is_some() => Ok(None),

@@ -7,27 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fsutil::write_atomic;
 
-/// Language of the user interface.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Language {
-    #[default]
-    #[serde(rename = "ko")]
-    Korean,
-    #[serde(rename = "en")]
-    English,
-}
-
-impl Language {
-    pub const ALL: [Language; 2] = [Language::Korean, Language::English];
-
-    /// The language's own name, the same in either UI language.
-    pub fn name(self) -> &'static str {
-        match self {
-            Language::Korean => "한국어",
-            Language::English => "English",
-        }
-    }
-}
+pub use playterm_i18n::Language;
 
 /// Light or dark windows, menus and dialogs (the terminal has its own color theme).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,7 +276,7 @@ impl Default for AppSettings {
             toolbar: true,
             status_bar: true,
             compose_bar: false,
-            language: Language::Korean,
+            language: Language::SYSTEM,
             ui_theme: UiTheme::System,
             prevent_sleep: PreventSleep::System,
             prevent_screensaver: false,
@@ -318,6 +298,23 @@ impl Default for AppSettings {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn language_preferences_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        for language in Language::ALL {
+            let settings = AppSettings { language, ..Default::default() };
+            settings.save(&path).unwrap();
+            assert_eq!(AppSettings::load(&path).unwrap().language, language);
+        }
+        for (value, expected) in [("ko", Language::KOREAN), ("en", Language::ENGLISH)] {
+            std::fs::write(&path, format!("language = \"{value}\"\n")).unwrap();
+            assert_eq!(AppSettings::load(&path).unwrap().language, expected);
+        }
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(AppSettings::load(&path).unwrap().language, Language::SYSTEM);
+    }
+
     #[test]
     fn malformed_settings_are_preserved_before_defaults_can_be_saved() {
         let dir = tempfile::tempdir().unwrap();
@@ -373,7 +370,7 @@ mod tests {
             toolbar: false,
             status_bar: false,
             compose_bar: true,
-            language: Language::English,
+            language: Language::ENGLISH,
             ui_theme: UiTheme::Light,
             prevent_sleep: PreventSleep::Display,
             prevent_screensaver: true,

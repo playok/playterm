@@ -26,9 +26,9 @@ impl SerialParity {
 impl fmt::Display for SerialParity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            SerialParity::None => t("없음", "None"),
-            SerialParity::Odd => t("홀수", "Odd"),
-            SerialParity::Even => t("짝수", "Even"),
+            SerialParity::None => t!("common.none"),
+            SerialParity::Odd => t!("serial.odd"),
+            SerialParity::Even => t!("serial.even"),
         })
     }
 }
@@ -51,9 +51,9 @@ impl SerialFlow {
 impl fmt::Display for SerialFlow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            SerialFlow::None => t("없음", "None"),
-            SerialFlow::Hardware => t("하드웨어 (RTS/CTS)", "Hardware (RTS/CTS)"),
-            SerialFlow::Software => t("소프트웨어 (XON/XOFF)", "Software (XON/XOFF)"),
+            SerialFlow::None => t!("common.none"),
+            SerialFlow::Hardware => t!("serial.hardware_rts_cts"),
+            SerialFlow::Software => t!("serial.software_xon_xoff"),
         })
     }
 }

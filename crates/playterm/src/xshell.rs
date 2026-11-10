@@ -104,6 +104,9 @@ pub fn parse(text: &str) -> Values {
 
 /// `CodePage=65001` (UTF-8), `949` / `51949` (Korean); anything else is detected from the output.
 fn charset(code_page: &str) -> Charset {
+    if let Some(charset) = Charset::from_label(code_page) {
+        return charset;
+    }
     match code_page.trim() {
         "65001" => Charset::Utf8,
         "949" | "51949" => Charset::Cp949,
@@ -137,7 +140,7 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
         "telnet" => Protocol::Telnet,
         "serial" => Protocol::Serial,
         other => {
-            let reason = tr!("{other} 프로토콜은 지원하지 않습니다", "The {other} protocol is not supported");
+            let reason = tr!("common.the_protocol_is_not_supported", other = other);
             return done(Err(reason), notes);
         }
     };
@@ -152,9 +155,7 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
         p.term_type = term.to_owned();
     }
     if !get("connection:authentication", "password").is_empty() {
-        notes.push(
-            t("Xshell 이 암호화해 저장한 비밀번호는 가져오지 않습니다", "The password Xshell saved (encrypted) is not imported").into(),
-        );
+        notes.push(t!("xshell.the_password_xshell_saved_encrypted_is_not_imported").into());
     }
 
     if protocol == Protocol::Serial {
@@ -166,18 +167,14 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
             .map(|v| if v.parse::<u32>().is_ok() { format!("COM{v}") } else { v.to_uppercase() })
             .unwrap_or_default();
         if port.is_empty() {
-            return done(Err(t("시리얼 포트가 비어 있습니다", "The serial port is empty").into()), notes);
+            return done(Err(t!("common.the_serial_port_is_empty").into()), notes);
         }
         let mut s = SerialSettings { port, ..Default::default() };
         // Xshell stores some line settings as list positions rather than values; only values
         // that are plainly what they say are taken, the rest keep the defaults (9600 8N1).
         match number("connection:serial", "baudrate") {
             Some(b) if b >= 110 => s.baud = b,
-            _ => notes.push(tr!(
-                "통신 속도를 읽지 못해 {}bps 로 두었습니다. 확인하세요",
-                "Could not read the speed, left at {} bps. Please check it",
-                s.baud
-            )),
+            _ => notes.push(tr!("common.could_not_read_the_speed_left_at_bps", arg0 = s.baud)),
         }
         if let Some(bits) = number("connection:serial", "databits").and_then(|b| u8::try_from(b).ok()).filter(|b| (5..=8).contains(b)) {
             s.data_bits = bits;
@@ -187,14 +184,14 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
             "1" => SerialParity::Odd,
             "2" => SerialParity::Even,
             _ => {
-                notes.push(t("패리티를 None 으로 두었습니다. 확인하세요", "Parity left at None. Please check it").into());
+                notes.push(t!("xshell.parity_left_at_none_please_check_it").into());
                 SerialParity::None
             }
         };
         s.flow = match get("connection:serial", "flowctrl") {
             "" | "0" => SerialFlow::None,
             _ => {
-                notes.push(t("흐름 제어를 None 으로 두었습니다. 확인하세요", "Flow control left at None. Please check it").into());
+                notes.push(t!("xshell.flow_control_left_at_none_please_check_it").into());
                 SerialFlow::None
             }
         };
@@ -213,35 +210,26 @@ pub fn convert(name: &str, folder: &str, values: &Values) -> ImportedSession {
         host = h;
     }
     if host.is_empty() {
-        return done(Err(t("호스트가 비어 있습니다", "The host is empty").into()), notes);
+        return done(Err(t!("common.the_host_is_empty").into()), notes);
     }
     p.host = host;
     p.port = number("connection", "port").and_then(|n| u16::try_from(n).ok()).filter(|&n| n > 0).unwrap_or(protocol.default_port());
 
     if protocol == Protocol::Ssh {
         if user.is_empty() {
-            notes.push(
-                t(
-                    "사용자 이름이 없습니다. 가져온 뒤 사이트 관리에서 입력하세요",
-                    "No user name. Enter it in the Site Manager after the import",
-                )
-                .into(),
-            );
+            notes.push(t!("common.no_user_name_enter_it_in_the_site").into());
         }
         p.username = user;
         let key = get("connection:authentication", "userkey");
         if !key.is_empty() {
-            notes.push(tr!(
-                "Xshell 사용자 키 '{key}' 는 Xshell 안에 있어 가져올 수 없습니다. 키를 내보내 사이트 관리에서 키 파일로 지정하세요",
-                "Xshell user key '{key}' lives inside Xshell and cannot be imported. Export it and set it as the key file in the Site Manager"
-            ));
+            notes.push(tr!("xshell.xshell_user_key_lives_inside_xshell_and_cannot", key = key));
         }
         let forwards = values
             .iter()
             .filter(|((section, _), _)| section.contains("tunnel") || section.contains("forward"))
             .any(|((_, key), value)| key == "count" && value.parse::<u32>().is_ok_and(|n| n > 0));
         if forwards {
-            notes.push(t("포트 포워딩은 가져오지 않습니다", "Port forwardings are not imported").into());
+            notes.push(t!("common.port_forwardings_are_not_imported").into());
         }
     }
     done(Ok(p), notes)
@@ -295,7 +283,7 @@ pub fn load(dir: &Path) -> Result<Loaded, String> {
 
 fn load_with(dir: &Path, limits: Limits) -> Result<Loaded, String> {
     if !dir.is_dir() {
-        return Err(tr!("폴더가 없습니다: {}", "Folder not found: {}", dir.display()));
+        return Err(tr!("common.folder_not_found", arg0 = dir.display()));
     }
     let (files, truncated) = session_files(dir, ".xsh", limits);
     let sessions = files
@@ -323,6 +311,14 @@ mod tests {
         let mut out = vec![0xFF, 0xFE];
         out.extend(s.encode_utf16().flat_map(u16::to_le_bytes));
         out
+    }
+
+    #[test]
+    fn imports_international_encoding_labels() {
+        assert_eq!(charset("Shift_JIS"), Charset::ShiftJis);
+        assert_eq!(charset("936"), Charset::Gbk);
+        assert_eq!(charset("windows-1251"), Charset::Windows1251);
+        assert_eq!(charset("unsupported"), Charset::Auto);
     }
 
     #[test]

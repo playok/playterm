@@ -604,7 +604,7 @@ impl Download {
             return reply;
         }
         if now.duration_since(self.last_input) >= GIVE_UP_AFTER {
-            self.fail(t("서버의 응답이 없어 중단했습니다", "The server stopped answering").into(), true, &mut reply);
+            self.fail(t!("zmodem.the_server_stopped_answering").into(), true, &mut reply);
         } else if now.duration_since(self.last_input.max(self.last_retry)) >= RETRY_AFTER {
             self.last_retry = now;
             self.parser = Parser::new();
@@ -654,7 +654,7 @@ impl Download {
         if b == ZDLE {
             self.cans += 1;
             if self.cans >= 5 {
-                self.fail(t("서버가 전송을 취소했습니다", "The server cancelled the transfer").into(), false, reply);
+                self.fail(t!("zmodem.the_server_cancelled_the_transfer").into(), false, reply);
                 return;
             }
         } else {
@@ -734,13 +734,8 @@ impl Download {
             ZNAK => reply.extend_from_slice(&self.last_sent),
             ZFREECNT => self.send(Header { kind: ZACK, data: [0xff; 4] }, reply),
             ZCHALLENGE => self.send(Header { kind: ZACK, data: header.data }, reply),
-            ZCOMMAND => self.fail(
-                t("서버가 이 PC 에서 명령을 실행하라고 요청해 거부했습니다", "The server asked to run a command on this PC; refused")
-                    .into(),
-                true,
-                reply,
-            ),
-            ZABORT | ZCAN | ZFERR => self.fail(t("서버가 전송을 중단했습니다", "The server stopped the transfer").into(), false, reply),
+            ZCOMMAND => self.fail(t!("zmodem.the_server_asked_to_run_a_command_on").into(), true, reply),
+            ZABORT | ZCAN | ZFERR => self.fail(t!("zmodem.the_server_stopped_the_transfer").into(), false, reply),
             _ => {}
         }
     }
@@ -755,7 +750,7 @@ impl Download {
             Stage::Receiving => {
                 let Some(file) = &mut self.file else { return };
                 if let Err(e) = file.out.write_all(&data) {
-                    let message = tr!("{} 에 쓸 수 없습니다: {e}", "Cannot write {}: {e}", file.part.display());
+                    let message = tr!("zmodem.cannot_write", arg0 = file.part.display(), e = e);
                     self.fail(message, true, reply);
                     return;
                 }
@@ -794,7 +789,7 @@ impl Download {
                 self.send(Header::at(ZRPOS, 0), reply);
             }
             Err(e) => {
-                let message = tr!("{} 에 파일을 만들 수 없습니다: {e}", "Cannot create a file in {}: {e}", self.dir.display());
+                let message = tr!("zmodem.cannot_create_a_file_in", arg0 = self.dir.display(), e = e);
                 self.fail(message, true, reply);
             }
         }
@@ -816,7 +811,7 @@ impl Download {
             }
             Err(e) => {
                 let _ = std::fs::remove_file(&part);
-                self.fail(tr!("{name} 을(를) 저장할 수 없습니다: {e}", "Cannot save {name}: {e}"), true, reply);
+                self.fail(tr!("zmodem.cannot_save", e = e, name = name), true, reply);
             }
         }
     }
@@ -1023,7 +1018,7 @@ impl Upload {
         self.pump(&mut reply);
         let quiet = now.duration_since(self.last_input);
         if quiet >= GIVE_UP_AFTER {
-            self.fail(t("서버의 응답이 없어 중단했습니다", "The server stopped answering").into(), true, &mut reply);
+            self.fail(t!("zmodem.the_server_stopped_answering").into(), true, &mut reply);
         } else if now.duration_since(self.last_input.max(self.last_retry)) >= RETRY_AFTER {
             self.last_retry = now;
             match (&self.stage, self.file.as_ref().map(|f| f.acked)) {
@@ -1092,7 +1087,7 @@ impl Upload {
         if b == ZDLE {
             self.cans += 1;
             if self.cans >= 5 {
-                self.fail(t("서버가 전송을 취소했습니다", "The server cancelled the transfer").into(), false, reply);
+                self.fail(t!("zmodem.the_server_cancelled_the_transfer").into(), false, reply);
                 return;
             }
         } else {
@@ -1138,20 +1133,13 @@ impl Upload {
                 }
                 let Some(file) = &mut self.file else { return };
                 if pos > file.size {
-                    self.fail(
-                        tr!(
-                            "서버가 파일 크기를 넘는 위치({pos})를 요청했습니다",
-                            "The server asked for a position ({pos}) past the end of the file"
-                        ),
-                        true,
-                        reply,
-                    );
+                    self.fail(tr!("zmodem.the_server_asked_for_a_position_past_the", pos = pos), true, reply);
                     return;
                 }
                 if !matches!(self.stage, UpStage::Offered) {
                     file.resends = if file.resends.0 == pos { (pos, file.resends.1 + 1) } else { (pos, 1) };
                     if file.resends.1 > MAX_RESENDS {
-                        self.fail(t("오류가 계속되어 중단했습니다", "Too many errors on the line").into(), true, reply);
+                        self.fail(t!("zmodem.too_many_errors_on_the_line").into(), true, reply);
                         return;
                     }
                 }
@@ -1183,7 +1171,7 @@ impl Upload {
                 }
             }
             ZNAK => reply.extend_from_slice(&self.last_sent),
-            ZABORT | ZCAN | ZFERR => self.fail(t("서버가 전송을 중단했습니다", "The server stopped the transfer").into(), false, reply),
+            ZABORT | ZCAN | ZFERR => self.fail(t!("zmodem.the_server_stopped_the_transfer").into(), false, reply),
             _ => {}
         }
     }
@@ -1194,7 +1182,7 @@ impl Upload {
             let opened = File::open(&path).and_then(|file| {
                 let meta = file.metadata()?;
                 if meta.is_dir() {
-                    return Err(io::Error::other(t("폴더는 보낼 수 없습니다", "a folder cannot be sent")));
+                    return Err(io::Error::other(t!("zmodem.a_folder_cannot_be_sent")));
                 }
                 Ok((file, meta))
             });
@@ -1202,7 +1190,7 @@ impl Upload {
                 Ok(f) => f,
                 Err(e) => {
                     let name = path.display().to_string();
-                    self.fail(tr!("{name} 을(를) 열 수 없습니다: {e}", "Cannot open {name}: {e}"), true, reply);
+                    self.fail(tr!("zmodem.cannot_open", e = e, name = name), true, reply);
                     return;
                 }
             };
@@ -1233,7 +1221,7 @@ impl Upload {
         let Some(file) = &mut self.file else { return };
         if let Err(e) = file.file.seek(SeekFrom::Start(pos)) {
             let name = file.name.clone();
-            self.fail(tr!("{name} 을(를) 읽을 수 없습니다: {e}", "Cannot read {name}: {e}"), true, reply);
+            self.fail(tr!("zmodem.cannot_read", e = e, name = name), true, reply);
             return;
         }
         file.pos = pos;
@@ -1271,7 +1259,7 @@ impl Upload {
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                     Err(e) => {
                         let name = file.name.clone();
-                        self.fail(tr!("{name} 을(를) 읽을 수 없습니다: {e}", "Cannot read {name}: {e}"), true, reply);
+                        self.fail(tr!("zmodem.cannot_read", e = e, name = name), true, reply);
                         return;
                     }
                 }

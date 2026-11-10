@@ -136,11 +136,8 @@ fn run(host: &str, options: &PingOptions, stop: &AtomicBool, send: impl Fn(PingE
 /// network devices are reached that way, unless `-6`).
 fn resolve(host: &str, family: Option<Family>) -> Result<IpAddr, String> {
     let host = host.trim_start_matches('[').trim_end_matches(']');
-    let addrs: Vec<IpAddr> = (host, 0)
-        .to_socket_addrs()
-        .map_err(|e| tr!("{host} 을(를) 찾을 수 없습니다: {e}", "Cannot find {host}: {e}"))?
-        .map(|a| a.ip())
-        .collect();
+    let addrs: Vec<IpAddr> =
+        (host, 0).to_socket_addrs().map_err(|e| tr!("ping.cannot_find", e = e, host = host))?.map(|a| a.ip()).collect();
     let pick = |v4: bool| addrs.iter().copied().find(|a| a.is_ipv4() == v4);
     match family {
         Some(Family::V4) => pick(true),
@@ -148,9 +145,9 @@ fn resolve(host: &str, family: Option<Family>) -> Result<IpAddr, String> {
         None => pick(true).or_else(|| pick(false)),
     }
     .ok_or_else(|| match family {
-        Some(Family::V4) => tr!("{host} 에 IPv4 주소가 없습니다", "{host} has no IPv4 address"),
-        Some(Family::V6) => tr!("{host} 에 IPv6 주소가 없습니다", "{host} has no IPv6 address"),
-        None => tr!("{host} 을(를) 찾을 수 없습니다", "Cannot find {host}"),
+        Some(Family::V4) => tr!("ping.has_no_ipv4_address", host = host),
+        Some(Family::V6) => tr!("ping.has_no_ipv6_address", host = host),
+        None => tr!("ping.cannot_find_2", host = host),
     })
 }
 
@@ -162,15 +159,15 @@ fn payload(size: u16) -> Vec<u8> {
 /// What an error status of the ICMP API means.
 pub fn status_text(status: u32) -> String {
     match status {
-        11002 => t("대상 네트워크에 연결할 수 없습니다", "Destination net unreachable").into(),
-        11003 | 11040 => t("대상 호스트에 연결할 수 없습니다", "Destination host unreachable").into(),
-        11004 => t("대상 프로토콜에 연결할 수 없습니다", "Destination protocol unreachable").into(),
-        11005 => t("대상 포트에 연결할 수 없습니다", "Destination port unreachable").into(),
-        11013 => t("전송 중 TTL 이 만료되었습니다", "TTL expired in transit").into(),
-        11014 => t("재조립 중 TTL 이 만료되었습니다", "TTL expired during reassembly").into(),
-        11009 => t("패킷이 너무 큽니다", "Packet too big").into(),
-        11050 => t("일반 오류", "General failure").into(),
-        _ => tr!("오류 (상태 {status})", "Error (status {status})"),
+        11002 => t!("ping.destination_net_unreachable").into(),
+        11003 | 11040 => t!("ping.destination_host_unreachable").into(),
+        11004 => t!("ping.destination_protocol_unreachable").into(),
+        11005 => t!("ping.destination_port_unreachable").into(),
+        11013 => t!("ping.ttl_expired_in_transit").into(),
+        11014 => t!("ping.ttl_expired_during_reassembly").into(),
+        11009 => t!("ping.packet_too_big").into(),
+        11050 => t!("ping.general_failure").into(),
+        _ => tr!("ping.error_status", status = status),
     }
 }
 
@@ -244,7 +241,7 @@ mod imp {
             if handle == INVALID_HANDLE_VALUE || handle.is_null() {
                 // SAFETY: reads the calling thread's last error.
                 let error = std::io::Error::from_raw_os_error(unsafe { GetLastError() } as i32);
-                return Err(tr!("ICMP 를 사용할 수 없습니다: {error}", "ICMP is not available: {error}"));
+                return Err(tr!("ping.icmp_is_not_available", error = error));
             }
             Ok(Self(handle))
         }
@@ -363,7 +360,7 @@ mod imp {
 
     impl Icmp {
         pub fn open(_: IpAddr) -> Result<Self, String> {
-            Err(playterm_i18n::t("이 운영체제에서는 ping 을 지원하지 않습니다", "ping is not supported on this system").into())
+            Err(playterm_i18n::t!("ping.ping_is_not_supported_on_this_system").into())
         }
 
         pub fn echo(&self, _: IpAddr, _: &[u8], _: u32) -> PingEvent {

@@ -72,15 +72,12 @@ impl ComposeBar {
             // The full hint would wrap (and make the bar taller) when the side panels leave
             // little room; the short one says just enough.
             let hint = if width >= 560.0 {
-                t(
-                    "보낼 명령 입력 — Enter 보내기 · Shift+Enter 줄바꿈 · ↑↓ 이전 입력",
-                    "Command to send — Enter sends · Shift+Enter new line · ↑↓ earlier input",
-                )
+                t!("compose_bar.command_to_send_enter_sends_shift_enter_new")
             } else if width >= 220.0 {
-                t("보낼 명령 (Enter 보내기)", "Command (Enter sends)")
+                t!("compose_bar.command_enter_sends")
             } else {
                 // Narrower still: a word that fits on one line (#165).
-                t("보낼 명령", "Command")
+                t!("compose_bar.command")
             };
             let edit = ui.add(
                 egui::TextEdit::multiline(&mut self.text)
@@ -96,42 +93,36 @@ impl ComposeBar {
             if std::mem::take(&mut self.focus_requested) {
                 edit.request_focus();
             }
-            let all = tr!("모든 탭 ({connected})", "All tabs ({connected})");
+            let all = tr!("compose_bar.all_tabs", connected = connected);
             egui::ComboBox::from_id_salt("compose-target")
                 .width(110.0)
-                .selected_text(if self.to_all { all.as_str() } else { t("현재 탭", "This tab") })
+                .selected_text(if self.to_all { all.as_str() } else { t!("compose_bar.this_tab") })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.to_all, false, t("현재 탭", "This tab"));
+                    ui.selectable_value(&mut self.to_all, false, t!("compose_bar.this_tab"));
                     ui.selectable_value(&mut self.to_all, true, all.as_str());
                 })
                 .response
-                .on_hover_text(t(
-                    "모든 탭: 연결된 탭 전부에 보냅니다 (탭 우클릭의 '동시 입력에 포함' 을 끈 탭은 제외)",
-                    "All tabs: every connected tab (except tabs with 'Include in simultaneous input' off)",
-                ));
-            if ui.add(icon::button(icon::SEND, t("보내기", "Send"))).on_hover_text("Enter").clicked() {
+                .on_hover_text(t!("compose_bar.all_tabs_every_connected_tab_except_tabs_with"));
+            if ui.add(icon::button(icon::SEND, t!("compose_bar.send"))).on_hover_text("Enter").clicked() {
                 send = true;
                 edit.request_focus();
             }
-            ui.menu_button(t("매크로", "Macros"), |ui| {
+            ui.menu_button(t!("common.macros"), |ui| {
                 for (k, name) in macros.iter().enumerate() {
                     if ui.button(name).clicked() {
                         action = Some(ComposeAction::Macro { k, to_all: self.to_all });
                     }
                 }
                 if macros.is_empty() {
-                    ui.weak(t("저장된 매크로가 없습니다", "No macros saved"));
+                    ui.weak(t!("common.no_macros_saved"));
                 }
                 ui.separator();
-                if ui.button(t("매크로 관리…", "Manage macros…")).clicked() {
+                if ui.button(t!("common.manage_macros")).clicked() {
                     action = Some(ComposeAction::ManageMacros);
                 }
             })
             .response
-            .on_hover_text(t(
-                "저장된 매크로를 보낼 탭(현재 탭 / 모든 탭)에서 실행합니다",
-                "Runs a saved macro in the tabs the bar sends to (this tab / all tabs)",
-            ));
+            .on_hover_text(t!("compose_bar.runs_a_saved_macro_in_the_tabs_the"));
         });
 
         if !send {

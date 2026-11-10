@@ -41,7 +41,7 @@ fn color(hex: u32) -> Color32 {
 fn font_label(fonts: &[FontChoice], font: &str) -> String {
     if fonts::is_file(font) {
         let name = std::path::Path::new(font).file_name().map(|n| n.to_string_lossy().into_owned());
-        tr!("파일: {}", "File: {}", name.unwrap_or_else(|| font.to_owned()))
+        tr!("settings_dialog.file", arg0 = name.unwrap_or_else(|| font.to_owned()))
     } else {
         fonts.iter().find(|f| f.matches(font)).map_or_else(|| font.to_owned(), |f| f.display().to_owned())
     }
@@ -97,12 +97,12 @@ impl Section {
 
     fn name(self) -> &'static str {
         match self {
-            Section::Display => t("화면", "Display"),
-            Section::Terminal => t("터미널", "Terminal"),
-            Section::Clipboard => t("키보드·클립보드", "Keyboard & clipboard"),
-            Section::Connection => t("연결", "Connection"),
-            Section::Transfers => t("파일 전송", "File transfer"),
-            Section::Updates => t("업데이트", "Updates"),
+            Section::Display => t!("settings_dialog.display"),
+            Section::Terminal => t!("settings_dialog.terminal"),
+            Section::Clipboard => t!("settings_dialog.keyboard_clipboard"),
+            Section::Connection => t!("settings_dialog.connection"),
+            Section::Transfers => t!("settings_dialog.file_transfer"),
+            Section::Updates => t!("settings_dialog.updates"),
         }
     }
 
@@ -159,7 +159,7 @@ impl SettingsDialog {
             let width = (room.x - DIALOG_MARGIN - SECTION_LIST_WIDTH - 25.0).clamp(MIN_SECTION_WIDTH, SECTION_WIDTH);
             let height = (room.y - DIALOG_MARGIN - DIALOG_CHROME).clamp(MIN_SECTION_HEIGHT, SECTION_HEIGHT);
             ui.set_width(SECTION_LIST_WIDTH + width + 16.0);
-            ui.heading(t("설정", "Settings"));
+            ui.heading(t!("common.settings"));
             ui.add_space(6.0);
             ui.horizontal_top(|ui| {
                 // The sections down the left (#140); the dialog keeps one size whichever is on
@@ -187,19 +187,15 @@ impl SettingsDialog {
             });
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.add(icon::primary(ui, icon::OK, t("확인", "OK"))).clicked() {
+                if ui.add(icon::primary(ui, icon::OK, t!("common.ok"))).clicked() {
                     result = Some(SettingsResult::Save(self.draft.clone()));
                 }
-                if ui.add(icon::button(icon::CANCEL, t("취소", "Cancel"))).clicked() {
+                if ui.add(icon::button(icon::CANCEL, t!("common.cancel"))).clicked() {
                     result = Some(SettingsResult::Cancel(self.original.clone()));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let tip = tr!(
-                        "'{}' 섹션의 설정만 기본값으로 되돌립니다 (확인을 눌러야 저장됩니다)",
-                        "Puts only the '{}' settings back to their defaults (saved with OK)",
-                        self.section.name()
-                    );
-                    if ui.add(icon::button(icon::RESET, t("기본값으로", "Reset to defaults"))).on_hover_text(tip).clicked() {
+                    let tip = tr!("settings_dialog.puts_only_the_settings_back_to_their_defaults", arg0 = self.section.name());
+                    if ui.add(icon::button(icon::RESET, t!("settings_dialog.reset_to_defaults"))).on_hover_text(tip).clicked() {
                         self.section.reset(&mut self.draft);
                     }
                 });
@@ -250,21 +246,21 @@ impl SettingsDialog {
     }
 
     fn scrollback_row(&mut self, ui: &mut egui::Ui) {
-        ui.label(t("스크롤백", "Scrollback"));
+        ui.label(t!("settings_dialog.scrollback"));
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut self.draft.scrollback)
                     .range(AppSettings::MIN_SCROLLBACK..=AppSettings::MAX_SCROLLBACK)
                     .speed(100)
-                    .suffix(t(" 줄", " lines")),
+                    .suffix(t!("settings_dialog.lines")),
             );
-            hint(ui, t("탭마다 보관하는 지난 출력", "Past output kept for each tab"));
+            hint(ui, t!("settings_dialog.past_output_kept_for_each_tab"));
         });
         ui.end_row();
     }
 
     fn font_row(&mut self, ui: &mut egui::Ui) {
-        ui.label(t("글꼴", "Font"));
+        ui.label(t!("settings_dialog.font"));
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("font")
                 .width(200.0)
@@ -274,11 +270,11 @@ impl SettingsDialog {
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show_ui(ui, |ui| self.font_list(ui));
             if ui
-                .add(icon::button(icon::BROWSE, t("파일에서…", "From file…")))
-                .on_hover_text(t("TTF / OTF / TTC 글꼴 파일", "TTF / OTF / TTC font file"))
+                .add(icon::button(icon::BROWSE, t!("settings_dialog.from_file")))
+                .on_hover_text(t!("settings_dialog.ttf_otf_ttc_font_file"))
                 .clicked()
-                && let Some(path) = crate::picker::Picker::new(crate::picker::Kind::File, t("터미널 글꼴 파일", "Terminal font file"))
-                    .filter(t("글꼴", "Fonts"), &["ttf", "otf", "ttc"])
+                && let Some(path) = crate::picker::Picker::new(crate::picker::Kind::File, t!("settings_dialog.terminal_font_file"))
+                    .filter(t!("settings_dialog.fonts"), &["ttf", "otf", "ttc"])
                     .pick_one()
             {
                 self.draft.font = path.display().to_string();
@@ -289,7 +285,7 @@ impl SettingsDialog {
 
     /// Language and the light/dark look of the program.
     fn ui_rows(&mut self, ui: &mut egui::Ui) {
-        ui.label("언어 / Language");
+        ui.label(t!("language.label"));
         egui::ComboBox::from_id_salt("language").selected_text(self.draft.language.name()).show_ui(ui, |ui| {
             for lang in Language::ALL {
                 ui.selectable_value(&mut self.draft.language, lang, lang.name());
@@ -297,11 +293,11 @@ impl SettingsDialog {
         });
         ui.end_row();
 
-        ui.label(t("화면 테마", "UI theme"));
+        ui.label(t!("settings_dialog.ui_theme"));
         let name = |theme: UiTheme| match theme {
-            UiTheme::Dark => t("다크", "Dark"),
-            UiTheme::Light => t("라이트", "Light"),
-            UiTheme::System => t("시스템 설정 따르기", "Follow the system"),
+            UiTheme::Dark => t!("settings_dialog.dark"),
+            UiTheme::Light => t!("settings_dialog.light"),
+            UiTheme::System => t!("settings_dialog.follow_the_system"),
         };
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("ui-theme").width(200.0).selected_text(name(self.draft.ui_theme)).show_ui(ui, |ui| {
@@ -309,8 +305,8 @@ impl SettingsDialog {
                     ui.selectable_value(&mut self.draft.ui_theme, t, name(t));
                 }
             });
-            hint(ui, t("메뉴·창의 밝기", "Menus and windows"))
-                .on_hover_text(t("터미널 색은 아래 색 테마에서 고릅니다", "The terminal colors are the color theme below"));
+            hint(ui, t!("settings_dialog.menus_and_windows"))
+                .on_hover_text(t!("settings_dialog.the_terminal_colors_are_the_color_theme_below"));
         });
         ui.end_row();
     }
@@ -319,7 +315,7 @@ impl SettingsDialog {
     fn font_list(&mut self, ui: &mut egui::Ui) {
         ui.add(
             egui::TextEdit::singleline(&mut self.font_filter)
-                .hint_text(tr!("글꼴 검색 ({}개)", "Search fonts ({})", self.fonts.len()))
+                .hint_text(tr!("settings_dialog.search_fonts", arg0 = self.fonts.len()))
                 .desired_width(f32::INFINITY),
         );
         ui.separator();
@@ -337,13 +333,10 @@ impl SettingsDialog {
                 }
             }
         };
-        ui.weak(t("고정폭 글꼴", "Fixed-width fonts"));
+        ui.weak(t!("settings_dialog.fixed_width_fonts"));
         list(ui, true);
         ui.add_space(4.0);
-        ui.weak(t(
-            "기타 글꼴 (고정폭이 아니어서 글자 간격이 고르지 않을 수 있음)",
-            "Other fonts (not fixed-width, so letter spacing may be uneven)",
-        ));
+        ui.weak(t!("settings_dialog.other_fonts_not_fixed_width_so_letter_spacing"));
         list(ui, false);
         if fonts::is_file(&self.draft.font) {
             ui.separator();
@@ -357,11 +350,11 @@ impl SettingsDialog {
 
     fn sleep_row(&mut self, ui: &mut egui::Ui) {
         let name = |p: PreventSleep| match p {
-            PreventSleep::Off => t("끔", "Off"),
-            PreventSleep::System => t("연결 중에는 절전 모드 안 함", "No sleep while connected"),
-            PreventSleep::Display => t("연결 중에는 화면도 켜 둠", "Keep the screen on while connected"),
+            PreventSleep::Off => t!("common.off"),
+            PreventSleep::System => t!("settings_dialog.no_sleep_while_connected"),
+            PreventSleep::Display => t!("settings_dialog.keep_the_screen_on_while_connected"),
         };
-        ui.label(t("절전 방지", "Prevent sleep"));
+        ui.label(t!("settings_dialog.prevent_sleep"));
         egui::ComboBox::from_id_salt("prevent-sleep")
             .width(200.0)
             .selected_text(name(self.draft.prevent_sleep))
@@ -371,163 +364,125 @@ impl SettingsDialog {
                 }
             })
             .response
-            .on_hover_text(t(
-                "세션이 연결되어 있는 동안 Windows 가 유휴 상태로 절전에 들어가 연결이 끊기는 것을 막습니다.\n덮개를 닫거나 직접 절전을 고르면 그대로 절전합니다.",
-                "Stops Windows from going to sleep when idle, which would drop the connections, while a session is connected.\nClosing the lid or choosing Sleep still works.",
-            ));
+            .on_hover_text(t!("settings_dialog.stops_windows_from_going_to_sleep_when_idle"));
         ui.end_row();
     }
 
     /// Which keys and mouse buttons copy and paste in the terminal.
     fn clipboard_rows(&mut self, ui: &mut egui::Ui) {
         if cfg!(target_os = "macos") {
-            ui.label(t("Option 키", "Option key"));
-            ui.checkbox(&mut self.draft.option_as_meta, t("Meta 키로 쓰기 (ESC + 키)", "Use as Meta (ESC + key)")).on_hover_text(t(
-                "켜면 Option+글자가 셸의 Alt 단축키(예: Option+B 한 단어 뒤로)로 갑니다. 끄면 macOS 가 만드는 문자(é, © …)를 입력합니다.",
-                "On: Option+letter goes to the shell as an Alt shortcut (e.g. Option+B, word back). Off: it types the character macOS makes (é, ©, …).",
-            ));
+            ui.label(t!("settings_dialog.option_key"));
+            ui.checkbox(&mut self.draft.option_as_meta, t!("settings_dialog.use_as_meta_esc_key"))
+                .on_hover_text(t!("settings_dialog.on_option_letter_goes_to_the_shell_as"));
             ui.end_row();
         }
         // App shortcuts that take keys terminal programs use too (#125): off, the keys go to
         // the terminal.
         if !cfg!(target_os = "macos") {
-            ui.label(t("단축키", "Shortcuts"));
+            ui.label(t!("settings_dialog.shortcuts"));
             ui.horizontal(|ui| {
                 let s = &mut self.draft.shortcuts;
-                ui.checkbox(&mut s.alt_arrows_switch_tabs, t("Alt+←/→ 탭 전환", "Alt+←/→ switch tabs")).on_hover_text(t(
-                    "끄면 Alt+←/→ 가 터미널로 갑니다 (셸·편집기의 단어 이동). 탭 전환은 Ctrl+Tab 으로도 됩니다.",
-                    "Off: Alt+←/→ go to the terminal (word movement in shells and editors). Ctrl+Tab also switches tabs.",
-                ));
-                ui.checkbox(&mut s.ctrl_zoom, t("Ctrl+= / - / 0 글꼴 크기", "Ctrl+= / - / 0 font size")).on_hover_text(t(
-                    "끄면 이 키들이 터미널로 갑니다. 글꼴 크기는 Ctrl+휠과 보기 메뉴로도 바꿉니다.",
-                    "Off: these keys go to the terminal. Ctrl+wheel and the View menu still change the font size.",
-                ));
+                ui.checkbox(&mut s.alt_arrows_switch_tabs, t!("settings_dialog.alt_switch_tabs"))
+                    .on_hover_text(t!("settings_dialog.off_alt_go_to_the_terminal_word_movement"));
+                ui.checkbox(&mut s.ctrl_zoom, t!("settings_dialog.ctrl_0_font_size"))
+                    .on_hover_text(t!("settings_dialog.off_these_keys_go_to_the_terminal_ctrl"));
             });
             ui.end_row();
         }
         let keys = &mut self.draft.clipboard;
-        ui.label(t("복사", "Copy"));
+        ui.label(t!("common.copy"));
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut keys.copy_on_select, t("선택하면 바로 복사", "Copy on select")).on_hover_text(t(
-                "마우스로 드래그하거나 더블클릭해 선택하면 바로 클립보드에 복사합니다 (PuTTY 방식).",
-                "Text selected by dragging or double-clicking goes to the clipboard right away (as in PuTTY).",
-            ));
-            ui.checkbox(&mut keys.ctrl_c, "Ctrl+C").on_hover_text(t(
-                "선택 영역이 있을 때만 복사하고, 없으면 ^C (중단 신호)를 보냅니다.\n끄면 Ctrl+C 는 항상 ^C 를 보냅니다.",
-                "Copies only when there is a selection, otherwise sends ^C (interrupt).\nOff: Ctrl+C always sends ^C.",
-            ));
+            ui.checkbox(&mut keys.copy_on_select, t!("settings_dialog.copy_on_select"))
+                .on_hover_text(t!("settings_dialog.text_selected_by_dragging_or_double_clicking_goes"));
+            ui.checkbox(&mut keys.ctrl_c, "Ctrl+C").on_hover_text(t!("settings_dialog.copies_only_when_there_is_a_selection_otherwise"));
             ui.checkbox(&mut keys.ctrl_shift_c, "Ctrl+Shift+C");
             ui.checkbox(&mut keys.ctrl_insert, "Ctrl+Insert");
         });
         ui.end_row();
 
-        ui.label(t("붙여넣기", "Paste"));
+        ui.label(t!("common.paste"));
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut keys.ctrl_v, "Ctrl+V").on_hover_text(t(
-                "끄면 Ctrl+V 는 ^V 로 원격에 전달됩니다 (vim 의 블록 선택 등).",
-                "Off: Ctrl+V is sent as ^V (vim's block selection and the like).",
-            ));
+            ui.checkbox(&mut keys.ctrl_v, "Ctrl+V").on_hover_text(t!("settings_dialog.off_ctrl_v_is_sent_as_v_vim"));
             ui.checkbox(&mut keys.ctrl_shift_v, "Ctrl+Shift+V");
             ui.checkbox(&mut keys.shift_insert, "Shift+Insert");
-            ui.checkbox(&mut keys.right_click_paste, t("오른쪽 클릭", "Right click")).on_hover_text(t(
-                "터미널을 마우스 오른쪽 버튼으로 클릭하면 붙여넣습니다 (PuTTY 방식).\n메뉴는 Ctrl+오른쪽 클릭으로 엽니다.",
-                "Right-clicking the terminal pastes (as in PuTTY).\nCtrl+right click opens the menu.",
-            ));
-            ui.checkbox(&mut keys.middle_click_paste, t("가운데 클릭", "Middle click"));
+            ui.checkbox(&mut keys.right_click_paste, t!("common.right_click"))
+                .on_hover_text(t!("settings_dialog.right_clicking_the_terminal_pastes_as_in_putty"));
+            ui.checkbox(&mut keys.middle_click_paste, t!("common.middle_click"));
         });
         ui.end_row();
 
-        ui.label(t("붙여넣기 확인", "Confirm paste"));
-        ui.checkbox(&mut keys.confirm_multiline_paste, t("여러 줄을 붙여넣기 전에 확인", "Ask before pasting several lines"))
-            .on_hover_text(t(
-                "붙여넣을 내용이 여러 줄이면 줄마다 Enter 가 입력되어 명령으로 바로 실행될 수 있어, 미리 보여 주고 확인을 받습니다.\n원격 프로그램이 붙여넣기 보호(bracketed paste)를 켠 경우에는 묻지 않습니다.",
-                "Several lines each end with Enter and may run as commands right away, so they are shown first for confirmation.\nNot asked when the remote program turned on bracketed paste.",
-            ));
+        ui.label(t!("settings_dialog.confirm_paste"));
+        ui.checkbox(&mut keys.confirm_multiline_paste, t!("settings_dialog.ask_before_pasting_several_lines"))
+            .on_hover_text(t!("settings_dialog.several_lines_each_end_with_enter_and_may"));
         ui.end_row();
 
-        ui.label(t("원격 복사", "Remote copy"));
-        ui.checkbox(&mut keys.remote_copy, t("원격 프로그램이 클립보드에 쓰기 허용 (OSC 52)", "Let remote programs set the clipboard (OSC 52)"))
-            .on_hover_text(t(
-                "tmux · vim 등이 복사한 내용을 이 PC 클립보드에 넣을 수 있습니다. 지금 보고 있는 탭만, 1MB 까지이고, 쓸 때마다 화면 아래에 알립니다.\n원격에서 클립보드를 읽는 것은 항상 막혀 있습니다.",
-                "tmux, vim and the like can put what they copy on this PC's clipboard: only from the tab on screen, up to 1 MB, with a notice each time.\nReading the clipboard from the remote side is always refused.",
-            ));
+        ui.label(t!("settings_dialog.remote_copy"));
+        ui.checkbox(&mut keys.remote_copy, t!("settings_dialog.let_remote_programs_set_the_clipboard_osc_52"))
+            .on_hover_text(t!("settings_dialog.tmux_vim_and_the_like_can_put_what"));
         ui.end_row();
     }
 
     fn timeout_row(&mut self, ui: &mut egui::Ui) {
-        ui.label(t("연결 시간 제한", "Connection timeout"));
+        ui.label(t!("settings_dialog.connection_timeout"));
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut self.draft.connect_timeout)
                     .range(AppSettings::MIN_CONNECT_TIMEOUT..=AppSettings::MAX_CONNECT_TIMEOUT)
                     .speed(1)
-                    .suffix(t(" 초", " s")),
+                    .suffix(t!("common.s")),
             )
-            .on_hover_text(t(
-                "SSH · Telnet · RDP 서버가 이 시간 동안 응답하지 않으면 연결을 포기합니다 (TCP 연결부터 로그인까지).\n호스트 키 확인이나 비밀번호 입력을 기다리는 시간은 세지 않습니다. 새 연결부터 적용됩니다.",
-                "Gives up when an SSH, Telnet or RDP server does not answer for this long (from the TCP connect to the login).\nTime spent confirming a host key or typing a password does not count. Applies to new connections.",
-            ));
-            hint(ui, &tr!(
-                "응답 없는 서버를 기다리는 최대 시간 ({}~{}초)",
-                "Longest wait for a server that does not answer ({}–{} s)",
-                AppSettings::MIN_CONNECT_TIMEOUT,
-                AppSettings::MAX_CONNECT_TIMEOUT
-            ));
+            .on_hover_text(t!("settings_dialog.gives_up_when_an_ssh_telnet_or_rdp"));
+            hint(
+                ui,
+                &tr!(
+                    "settings_dialog.longest_wait_for_a_server_that_does_not",
+                    arg0 = AppSettings::MIN_CONNECT_TIMEOUT,
+                    arg1 = AppSettings::MAX_CONNECT_TIMEOUT
+                ),
+            );
         });
         ui.end_row();
 
-        ui.label(t("닫기 확인", "Confirm close"));
-        ui.checkbox(&mut self.draft.confirm_close, t("연결된 탭을 닫거나 끝낼 때 확인", "Ask before closing connected tabs or quitting"))
-            .on_hover_text(t(
-                "연결 중이거나 연결된 탭을 닫으면 그 연결이 끊어지므로, 미리 보여 주고 확인을 받습니다.",
-                "Closing a connected (or connecting) tab ends its connection, so it is shown first for confirmation.",
-            ));
+        ui.label(t!("settings_dialog.confirm_close"));
+        ui.checkbox(&mut self.draft.confirm_close, t!("settings_dialog.ask_before_closing_connected_tabs_or_quitting"))
+            .on_hover_text(t!("settings_dialog.closing_a_connected_or_connecting_tab_ends_its"));
         ui.end_row();
     }
 
     fn zmodem_row(&mut self, ui: &mut egui::Ui) {
-        ui.label(t("ZMODEM 받을 폴더", "ZMODEM downloads"));
+        ui.label(t!("settings_dialog.zmodem_downloads"));
         ui.horizontal(|ui| {
             let folder = local_fs::zmodem_folder(&self.draft.zmodem_dir);
-            if ui.add(icon::button(icon::BROWSE, t("바꾸기…", "Change…"))).clicked()
-                && let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t("ZMODEM 으로 받은 파일을 저장할 폴더", "Folder for files received with ZMODEM"))
-                    .directory(&folder)
-                    .pick_one()
+            if ui.add(icon::button(icon::BROWSE, t!("settings_dialog.change"))).clicked()
+                && let Some(dir) =
+                    crate::picker::Picker::new(crate::picker::Kind::Folder, t!("settings_dialog.folder_for_files_received_with_zmodem"))
+                        .directory(&folder)
+                        .pick_one()
             {
                 self.draft.zmodem_dir = dir.display().to_string();
             }
-            if !self.draft.zmodem_dir.is_empty() && ui.add(icon::button(icon::RESET, t("기본 폴더", "Default"))).clicked() {
+            if !self.draft.zmodem_dir.is_empty() && ui.add(icon::button(icon::RESET, t!("settings_dialog.default"))).clicked() {
                 self.draft.zmodem_dir.clear();
             }
             ui.add(egui::Label::new(egui::RichText::new(folder.display().to_string()).weak()).truncate())
-                .on_hover_text(t(
-                    "서버에서 sz 로 보낸 파일이 저장되는 곳입니다. 같은 이름의 파일이 있으면 덮어쓰지 않고 '이름 (1)' 로 저장합니다.",
-                    "Where files sent with sz on the server are saved. A file with the same name is not replaced: the new one is saved as 'name (1)'.",
-                ));
+                .on_hover_text(t!("settings_dialog.where_files_sent_with_sz_on_the_server"));
         });
         ui.end_row();
         ui.label("");
-        ui.checkbox(&mut self.draft.zmodem_ask, t("받을 때마다 저장할 폴더 묻기", "Ask for the folder each time"))
-            .on_hover_text(t(
-                "sz 로 받기가 시작되면 저장할 폴더를 묻습니다 (위의 폴더에서 시작).\n고르는 동안에도 임시 폴더에 받고, 받기와 선택이 모두 끝나면 고른 폴더로 옮깁니다.\n창을 취소하면 받기를 취소하고 받은 파일을 지웁니다.",
-                "When sz starts sending, a window asks where to save (starting at the folder above).\nThe files are received into a temporary folder meanwhile and moved to the chosen one when both are done.\nCancelling the window cancels the download and deletes what was received.",
-            ));
+        ui.checkbox(&mut self.draft.zmodem_ask, t!("settings_dialog.ask_for_the_folder_each_time"))
+            .on_hover_text(t!("settings_dialog.when_sz_starts_sending_a_window_asks_where"));
         ui.end_row();
     }
 
     fn update_row(&mut self, ui: &mut egui::Ui) {
-        ui.label(t("업데이트", "Updates"));
-        ui.checkbox(&mut self.draft.check_updates, t("시작할 때 새 버전 확인", "Check for a new version at start-up")).on_hover_text(t(
-            "GitHub 의 최신 릴리스를 확인해 새 버전이 있으면 알려 줍니다. 설치는 확인을 받은 뒤에만 합니다.
-도움말 → 업데이트 확인 으로 언제든 직접 확인할 수 있습니다.",
-            "Looks up the latest release on GitHub and tells you about a new version. Nothing is installed without asking.
-Help → Check for updates checks at any time.",
-        ));
+        ui.label(t!("settings_dialog.updates"));
+        ui.checkbox(&mut self.draft.check_updates, t!("settings_dialog.check_for_a_new_version_at_start_up"))
+            .on_hover_text(t!("settings_dialog.looks_up_the_latest_release_on_github_and"));
         ui.end_row();
     }
 
     fn size_row(&mut self, ui: &mut egui::Ui) {
-        ui.label(t("크기", "Size"));
+        ui.label(t!("common.size"));
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut self.draft.font_size)
@@ -536,24 +491,23 @@ Help → Check for updates checks at any time.",
                     .fixed_decimals(1)
                     .suffix(" pt"),
             );
-            hint(ui, t("Ctrl+휠 · Ctrl+= / Ctrl+- / Ctrl+0", "Ctrl+wheel · Ctrl+= / Ctrl+- / Ctrl+0"));
+            hint(ui, t!("settings_dialog.ctrl_wheel_ctrl_ctrl_ctrl_0"));
         });
         ui.end_row();
     }
 
     fn theme_row(&mut self, ui: &mut egui::Ui) {
-        ui.label(t("색 테마", "Color theme"));
+        ui.label(t!("settings_dialog.color_theme"));
         ui.horizontal(|ui| {
             let dark = ui.visuals().dark_mode;
-            let auto = t("화면 테마 따라가기", "Follow the UI theme");
+            let auto = t!("settings_dialog.follow_the_ui_theme");
             let shown = if self.draft.theme.eq_ignore_ascii_case(Theme::AUTO) { auto.to_owned() } else { self.draft.theme.clone() };
             egui::ComboBox::from_id_salt("theme").width(200.0).selected_text(shown).show_ui(ui, |ui| {
                 // First: the scheme that goes with the light or dark look (#162).
                 ui.selectable_value(&mut self.draft.theme, Theme::AUTO.to_owned(), auto).on_hover_text(tr!(
-                    "다크: {} · 라이트: {}",
-                    "Dark: {} · Light: {}",
-                    Theme::AUTO_DARK,
-                    Theme::AUTO_LIGHT
+                    "settings_dialog.dark_light",
+                    arg0 = Theme::AUTO_DARK,
+                    arg1 = Theme::AUTO_LIGHT
                 ));
                 for theme in THEMES {
                     ui.horizontal(|ui| {
@@ -586,11 +540,11 @@ Help → Check for updates checks at any time.",
             line(ui, &[("user@host", c(10)), (":", fg), ("~/src", c(12)), ("$ ls -l", fg)]);
             line(ui, &[("drwxr-xr-x  ", fg), ("build/", c(12)), ("   ", fg), ("run.sh", c(10)), ("   README.md", fg)]);
             // The Hangul sample stays in both languages: it previews the font's Korean glyphs.
-            let failed = t("연결 실패 ", "connection failed ");
-            line(ui, &[("error: ", c(9)), (failed, fg), ("warning: ", c(11)), ("한글 가나다 0Oo1lI", fg)]);
+            let failed = t!("settings_dialog.connection_failed");
+            line(ui, &[("error: ", c(9)), (failed, fg), ("warning: ", c(11)), (t!("settings_dialog.font_sample"), fg)]);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("┌──┬──┐ ").font(font.clone()).color(fg));
-                let selected = RichText::new(t("선택 영역", "selection")).font(font.clone()).color(fg);
+                let selected = RichText::new(t!("settings_dialog.selection")).font(font.clone()).color(fg);
                 ui.label(selected.background_color(color(theme.selection)));
             });
         });
@@ -634,7 +588,7 @@ mod section_tests {
 
     #[test]
     fn each_section_shows_its_own_settings() {
-        playterm_i18n::set_english(false);
+        playterm_i18n::set_language(playterm_i18n::Language::KOREAN);
         let expect = [
             (Section::Display, "글꼴"),
             (Section::Terminal, "스크롤백"),
@@ -664,7 +618,7 @@ mod section_tests {
     /// it, its buttons too, and the section scrolls.
     #[test]
     fn the_dialog_fits_a_small_window() {
-        playterm_i18n::set_english(false);
+        playterm_i18n::set_language(playterm_i18n::Language::KOREAN);
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 400.0));
         let mut dialog = SettingsDialog::new(&AppSettings::default());
@@ -700,7 +654,7 @@ mod section_tests {
             macros: vec![playterm_config::Macro { name: "deploy".into(), script: "ls".into() }],
             recent_sites: vec!["site".into()],
             skipped_update: "9.9.9".into(),
-            language: Language::English,
+            language: Language::ENGLISH,
             ..AppSettings::default()
         };
         Section::Display.reset(&mut s);
@@ -709,7 +663,7 @@ mod section_tests {
         assert_eq!(s.macros.len(), 1);
         assert_eq!(s.recent_sites, ["site"]);
         assert_eq!(s.skipped_update, "9.9.9");
-        assert_eq!(s.language, Language::English);
+        assert_eq!(s.language, Language::ENGLISH);
         Section::Terminal.reset(&mut s);
         assert_eq!(s.scrollback, AppSettings::default().scrollback);
         assert_eq!(s.macros.len(), 1);

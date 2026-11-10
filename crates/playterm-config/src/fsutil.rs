@@ -19,10 +19,7 @@ pub(crate) fn lock_config(path: &Path) -> io::Result<std::fs::File> {
             Err(std::fs::TryLockError::WouldBlock) => {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    playterm_i18n::t(
-                        "다른 창에서 설정을 사용 중입니다. 다시 시도하세요",
-                        "The configuration is busy in another window. Try again",
-                    ),
+                    playterm_i18n::t!("fsutil.the_configuration_is_busy_in_another_window_try"),
                 ));
             }
             Err(std::fs::TryLockError::Error(e)) => return Err(e),

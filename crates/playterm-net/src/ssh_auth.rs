@@ -76,7 +76,7 @@ fn allows(methods: &MethodSet, kind: MethodKind) -> bool {
 pub(crate) async fn authenticate(session: &mut Session, params: &ConnectParams, sink: &EventSink) -> anyhow::Result<()> {
     let user = params.username.as_str();
     if user.is_empty() {
-        bail!(t("SSH 사용자 이름이 필요합니다", "An SSH user name is required"));
+        bail!(t!("ssh_auth.an_ssh_user_name_is_required"));
     }
 
     let mut state = match session.authenticate_none(user).await? {
@@ -160,13 +160,11 @@ fn record(result: AuthResult, state: &mut AuthState) -> KeyAttempt {
 
 async fn read_certificate(path: &Path) -> anyhow::Result<Certificate> {
     use anyhow::Context as _;
-    let text = tokio::fs::read_to_string(path)
-        .await
-        .with_context(|| tr!("사용자 인증서를 읽을 수 없습니다: {}", "Cannot read user certificate: {}", path.display()))?;
-    let cert = Certificate::from_openssh(&text)
-        .with_context(|| tr!("사용자 인증서를 해석할 수 없습니다: {}", "Cannot parse user certificate: {}", path.display()))?;
+    let text =
+        tokio::fs::read_to_string(path).await.with_context(|| tr!("ssh_auth.cannot_read_user_certificate", arg0 = path.display()))?;
+    let cert = Certificate::from_openssh(&text).with_context(|| tr!("ssh_auth.cannot_parse_user_certificate", arg0 = path.display()))?;
     if cert.cert_type() != keys::ssh_key::certificate::CertType::User {
-        bail!(t("SSH 사용자 인증서가 아닙니다", "This is not an SSH user certificate"));
+        bail!(t!("ssh_auth.this_is_not_an_ssh_user_certificate"));
     }
     Ok(cert)
 }
@@ -187,11 +185,7 @@ async fn key_file(
         {
             use std::os::unix::fs::PermissionsExt as _;
             if file.metadata().await?.permissions().mode() & 0o077 != 0 {
-                sink.notice(tr!(
-                    "개인 키 파일을 다른 사용자가 읽거나 쓸 수 있습니다 ({}). chmod 600으로 제한하세요.",
-                    "Other users may read or write the private key file ({}). Restrict it with chmod 600.",
-                    path.display()
-                ));
+                sink.notice(tr!("ssh_auth.other_users_may_read_or_write_the_private", arg0 = path.display()));
             }
         }
         let mut text = Zeroizing::new(String::new());
@@ -202,7 +196,7 @@ async fn key_file(
         Ok(text) => text,
         Err(e) => {
             if explicit {
-                sink.notice(tr!("키 파일을 읽을 수 없습니다 ({}): {e}", "Cannot read the key file ({}): {e}", path.display()));
+                sink.notice(tr!("ssh_auth.cannot_read_the_key_file", arg0 = path.display(), e = e));
             }
             return Ok(KeyAttempt::Unusable);
         }
@@ -215,11 +209,7 @@ async fn key_file(
     // so renamed files and every default/partial-success/jump fallback are covered.
     // Agent keys follow a separate external-signer path and are not claimed here.
     if key.algorithm().is_rsa() {
-        sink.notice(tr!(
-            "RSA 개인 키 파일의 앱 내부 서명은 RUSTSEC-2023-0071 때문에 차단했습니다 ({}). 비-RSA 키, 외부 SSH 에이전트 또는 서버가 허용하는 비밀번호 인증을 사용하세요. 키 파일은 변경하지 않았습니다.",
-            "Local RSA private-key signing is blocked because of RUSTSEC-2023-0071 ({}). Use a non-RSA key, an external SSH agent, or password authentication if the server allows it. The key file was not changed.",
-            path.display()
-        ));
+        sink.notice(tr!("ssh_auth.local_rsa_private_key_signing_is_blocked_because", arg0 = path.display()));
         return Ok(KeyAttempt::Unusable);
     }
     let discovered;
@@ -241,11 +231,7 @@ async fn key_file(
     };
     if let Some(cert) = certificate {
         if cert.public_key() != key.public_key().key_data() {
-            sink.notice(tr!(
-                "사용자 인증서와 개인 키가 일치하지 않습니다: {}",
-                "User certificate does not match private key: {}",
-                path.display()
-            ));
+            sink.notice(tr!("ssh_auth.user_certificate_does_not_match_private_key", arg0 = path.display()));
             if params.certificate_file.is_some() {
                 return Ok(KeyAttempt::Unusable);
             }
@@ -285,7 +271,7 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> anyhow::Result
     match keys::decode_secret_key(text, None) {
         Ok(key) => return Ok(Some(key)),
         Err(e) if !looks_encrypted(text, &e) => {
-            sink.notice(tr!("키 파일을 해석할 수 없습니다 ({}): {e}", "Cannot parse the key file ({}): {e}", path.display()));
+            sink.notice(tr!("ssh_auth.cannot_parse_the_key_file", arg0 = path.display(), e = e));
             return Ok(None);
         }
         Err(_) => {}
@@ -295,9 +281,9 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> anyhow::Result
     for _ in 0..MAX_PASSPHRASE_TRIES {
         let response = sink
             .prompt_response(
-                tr!("키 암호: {name}", "Key passphrase: {name}"),
+                tr!("ssh_auth.key_passphrase", name = name),
                 path.display().to_string(),
-                vec![PromptField { label: t("암호 (passphrase)", "Passphrase").into(), echo: false }],
+                vec![PromptField { label: t!("ssh_auth.passphrase").into(), echo: false }],
                 None,
                 false,
                 true,
@@ -306,15 +292,15 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> anyhow::Result
         let answers = match response {
             PromptResponse::Answers(answers) => answers,
             PromptResponse::Skipped => return Ok(None),
-            PromptResponse::Cancelled => bail!(t("인증이 취소되었습니다", "Authentication cancelled")),
+            PromptResponse::Cancelled => bail!(t!("common.authentication_cancelled")),
         };
         let passphrase = Zeroizing::new(answers.into_iter().next().unwrap_or_default());
         match keys::decode_secret_key(text, Some(&passphrase)) {
             Ok(key) => return Ok(Some(key)),
-            Err(_) => sink.notice(tr!("{name}: 암호가 틀렸습니다", "{name}: wrong passphrase")),
+            Err(_) => sink.notice(tr!("ssh_auth.wrong_passphrase", name = name)),
         }
     }
-    bail!(t("키 암호 시도 횟수를 초과했습니다", "Too many key passphrase attempts"))
+    bail!(t!("ssh_auth.too_many_key_passphrase_attempts"))
 }
 
 /// Tries every key of the reachable agents. Returns `true` on success.
@@ -523,15 +509,15 @@ async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSi
         } else if allows(&methods, MethodKind::Password) {
             let Some(answers) = sink
                 .prompt(
-                    tr!("{target} 비밀번호", "Password for {target}"),
+                    tr!("common.password_for", target = target),
                     String::new(),
-                    vec![PromptField { label: t("비밀번호", "Password").into(), echo: false }],
+                    vec![PromptField { label: t!("common.password").into(), echo: false }],
                     Some(user),
                     !second_factor,
                 )
                 .await
             else {
-                bail!(t("인증이 취소되었습니다", "Authentication cancelled"));
+                bail!(t!("common.authentication_cancelled"));
             };
             let password = answers.into_iter().next().unwrap_or_default();
             match session.authenticate_password(user, password).await? {
@@ -540,30 +526,26 @@ async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSi
             }
         } else {
             let names: Vec<&str> = methods.iter().map(<&str>::from).collect();
-            bail!(tr!(
-                "인증 실패: 남은 인증 방식({})을 사용할 수 없습니다",
-                "Authentication failed: the remaining methods ({}) are not available",
-                names.join(", ")
-            ));
+            bail!(tr!("ssh_auth.authentication_failed_the_remaining_methods_are_not_available", arg0 = names.join(", ")));
         };
 
         attempts += 1;
         match outcome {
             Outcome::Success => return Ok(()),
-            Outcome::Cancelled => bail!(t("인증이 취소되었습니다", "Authentication cancelled")),
+            Outcome::Cancelled => bail!(t!("common.authentication_cancelled")),
             Outcome::Failure(remaining, true) => {
-                sink.notice(t("추가 인증이 필요합니다.", "Further authentication is required."));
+                sink.notice(t!("ssh_auth.further_authentication_is_required"));
                 second_factor = true;
                 autofill = None;
                 methods = remaining;
             }
             Outcome::Unavailable(remaining, _) | Outcome::Failure(remaining, false) => {
-                sink.notice(t("인증 실패, 다시 시도하세요.", "Authentication failed, try again."));
+                sink.notice(t!("common.authentication_failed_try_again"));
                 methods = remaining;
             }
         }
     }
-    bail!(t("인증 실패: 시도 횟수를 초과했습니다", "Authentication failed: too many attempts"))
+    bail!(t!("common.authentication_failed_too_many_attempts"))
 }
 
 enum Outcome {
@@ -607,7 +589,7 @@ async fn keyboard_interactive(
                     // russh owns String responses at this protocol boundary.
                     vec![password.as_str().to_owned()]
                 } else {
-                    let title = if name.is_empty() { tr!("{target} 인증", "Authentication for {target}") } else { name };
+                    let title = if name.is_empty() { tr!("ssh_auth.authentication_for", target = target) } else { name };
                     let fields: Vec<PromptField> =
                         prompts.into_iter().map(|p| PromptField { label: p.prompt.trim().to_owned(), echo: p.echo }).collect();
                     // Ambiguous hidden prompts (OTP, PIN, etc.) must not save or autofill a password.

@@ -69,9 +69,9 @@ impl PlaytermApp {
         let tabs: Vec<String> = closing.iter().map(|s| s.tab_title()).collect();
         let transferring = closing.iter().filter(|s| transferring(s)).count();
         let (title, ok_label) = match request {
-            CloseRequest::Quit => (t("playterm 끝내기", "Quit playterm"), t("끝내기", "Quit")),
-            CloseRequest::Tab(_) => (t("탭 닫기", "Close tab"), t("닫기", "Close")),
-            CloseRequest::Others(_) | CloseRequest::All(_) => (t("탭 닫기", "Close tabs"), t("모두 닫기", "Close all")),
+            CloseRequest::Quit => (t!("app.closing.quit_playterm"), t!("common.quit")),
+            CloseRequest::Tab(_) => (t!("common.close_tab"), t!("common.close")),
+            CloseRequest::Others(_) | CloseRequest::All(_) => (t!("app.closing.close_tabs"), t!("app.closing.close_all")),
         };
         dialogs::confirm_close(ctx, &dialogs::CloseQuestion { title, ok_label, tabs: &tabs, transferring }, dont_ask)
     }

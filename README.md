@@ -38,7 +38,7 @@ x64·ARM64용 실행 파일 하나로 동작하며, 설치나 런타임 설치�
 
 | 크레이트 | 역할 |
 |---|---|
-| `crates/playterm-term` | 터미널 에뮬레이션(alacritty_terminal), UTF-8/CP949 변환, 색상 팔레트 |
+| `crates/playterm-term` | 터미널 에뮬레이션(alacritty_terminal), 다국어 문자셋 변환, 색상 팔레트 |
 | `crates/playterm-net` | SSH(russh) / Telnet / 시리얼 / RDP(IronRDP) 전송, 세션 이벤트·명령 채널, ZMODEM 받기·보내기 |
 | `crates/playterm-types` | 설정·전송이 공유하는 프로토콜·포워딩·시리얼·RDP 설정 타입 |
 | `crates/playterm-config` | 세션 목록(`sessions.toml`), 비밀번호 볼트(`vault.toml`), 설정(`settings.toml`) |
@@ -288,7 +288,11 @@ Telnet 장비·시리얼 콘솔의 로그인이나, SSH 로그인 뒤의 명령(
 
 사이트의 인코딩을 **자동 감지**(새 사이트의 기본값)로 두면, 받은 출력이 UTF-8 인지 CP949 인지 스스로 판단합니다.
 한글이 두어 글자 나오면 결정되고, CP949 로 결정되면 그전에 깨져 보이던 출력도 다시 그립니다(연결 전 프롬프트 줄은 글자만 유지).
-상태 표시줄에 `CP949 (EUC-KR) (자동 감지)` 처럼 표시됩니다. 직접 UTF-8 / CP949 를 지정하면 감지하지 않습니다.
+상태 표시줄에 `CP949 (EUC-KR) (자동 감지)` 처럼 표시됩니다. 인코딩을 직접 지정하면 감지하지 않습니다.
+
+Shift_JIS·EUC-JP·GBK·GB18030·Big5·Windows 코드 페이지·ISO-8859 등도 사이트별로 선택할 수 있습니다.
+UI 언어는 기본으로 OS 설정을 따르며, 설정에서 고른 한국어·영어는 재시작해도 유지합니다. 지원하지 않는 OS 언어는 영어로 표시합니다.
+[언어 및 인코딩 지원 범위](docs/i18n.md)를 참고하세요.
 
 ## 시리얼 · 로그
 

@@ -53,12 +53,12 @@ pub fn snippet(text: &str) -> String {
 
 /// Shows that `text` was copied.
 pub fn copied(ctx: &egui::Context, text: &str) {
-    notify(ctx, t("복사됨", "Copied"), text);
+    notify(ctx, t!("toast.copied"), text);
 }
 
 /// Shows that a program on the remote side (in tab `tab`) put `text` on the clipboard.
 pub fn remote_copied(ctx: &egui::Context, tab: &str, text: &str) {
-    notify(ctx, &tr!("{tab} 에서 클립보드에 씀", "{tab} set the clipboard"), text);
+    notify(ctx, &tr!("toast.set_the_clipboard", tab = tab), text);
 }
 
 /// A short notice: `what`, with `detail` under it.
@@ -81,9 +81,9 @@ fn notify(ctx: &egui::Context, what: &str, text: &str) {
     let chars = text.chars().filter(|&c| c != '\r').count();
     let lines = text.lines().count();
     let what = if lines > 1 {
-        tr!("{what} · {}자 · {}줄", "{what} · {} chars · {} lines", chars, lines)
+        tr!("toast.chars_lines", arg0 = chars, arg1 = lines, what = what)
     } else {
-        tr!("{what} · {}자", "{what} · {} chars", chars)
+        tr!("toast.chars", arg0 = chars, what = what)
     };
     let toast = Toast { what, snippet: snippet(text), quoted: true, since: ctx.input(|i| i.time), secs: SHOW_SECS };
     ctx.data_mut(|d| d.insert_temp(id(), toast));

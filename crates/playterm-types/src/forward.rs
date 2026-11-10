@@ -29,9 +29,9 @@ impl ForwardKind {
 impl fmt::Display for ForwardKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            ForwardKind::Local => t("로컬 (L)", "Local (L)"),
-            ForwardKind::Remote => t("원격 (R)", "Remote (R)"),
-            ForwardKind::Dynamic => t("동적 SOCKS (D)", "Dynamic SOCKS (D)"),
+            ForwardKind::Local => t!("forward.local_l"),
+            ForwardKind::Remote => t!("forward.remote_r"),
+            ForwardKind::Dynamic => t!("forward.dynamic_socks_d"),
         })
     }
 }
@@ -53,18 +53,18 @@ impl ForwardRule {
     /// IPv6 addresses go in brackets.
     pub fn parse(kind: ForwardKind, spec: &str) -> Result<Self, String> {
         let parts = split_colons(spec);
-        let port = |s: &str| s.parse::<u16>().map_err(|_| tr!("잘못된 포트 '{s}': {spec}", "Invalid port '{s}': {spec}"));
+        let port = |s: &str| s.parse::<u16>().map_err(|_| tr!("forward.invalid_port", s = s, spec = spec));
         let (bind, rest): (&str, &[String]) = match (kind, parts.len()) {
             (ForwardKind::Dynamic, 1) | (_, 3) => ("", &parts[..]),
             (ForwardKind::Dynamic, 2) | (_, 4) => (&parts[0], &parts[1..]),
-            _ => return Err(tr!("형식이 잘못되었습니다: {spec}", "Invalid format: {spec}")),
+            _ => return Err(tr!("forward.invalid_format", spec = spec)),
         };
         let mut rule = ForwardRule { kind, bind_host: bind.to_owned(), bind_port: port(&rest[0])?, ..Default::default() };
         if kind != ForwardKind::Dynamic {
             rule.dest_host = rest[1].clone();
             rule.dest_port = port(&rest[2])?;
             if rule.dest_host.is_empty() {
-                return Err(tr!("대상 호스트가 없습니다: {spec}", "Missing destination host: {spec}"));
+                return Err(tr!("forward.missing_destination_host", spec = spec));
             }
         }
         Ok(rule)
@@ -79,8 +79,8 @@ impl ForwardRule {
 impl fmt::Display for ForwardRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let bind = match self.kind {
-            ForwardKind::Remote if self.bind_host.is_empty() => tr!("(서버):{}", "(server):{}", self.bind_port),
-            ForwardKind::Remote => tr!("(서버){}:{}", "(server){}:{}", self.bind_host, self.bind_port),
+            ForwardKind::Remote if self.bind_host.is_empty() => tr!("forward.server", arg0 = self.bind_port),
+            ForwardKind::Remote => tr!("forward.server_2", arg0 = self.bind_host, arg1 = self.bind_port),
             _ => format!("{}:{}", self.local_bind(), self.bind_port),
         };
         match self.kind {

@@ -177,8 +177,8 @@ impl SftpBrowser {
                 }
                 SftpEvent::OpDone { what, result } => {
                     self.status = Some(match result {
-                        Ok(()) => (tr!("{what} 완료", "{what}: done"), false),
-                        Err(e) => (tr!("{what} 실패: {e}", "{what} failed: {e}"), true),
+                        Ok(()) => (tr!("sftp_view.done", what = what), false),
+                        Err(e) => (tr!("sftp_view.failed", e = e, what = what), true),
                     });
                     self.refresh();
                 }
@@ -228,7 +228,7 @@ impl SftpBrowser {
         {
             // The user names the file: it is saved exactly there.
             let Some(local) =
-                crate::picker::Picker::new(crate::picker::Kind::Save, t("다운로드 위치", "Download to")).file_name(&single.name).pick_one()
+                crate::picker::Picker::new(crate::picker::Kind::Save, t!("sftp_view.download_to")).file_name(&single.name).pick_one()
             else {
                 return;
             };
@@ -236,8 +236,7 @@ impl SftpBrowser {
             self.track(id, format!("↓ {}", single.name), false, Some(local));
             return;
         }
-        let Some(dir) =
-            crate::picker::Picker::new(crate::picker::Kind::Folder, t("다운로드할 폴더 선택", "Choose a folder to download to")).pick_one()
+        let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t!("sftp_view.choose_a_folder_to_download_to")).pick_one()
         else {
             return;
         };
@@ -245,11 +244,7 @@ impl SftpBrowser {
         let (safe, unsafe_names): (Vec<_>, Vec<_>) = items.into_iter().partition(|e| is_safe_local_name(&e.name));
         if !unsafe_names.is_empty() {
             let names: Vec<String> = unsafe_names.iter().map(|e| format!("{:?}", e.name)).collect();
-            let text = tr!(
-                "이 PC 에 저장할 수 없는 이름이라 받지 않았습니다: {}",
-                "Not downloaded, the names cannot be saved on this PC: {}",
-                names.join(", ")
-            );
+            let text = tr!("sftp_view.not_downloaded_the_names_cannot_be_saved_on", arg0 = names.join(", "));
             self.status = Some((text, true));
         }
         for entry in safe {
@@ -297,29 +292,22 @@ impl SftpBrowser {
         ui.horizontal_wrapped(|ui| self.action_buttons(ui));
         ui.separator();
         self.listing(ui);
-        ui.weak(tr!(
-            "더블클릭: 폴더 열기 / 파일 다운로드 · Ctrl·Shift+클릭, Ctrl+A: 여러 개 선택 · {}에서 파일을 끌어다 놓으면 업로드",
-            "Double-click: open a folder / download a file · Ctrl/Shift+click, Ctrl+A: select several · Drop files from {} to upload",
-            crate::platform::file_manager()
-        ));
+        ui.weak(tr!("sftp_view.double_click_open_a_folder_download_a_file", arg0 = crate::platform::file_manager()));
     }
 
     fn nav_buttons(&mut self, ui: &mut egui::Ui) {
         if ui
-            .add(icon::button(icon::TERMINAL_DIR, t("터미널 위치", "Terminal's folder")))
-            .on_hover_text(t(
-                "터미널(셸)의 현재 디렉터리로 갑니다 (Linux 서버)",
-                "Goes to the current directory of the terminal's shell (Linux servers)",
-            ))
+            .add(icon::button(icon::TERMINAL_DIR, t!("sftp_view.terminal_s_folder")))
+            .on_hover_text(t!("sftp_view.goes_to_the_current_directory_of_the_terminal"))
             .clicked()
         {
             self.follow_requested = true;
         }
-        if ui.add(icon::button(icon::UP, t("상위", "Up"))).clicked() && !self.cwd.is_empty() {
+        if ui.add(icon::button(icon::UP, t!("sftp_view.up"))).clicked() && !self.cwd.is_empty() {
             let parent = remote_parent(&self.cwd);
             self.navigate(&parent);
         }
-        if ui.add(icon::button(icon::REFRESH, t("새로고침", "Refresh"))).clicked() {
+        if ui.add(icon::button(icon::REFRESH, t!("common.refresh"))).clicked() {
             self.refresh();
         }
     }
@@ -334,20 +322,19 @@ impl SftpBrowser {
 
     fn action_buttons(&mut self, ui: &mut egui::Ui) {
         {
-            if ui.add(icon::button(icon::NEW_FOLDER, t("새 폴더", "New folder"))).clicked() {
+            if ui.add(icon::button(icon::NEW_FOLDER, t!("common.new_folder"))).clicked() {
                 self.prompt = Some(Prompt::NewFolder(String::new()));
             }
             if ui
-                .add(icon::button(icon::UPLOAD, t("업로드", "Upload")))
-                .on_hover_text(t("파일 선택 (창에 끌어다 놓아도 됩니다)", "Choose files (or drop them on the window)"))
+                .add(icon::button(icon::UPLOAD, t!("sftp_view.upload")))
+                .on_hover_text(t!("sftp_view.choose_files_or_drop_them_on_the_window"))
                 .clicked()
-                && let Some(files) = crate::picker::Picker::new(crate::picker::Kind::Files, t("업로드할 파일", "Files to upload")).pick()
+                && let Some(files) = crate::picker::Picker::new(crate::picker::Kind::Files, t!("sftp_view.files_to_upload")).pick()
             {
                 self.upload_paths(files);
             }
-            if ui.add(icon::button(icon::UPLOAD_FOLDER, t("폴더 업로드", "Upload folder"))).clicked()
-                && let Some(dir) =
-                    crate::picker::Picker::new(crate::picker::Kind::Folder, t("업로드할 폴더", "Folder to upload")).pick_one()
+            if ui.add(icon::button(icon::UPLOAD_FOLDER, t!("sftp_view.upload_folder"))).clicked()
+                && let Some(dir) = crate::picker::Picker::new(crate::picker::Kind::Folder, t!("sftp_view.folder_to_upload")).pick_one()
             {
                 self.upload_paths(vec![dir]);
             }
@@ -357,11 +344,11 @@ impl SftpBrowser {
                 0 | 1 => label.to_owned(),
                 n => format!("{label} ({n})"),
             };
-            if ui.add_enabled(has_selection, icon::button(icon::DOWNLOAD, count(t("다운로드", "Download")))).clicked() {
+            if ui.add_enabled(has_selection, icon::button(icon::DOWNLOAD, count(t!("sftp_view.download")))).clicked() {
                 let items = self.selected_entries();
                 self.download(items);
             }
-            if ui.add_enabled(has_selection, icon::button(icon::DELETE, count(t("삭제", "Delete")))).clicked() {
+            if ui.add_enabled(has_selection, icon::button(icon::DELETE, count(t!("common.delete")))).clicked() {
                 self.delete_selected();
             }
         }
@@ -375,8 +362,8 @@ impl SftpBrowser {
             if self.loading && self.entries.is_empty() {
                 ui.spinner();
             } else if self.cwd.is_empty() {
-                ui.weak(t("원격 폴더를 열 수 없습니다 (아래 오류).", "The remote folder could not be opened (error below)."));
-                if ui.add(icon::button(icon::RETRY, t("다시 시도", "Try again"))).clicked() {
+                ui.weak(t!("sftp_view.the_remote_folder_could_not_be_opened_error"));
+                if ui.add(icon::button(icon::RETRY, t!("common.try_again"))).clicked() {
                     self.retry_start();
                 }
             }
@@ -435,12 +422,12 @@ impl SftpBrowser {
                 let mut all = total > 0 && self.selected.len() == total;
                 let partly = !all && !self.selected.is_empty();
                 let check = egui::Checkbox::without_text(&mut all).indeterminate(partly);
-                if ui.add_enabled(total > 0, check).on_hover_text(t("모두 선택 (Ctrl+A)", "Select all (Ctrl+A)")).changed() {
+                if ui.add_enabled(total > 0, check).on_hover_text(t!("sftp_view.select_all_ctrl_a")).changed() {
                     select_all = Some(all);
                 }
-                ui.strong(t("이름", "Name"));
+                ui.strong(t!("common.name"));
             });
-            ui.strong(t("크기", "Size"));
+            ui.strong(t!("common.size"));
             ui.end_row();
             for entry in &self.entries {
                 let mut text = RichText::new(&entry.name);
@@ -490,25 +477,25 @@ impl SftpBrowser {
                         // The whole selection.
                         let n = self.selected.len();
                         let chosen: Vec<RemoteEntry> = self.entries.iter().filter(|e| self.selected.contains(&e.name)).cloned().collect();
-                        if ui.button(tr!("선택한 {n}개 다운로드", "Download {n} selected")).clicked() {
+                        if ui.button(tr!("sftp_view.download_selected", n = n)).clicked() {
                             download = Some(chosen.clone());
                             ui.close();
                         }
-                        if ui.button(tr!("선택한 {n}개 삭제", "Delete {n} selected")).clicked() {
+                        if ui.button(tr!("sftp_view.delete_selected", n = n)).clicked() {
                             prompt = Some(Prompt::Delete(chosen.into_iter().map(|e| (e.name, e.is_dir)).collect()));
                             ui.close();
                         }
                         return;
                     }
-                    if ui.button(t("다운로드", "Download")).clicked() {
+                    if ui.button(t!("sftp_view.download")).clicked() {
                         download = Some(vec![entry.clone()]);
                         ui.close();
                     }
-                    if ui.button(t("이름 바꾸기", "Rename")).clicked() {
+                    if ui.button(t!("sftp_view.rename")).clicked() {
                         prompt = Some(Prompt::Rename { from: entry.name.clone(), to: entry.name.clone() });
                         ui.close();
                     }
-                    if ui.button(t("삭제", "Delete")).clicked() {
+                    if ui.button(t!("common.delete")).clicked() {
                         prompt = Some(Prompt::Delete(vec![(entry.name.clone(), entry.is_dir)]));
                         ui.close();
                     }
@@ -540,8 +527,8 @@ impl SftpBrowser {
 
     fn transfer_list(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.strong(t("전송", "Transfers"));
-            if ui.add(icon::button(icon::CLEAR, t("완료 항목 지우기", "Clear finished")).small()).clicked() {
+            ui.strong(t!("sftp_view.transfers"));
+            if ui.add(icon::button(icon::CLEAR, t!("sftp_view.clear_finished")).small()).clicked() {
                 self.transfers.retain(|t| t.state == TransferState::Running);
             }
         });
@@ -555,33 +542,26 @@ impl SftpBrowser {
                             let text = format!("{} / {}", human_size(t.done), human_size(t.total));
                             let width = (ui.available_width() - 50.0).clamp(60.0, 220.0);
                             ui.add(egui::ProgressBar::new(frac).text(text).desired_width(width));
-                            // `t` is the transfer here, hence the full path.
-                            if ui.add(icon::button(icon::CANCEL, playterm_i18n::t("취소", "Cancel")).small()).clicked() {
+                            if ui.add(icon::button(icon::CANCEL, playterm_i18n::t!("common.cancel")).small()).clicked() {
                                 self.conn.cancel(t.id);
                             }
                         }
                         TransferState::Finished => {
-                            ui.label(tr!("완료 ({})", "Done ({})", human_size(t.done)));
-                            // `t` is the transfer here, hence the full path.
+                            ui.label(tr!("sftp_view.done_2", arg0 = human_size(t.done)));
                             if let Some(path) = &t.local
                                 && ui
-                                    .add(icon::button(icon::OPEN_FOLDER, playterm_i18n::t("폴더 열기", "Open folder")).small())
-                                    .on_hover_text(tr!(
-                                        "{}에서 보기: {}",
-                                        "Show in {}: {}",
-                                        crate::platform::file_manager(),
-                                        path.display()
-                                    ))
+                                    .add(icon::button(icon::OPEN_FOLDER, playterm_i18n::t!("sftp_view.open_folder")).small())
+                                    .on_hover_text(tr!("sftp_view.show_in", arg0 = crate::platform::file_manager(), arg1 = path.display()))
                                     .clicked()
                             {
                                 crate::logging::reveal(path);
                             }
                         }
                         TransferState::Cancelled => {
-                            ui.weak(playterm_i18n::t("취소됨", "Cancelled"));
+                            ui.weak(playterm_i18n::t!("common.cancelled"));
                         }
                         TransferState::Failed(e) => {
-                            ui.colored_label(ui.visuals().error_fg_color, tr!("실패: {e}", "Failed: {e}"));
+                            ui.colored_label(ui.visuals().error_fg_color, tr!("sftp_view.failed_2", e = e));
                         }
                     }
                 });
@@ -598,45 +578,42 @@ impl SftpBrowser {
                 let enter = |ui: &egui::Ui, r: &egui::Response| r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 match prompt {
                     Prompt::NewFolder(name) => {
-                        ui.heading(t("새 폴더", "New folder"));
+                        ui.heading(t!("common.new_folder"));
                         let r = ui.text_edit_singleline(name);
                         // Check Enter before re-focusing: Enter makes the field give up focus.
                         if enter(ui, &r) { done = Some(true) } else { r.request_focus() }
                     }
                     Prompt::Rename { from, to } => {
-                        ui.heading(tr!("'{from}' 이름 바꾸기", "Rename '{from}'"));
+                        ui.heading(tr!("sftp_view.rename_2", from = from));
                         let r = ui.text_edit_singleline(to);
                         if enter(ui, &r) { done = Some(true) } else { r.request_focus() }
                     }
                     Prompt::Delete(items) => {
-                        ui.heading(t("삭제", "Delete"));
+                        ui.heading(t!("common.delete"));
                         const SHOWN: usize = 8;
                         let mut names: Vec<&str> = items.iter().take(SHOWN).map(|(n, _)| n.as_str()).collect();
                         let more = items.len().saturating_sub(SHOWN);
-                        let more_text = tr!("외 {more}개", "and {more} more");
+                        let more_text = tr!("sftp_view.and_more", more = more);
                         if more > 0 {
                             names.push(&more_text);
                         }
                         if items.len() > 1 {
-                            ui.label(tr!("{}개를 삭제할까요?", "Delete {} items?", items.len()));
+                            ui.label(tr!("sftp_view.delete_items", arg0 = items.len()));
                             ui.weak(names.join(", "));
                         } else {
-                            ui.label(tr!("{} 을(를) 삭제할까요?", "Delete {}?", names.join(", ")));
+                            ui.label(tr!("sftp_view.delete", arg0 = names.join(", ")));
                         }
                         if items.iter().any(|(_, dir)| *dir) {
-                            ui.colored_label(
-                                ui.visuals().warn_fg_color,
-                                t("폴더는 안의 내용까지 모두 삭제됩니다.", "Folders are deleted with everything in them."),
-                            );
+                            ui.colored_label(ui.visuals().warn_fg_color, t!("sftp_view.folders_are_deleted_with_everything_in_them"));
                         }
                     }
                 }
                 ui.add_space(8.0);
                 let deleting = matches!(prompt, Prompt::Delete(_));
                 let ok = if deleting {
-                    icon::danger(ui, icon::DELETE, t("삭제", "Delete"))
+                    icon::danger(ui, icon::DELETE, t!("common.delete"))
                 } else {
-                    icon::primary(ui, icon::OK, t("확인", "OK"))
+                    icon::primary(ui, icon::OK, t!("common.ok"))
                 };
                 let (main, cancel) = icon::ok_cancel_row(ui, ok, true, icon::cancel());
                 {

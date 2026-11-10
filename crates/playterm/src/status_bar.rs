@@ -24,10 +24,10 @@ pub fn lock_keys() -> Option<(bool, bool)> {
 
 fn state_text(state: &SessionState) -> (&'static str, Color32) {
     match state {
-        SessionState::Local => (t("로컬 프롬프트", "Local prompt"), Color32::from_rgb(140, 140, 140)),
-        SessionState::Connecting => (t("연결 중", "Connecting"), Color32::from_rgb(220, 180, 40)),
-        SessionState::Connected => (t("연결됨", "Connected"), Color32::from_rgb(60, 190, 90)),
-        SessionState::Closed => (t("연결 끊김", "Disconnected"), Color32::from_rgb(200, 70, 70)),
+        SessionState::Local => (t!("common.local_prompt"), Color32::from_rgb(140, 140, 140)),
+        SessionState::Connecting => (t!("status_bar.connecting"), Color32::from_rgb(220, 180, 40)),
+        SessionState::Connected => (t!("common.connected"), Color32::from_rgb(60, 190, 90)),
+        SessionState::Closed => (t!("common.disconnected"), Color32::from_rgb(200, 70, 70)),
     }
 }
 
@@ -40,7 +40,7 @@ fn lit_locks(keys: Option<(bool, bool)>) -> Vec<&'static str> {
 /// A lock key that is on.
 fn lock(ui: &mut egui::Ui, label: &str) {
     let text = RichText::new(label).small().monospace().strong().color(ui.visuals().warn_fg_color);
-    ui.label(text).on_hover_text(format!("{label} {}", t("켜짐", "on")));
+    ui.label(text).on_hover_text(format!("{label} {}", t!("status_bar.on")));
 }
 
 /// What playterm is keeping Windows from doing.
@@ -86,35 +86,31 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
             }
             if awake.screensaver {
                 ui.separator();
-                ui.label(RichText::new(t("화면보호기 방지", "No screen saver")).small()).on_hover_text(t(
-                    "화면보호기가 켜지지 않습니다 (도구 → 화면보호기 진입 방지)",
-                    "The screen saver will not start (Tools → Prevent screen saver)",
-                ));
+                ui.label(RichText::new(t!("status_bar.no_screen_saver")).small())
+                    .on_hover_text(t!("status_bar.the_screen_saver_will_not_start_tools_prevent"));
             }
             if awake.sleep {
                 ui.separator();
-                ui.label(RichText::new(t("절전 방지", "No sleep")).small()).on_hover_text(t(
-                    "연결된 세션이 있어 Windows 가 절전 모드로 들어가지 않습니다 (설정에서 변경)",
-                    "Windows will not go to sleep while sessions are connected (change in Settings)",
-                ));
+                ui.label(RichText::new(t!("status_bar.no_sleep")).small())
+                    .on_hover_text(t!("status_bar.windows_will_not_go_to_sleep_while_sessions"));
             }
             let Some(s) = session else { return };
             ui.separator();
             // An RDP desktop is not counted (its traffic is the picture, not terminal data).
             if !s.is_rdp() {
                 ui.label(RichText::new(format!("↑ {}", human_size(s.tx_bytes))).small().monospace())
-                    .on_hover_text(t("이 연결에서 보낸 데이터 (입력, 응답)", "Data sent on this connection (input, replies)"));
+                    .on_hover_text(t!("status_bar.data_sent_on_this_connection_input_replies"));
                 ui.label(RichText::new(format!("↓ {}", human_size(s.rx_bytes))).small().monospace())
-                    .on_hover_text(t("이 연결에서 받은 데이터 (화면 출력)", "Data received on this connection (screen output)"));
+                    .on_hover_text(t!("status_bar.data_received_on_this_connection_screen_output"));
                 ui.separator();
             }
             if s.is_rdp() {
                 let (w, h) = s.rdp.size;
                 ui.label(RichText::new(format!("{w}×{h} px")).small().monospace())
-                    .on_hover_text(t("원격 데스크톱 해상도", "Remote desktop resolution"));
+                    .on_hover_text(t!("status_bar.remote_desktop_resolution"));
             } else {
                 ui.label(RichText::new(format!("{}×{}", s.terminal.cols(), s.terminal.rows())).small().monospace())
-                    .on_hover_text(t("터미널 크기 (열×행)", "Terminal size (columns×rows)"));
+                    .on_hover_text(t!("status_bar.terminal_size_columns_rows"));
             }
         });
     });
