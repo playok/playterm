@@ -6,7 +6,7 @@
 
 playterm 是使用 Rust（egui、alacritty_terminal、russh、IronRDP）开发的原生终端应用。Windows x64 和 ARM64 版本提供单个便携式可执行文件，无需安装运行时；macOS 提供 Apple silicon 和 Intel 应用。
 
-本文是面向开发分支 `master` 的简体中文使用指南。已发布功能请查看 [v0.7.0 变更](docs/releases/v0.7.0.md)和[发行说明](https://github.com/playok/playterm/releases)。[英文详细参考](README.en.md)包含完整设置、开发与打包流程。
+本文是面向开发分支 `master` 的简体中文使用指南。已发布功能请查看 [v0.8.0 变更](docs/releases/v0.8.0.md)和[发行说明](https://github.com/playok/playterm/releases)。[英文详细参考](README.en.md)包含完整设置、开发与打包流程。
 
 ## 主要功能
 

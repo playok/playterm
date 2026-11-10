@@ -6,7 +6,7 @@
 
 [기여 안내](CONTRIBUTING.md) | [버전별 변경 내역](docs/releases/)
 
-이 README는 개발 중인 master 기준입니다. [v0.7.0 변경 내역](docs/releases/v0.7.0.md)과
+이 README는 개발 중인 master 기준입니다. [v0.8.0 변경 내역](docs/releases/v0.8.0.md)과
 [릴리스별 설명](https://github.com/playok/playterm/releases)에서 배포 버전의 기능과 주의사항을 확인하세요.
 
 **관리하는 모든 장비를 한 창에서 — SSH, Telnet, 시리얼 콘솔, Windows 원격 데스크톱을 탭으로.**
