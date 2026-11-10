@@ -194,6 +194,19 @@ mod tests {
     }
 
     #[test]
+    fn resolves_russian_regions() {
+        let russian = Language::from_locale("ru");
+        assert_eq!(russian.code(), "ru");
+        assert_eq!(russian.name(), "Русский");
+        for locale in ["ru-RU", "ru_RU.UTF-8", "RU_ru@variant", "ru-BY", "ru-KZ"] {
+            assert_eq!(Language::from_locale(locale), russian, "{locale}");
+        }
+        for locale in ["uk-UA", "be-BY", "bg-BG", "sr-RS"] {
+            assert_eq!(Language::from_locale(locale), Language::ENGLISH, "{locale}");
+        }
+    }
+
+    #[test]
     fn resolves_german_and_french_regions() {
         for (code, name, variants) in [
             ("de", "Deutsch", ["de-DE", "de-AT", "de-CH", "DE_de.UTF-8", "de_LU@variant"]),
@@ -239,6 +252,7 @@ mod tests {
                 include_str!("../locales/de.toml"),
                 include_str!("../locales/fr.toml"),
                 include_str!("../locales/zh-tw.toml"),
+                include_str!("../locales/ru.toml"),
             ]
             .map(|text| toml::from_str(text).unwrap()),
         );
@@ -299,6 +313,7 @@ mod tests {
             ("de", "Schließen", "Eingabe in alle Tabs · weitere: 3"),
             ("fr", "Fermer", "Saisie dans tous les onglets · autres : 3"),
             ("zh-tw", "關閉", "正在向所有分頁輸入 · 另有 3 個"),
+            ("ru", "Закрыть", "Ввод во все вкладки · других вкладок: 3"),
         ] {
             set_language(Language::from_locale(code));
             assert_eq!(t!("common.close"), close);
