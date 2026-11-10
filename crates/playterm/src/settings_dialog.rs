@@ -539,9 +539,11 @@ impl SettingsDialog {
             };
             line(ui, &[("user@host", c(10)), (":", fg), ("~/src", c(12)), ("$ ls -l", fg)]);
             line(ui, &[("drwxr-xr-x  ", fg), ("build/", c(12)), ("   ", fg), ("run.sh", c(10)), ("   README.md", fg)]);
-            // The Hangul sample stays in both languages: it previews the font's Korean glyphs.
+            // The localized sample previews the glyphs needed by the selected UI language.
             let failed = t!("settings_dialog.connection_failed");
-            line(ui, &[("error: ", c(9)), (failed, fg), ("warning: ", c(11)), (t!("settings_dialog.font_sample"), fg)]);
+            line(ui, &[("error: ", c(9)), (failed, fg)]);
+            // Keep accented/CJK glyph samples visible even when the translated error is long.
+            line(ui, &[("warning: ", c(11)), (t!("settings_dialog.font_sample"), fg)]);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("┌──┬──┐ ").font(font.clone()).color(fg));
                 let selected = RichText::new(t!("settings_dialog.selection")).font(font.clone()).color(fg);

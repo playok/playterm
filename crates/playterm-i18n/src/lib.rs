@@ -168,6 +168,108 @@ mod tests {
     }
 
     #[test]
+    fn resolves_japanese_and_distinguishes_chinese_scripts() {
+        let japanese = Language::from_locale("ja");
+        assert_eq!(japanese.code(), "ja");
+        assert_eq!(japanese.name(), "日本語");
+        for locale in ["ja-JP", "ja_JP.UTF-8", "JA_jp@variant"] {
+            assert_eq!(Language::from_locale(locale), japanese);
+        }
+        let simplified = Language::from_locale("zh-CN");
+        assert_eq!(simplified.code(), "zh-cn");
+        assert_eq!(simplified.name(), "简体中文");
+        for locale in ["zh_CN.UTF-8", "ZH_cn", "zh-Hans", "zh-Hans-CN", "zh-SG", "zh_Hans_SG"] {
+            assert_eq!(Language::from_locale(locale), simplified);
+        }
+        let traditional = Language::from_locale("zh-TW");
+        assert_eq!(traditional.code(), "zh-tw");
+        assert_eq!(traditional.name(), "繁體中文");
+        assert_ne!(traditional, simplified);
+        for locale in ["zh_TW.UTF-8", "ZH_tw@variant", "zh-Hant", "zh_Hant_TW.UTF-8", "zh-Hant-HK", "zh-Hant-MO"] {
+            assert_eq!(Language::from_locale(locale), traditional, "{locale}");
+        }
+        for locale in ["zh", "zh-HK", "zh-MO"] {
+            assert_eq!(Language::from_locale(locale), Language::ENGLISH, "{locale}");
+        }
+    }
+
+    #[test]
+    fn resolves_russian_regions() {
+        let russian = Language::from_locale("ru");
+        assert_eq!(russian.code(), "ru");
+        assert_eq!(russian.name(), "Русский");
+        for locale in ["ru-RU", "ru_RU.UTF-8", "RU_ru@variant", "ru-BY", "ru-KZ"] {
+            assert_eq!(Language::from_locale(locale), russian, "{locale}");
+        }
+        for locale in ["uk-UA", "be-BY", "bg-BG", "sr-RS"] {
+            assert_eq!(Language::from_locale(locale), Language::ENGLISH, "{locale}");
+        }
+    }
+
+    #[test]
+    fn resolves_german_and_french_regions() {
+        for (code, name, variants) in [
+            ("de", "Deutsch", ["de-DE", "de-AT", "de-CH", "DE_de.UTF-8", "de_LU@variant"]),
+            ("fr", "Français", ["fr-FR", "fr-CA", "fr-BE", "FR_ch.UTF-8", "fr_LU@variant"]),
+        ] {
+            let language = Language::from_locale(code);
+            assert_eq!(language.code(), code);
+            assert_eq!(language.name(), name);
+            for locale in variants {
+                assert_eq!(Language::from_locale(locale), language, "{locale}");
+            }
+        }
+    }
+
+    #[test]
+    fn resolves_spanish_regions_and_brazilian_portuguese() {
+        let spanish = Language::from_locale("es");
+        assert_eq!(spanish.code(), "es");
+        assert_eq!(spanish.name(), "Español");
+        for locale in ["es-ES", "es-MX", "es-AR", "es-419", "ES_es.UTF-8", "es_US@variant"] {
+            assert_eq!(Language::from_locale(locale), spanish, "{locale}");
+        }
+        let brazilian = Language::from_locale("pt-BR");
+        assert_eq!(brazilian.code(), "pt-br");
+        assert_eq!(brazilian.name(), "Português (Brasil)");
+        for locale in ["pt_BR.UTF-8", "PT_br@variant", "pt-BR-x-private"] {
+            assert_eq!(Language::from_locale(locale), brazilian, "{locale}");
+        }
+        for locale in ["pt", "pt-PT", "pt_PT.UTF-8", "pt-AO", "pt-MZ"] {
+            assert_eq!(Language::from_locale(locale), Language::ENGLISH, "{locale}");
+        }
+    }
+
+    #[test]
+    fn shipped_catalogs_are_complete_and_preserve_terminal_controls() {
+        let mut values = catalogs();
+        values.extend(
+            [
+                include_str!("../locales/ja.toml"),
+                include_str!("../locales/zh-cn.toml"),
+                include_str!("../locales/es.toml"),
+                include_str!("../locales/pt-br.toml"),
+                include_str!("../locales/de.toml"),
+                include_str!("../locales/fr.toml"),
+                include_str!("../locales/zh-tw.toml"),
+                include_str!("../locales/ru.toml"),
+            ]
+            .map(|text| toml::from_str(text).unwrap()),
+        );
+        catalog::generate(&values).unwrap();
+        let english = &values[0];
+        for translated in &values[1..] {
+            for (source, target) in [(&english.text, &translated.text), (&english.format, &translated.format)] {
+                assert_eq!(source.keys().collect::<Vec<_>>(), target.keys().collect::<Vec<_>>(), "{}", translated.locale.code);
+                for (key, text) in source {
+                    let controls = |s: &str| s.chars().filter(|c| c.is_control()).collect::<String>();
+                    assert_eq!(controls(text), controls(&target[key]), "{}: {key}", translated.locale.code);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn renders_reordered_repeated_arguments_without_reinterpreting_values() {
         let args = ["{arg1} 🐱".into(), "서울".into()];
         let parts = [Part::Argument(1), Part::Text(" / "), Part::Argument(0), Part::Text(" / "), Part::Argument(1)];
@@ -203,6 +305,20 @@ mod tests {
             }
         );
         assert_eq!(count.get(), 1);
+        for (code, close, broadcast) in [
+            ("ja", "閉じる", "すべてのタブに入力中 · 他 3 個"),
+            ("zh-cn", "关闭", "正在向所有标签页输入 · 另有 3 个"),
+            ("es", "Cerrar", "Escribiendo en todas las pestañas · otras: 3"),
+            ("pt-br", "Fechar", "Digitando em todas as abas · outras: 3"),
+            ("de", "Schließen", "Eingabe in alle Tabs · weitere: 3"),
+            ("fr", "Fermer", "Saisie dans tous les onglets · autres : 3"),
+            ("zh-tw", "關閉", "正在向所有分頁輸入 · 另有 3 個"),
+            ("ru", "Закрыть", "Ввод во все вкладки · других вкладок: 3"),
+        ] {
+            set_language(Language::from_locale(code));
+            assert_eq!(t!("common.close"), close);
+            assert_eq!(tr!("app.broadcast.typing_into_all_tabs_other", others = 3), broadcast);
+        }
         set_language(Language::KOREAN);
         assert_eq!(t!("common.close"), "닫기");
     }
