@@ -26,7 +26,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **Password vault**: saved passwords are encrypted with a master password (Argon2id + XChaCha20-Poly1305)
 - **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads and uploads (`sz`/`rz`)
 - **Site manager**: folders, per-site tab colors, PuTTY, Xshell and SecureCRT session import, and a `playterm>` command prompt in unconnected tabs
-- Korean / English / Japanese / Simplified Chinese UI, dark / light themes
+- Korean / English / Japanese / Simplified Chinese / Spanish / Brazilian Portuguese UI, dark / light themes
 
 ## Screenshots
 
@@ -44,7 +44,7 @@ The screenshots show the Korean UI; English is one setting away.
 | `crates/playterm-net` | SSH (russh) / Telnet / serial / RDP (IronRDP) transports, session event and command channels, ZMODEM receiving and sending |
 | `crates/playterm-types` | Protocol, forwarding, serial and RDP settings shared by config and transports |
 | `crates/playterm-config` | Site list (`sessions.toml`), password vault (`vault.toml`), settings (`settings.toml`) |
-| `crates/playterm-i18n` | Korean / English / Japanese / Simplified Chinese UI strings |
+| `crates/playterm-i18n` | UI strings for six languages and translation validation |
 | `crates/playterm` | GUI app (eframe/egui): rendering, keyboard/IME input, dialogs, updates |
 | `crates/playterm-sign` | Signs release checksums (for release builds) |
 
@@ -217,7 +217,7 @@ Connection commands connect in that tab, and the prompt comes back when the conn
 
 ## Display and search
 
-- **Tools → Settings**: language (system / 한국어 / English / 日本語 / 简体中文), UI theme (follow the system (default) / dark / light), font, size, color theme, scrollback lines. Changes preview
+- **Tools → Settings**: language (system / 한국어 / English / 日本語 / 简体中文 / Español / Português (Brasil)), UI theme (follow the system (default) / dark / light), font, size, color theme, scrollback lines. Changes preview
   in the open tabs right away, and [Cancel] puts them back.
   - Font: any font installed on this PC (system and per-user, monospaced fonts first, searchable) or a TTF/OTF/TTC file via [From file…].
     Hangul missing from the font is drawn with Malgun Gothic.
@@ -303,7 +303,7 @@ A couple of Hangul characters settle it; if it is CP949, output that was garbled
 The status bar shows something like `CP949 (EUC-KR) (auto-detected)`. Selecting an encoding explicitly turns detection off.
 
 Shift_JIS, EUC-JP, GBK, GB18030, Big5, Windows code pages and ISO-8859 encodings are also available per site.
-The UI follows the OS language by default, falling back to English for unsupported locales. An explicit Korean, English, Japanese or Simplified Chinese choice survives restart.
+The UI follows the OS language by default, falling back to English for unsupported locales. An explicit Korean, English, Japanese, Simplified Chinese, Spanish or Brazilian Portuguese choice survives restart.
 See [language and encoding support](docs/i18n.md).
 
 ## Serial and logging

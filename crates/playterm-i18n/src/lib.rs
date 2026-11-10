@@ -181,7 +181,26 @@ mod tests {
         for locale in ["zh_CN.UTF-8", "ZH_cn", "zh-Hans", "zh-Hans-CN", "zh-SG", "zh_Hans_SG"] {
             assert_eq!(Language::from_locale(locale), simplified);
         }
-        for locale in ["zh", "zh-TW", "zh_Hant_TW.UTF-8", "zh-Hant", "zh-HK", "zh-MO", "es", "pt-BR", "de", "fr"] {
+        for locale in ["zh", "zh-TW", "zh_Hant_TW.UTF-8", "zh-Hant", "zh-HK", "zh-MO", "de", "fr"] {
+            assert_eq!(Language::from_locale(locale), Language::ENGLISH, "{locale}");
+        }
+    }
+
+    #[test]
+    fn resolves_spanish_regions_and_brazilian_portuguese() {
+        let spanish = Language::from_locale("es");
+        assert_eq!(spanish.code(), "es");
+        assert_eq!(spanish.name(), "Español");
+        for locale in ["es-ES", "es-MX", "es-AR", "es-419", "ES_es.UTF-8", "es_US@variant"] {
+            assert_eq!(Language::from_locale(locale), spanish, "{locale}");
+        }
+        let brazilian = Language::from_locale("pt-BR");
+        assert_eq!(brazilian.code(), "pt-br");
+        assert_eq!(brazilian.name(), "Português (Brasil)");
+        for locale in ["pt_BR.UTF-8", "PT_br@variant", "pt-BR-x-private"] {
+            assert_eq!(Language::from_locale(locale), brazilian, "{locale}");
+        }
+        for locale in ["pt", "pt-PT", "pt_PT.UTF-8", "pt-AO", "pt-MZ"] {
             assert_eq!(Language::from_locale(locale), Language::ENGLISH, "{locale}");
         }
     }
@@ -189,8 +208,15 @@ mod tests {
     #[test]
     fn shipped_catalogs_are_complete_and_preserve_terminal_controls() {
         let mut values = catalogs();
-        values
-            .extend([include_str!("../locales/ja.toml"), include_str!("../locales/zh-cn.toml")].map(|text| toml::from_str(text).unwrap()));
+        values.extend(
+            [
+                include_str!("../locales/ja.toml"),
+                include_str!("../locales/zh-cn.toml"),
+                include_str!("../locales/es.toml"),
+                include_str!("../locales/pt-br.toml"),
+            ]
+            .map(|text| toml::from_str(text).unwrap()),
+        );
         catalog::generate(&values).unwrap();
         let english = &values[0];
         for translated in &values[1..] {
@@ -240,9 +266,12 @@ mod tests {
             }
         );
         assert_eq!(count.get(), 1);
-        for (code, close, broadcast) in
-            [("ja", "閉じる", "すべてのタブに入力中 · 他 3 個"), ("zh-cn", "关闭", "正在向所有标签页输入 · 另有 3 个")]
-        {
+        for (code, close, broadcast) in [
+            ("ja", "閉じる", "すべてのタブに入力中 · 他 3 個"),
+            ("zh-cn", "关闭", "正在向所有标签页输入 · 另有 3 个"),
+            ("es", "Cerrar", "Escribiendo en todas las pestañas · otras: 3"),
+            ("pt-br", "Fechar", "Digitando em todas as abas · outras: 3"),
+        ] {
             set_language(Language::from_locale(code));
             assert_eq!(t!("common.close"), close);
             assert_eq!(tr!("app.broadcast.typing_into_all_tabs_other", others = 3), broadcast);
