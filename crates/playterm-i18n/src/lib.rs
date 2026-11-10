@@ -68,10 +68,8 @@ impl Language {
             if let Some(index) = registry.iter().position(|locale| locale.code == code || locale.aliases.contains(&code.as_str())) {
                 return Some(Self(index + 1));
             }
-            match code.rfind('-') {
-                Some(index) => code.truncate(index),
-                None => return None,
-            }
+            let index = code.rfind('-')?;
+            code.truncate(index);
         }
     }
 
