@@ -310,7 +310,12 @@ mod tests {
 
         let long = plain(&list(dir.path(), &ListOptions { long: true, ..Default::default() }, 80).unwrap());
         assert!(long.contains("<DIR>") && long.contains("1,234 a.log"));
-        assert!(long.ends_with("파일 2개 (1,239 바이트), 폴더 1개"));
+        // Other app tests apply the OS language globally. Both shipped translations
+        // must retain the exact counts; do not assume this runner uses Korean.
+        assert!(
+            ["파일 2개 (1,239 바이트), 폴더 1개", "2 files (1,239 bytes), 1 folders"].iter().any(|summary| long.ends_with(summary)),
+            "unexpected directory summary: {long}"
+        );
 
         let opts = ListOptions { path: Some("*.log".into()), ..Default::default() };
         assert_eq!(plain(&list(dir.path(), &opts, 80).unwrap()), "a.log");

@@ -1162,7 +1162,10 @@ mod tests {
         assert_eq!(v.steps, vec![step("login:", "{user}"), step("Password:", "{password}")], "trimmed, blank row dropped");
 
         a.steps.push(step("", "show run"));
-        assert!(validate_auto_login(&a).unwrap_err().contains("3단계"));
+        let error = validate_auto_login(&a).unwrap_err();
+        // OS language detection can select English on CI. Keep checking the
+        // effective step number after the blank row was removed in either language.
+        assert!(error.contains("3단계") || error.contains("Automatic login step 3:"), "unexpected validation error: {error}");
 
         let empty = AutoLogin { enabled: true, steps: vec![] };
         assert!(validate_auto_login(&empty).is_err());
