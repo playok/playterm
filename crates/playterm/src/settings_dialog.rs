@@ -187,16 +187,16 @@ impl SettingsDialog {
             });
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.add(icon::primary(ui, icon::OK, t!("common.ok"))).clicked() {
-                    result = Some(SettingsResult::Save(self.draft.clone()));
-                }
-                if ui.add(icon::button(icon::CANCEL, t!("common.cancel"))).clicked() {
-                    result = Some(SettingsResult::Cancel(self.original.clone()));
+                let tip = tr!("settings_dialog.puts_only_the_settings_back_to_their_defaults", arg0 = self.section.name());
+                if ui.add(icon::button(icon::RESET, t!("settings_dialog.reset_to_defaults"))).on_hover_text(tip).clicked() {
+                    self.section.reset(&mut self.draft);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let tip = tr!("settings_dialog.puts_only_the_settings_back_to_their_defaults", arg0 = self.section.name());
-                    if ui.add(icon::button(icon::RESET, t!("settings_dialog.reset_to_defaults"))).on_hover_text(tip).clicked() {
-                        self.section.reset(&mut self.draft);
+                    if ui.add(icon::primary(ui, icon::OK, t!("common.ok"))).clicked() {
+                        result = Some(SettingsResult::Save(self.draft.clone()));
+                    }
+                    if ui.add(icon::button(icon::CANCEL, t!("common.cancel"))).clicked() {
+                        result = Some(SettingsResult::Cancel(self.original.clone()));
                     }
                 });
             });
