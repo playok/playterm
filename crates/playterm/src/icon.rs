@@ -88,6 +88,8 @@ icons! {
     FULLSCREEN = ICON_FULLSCREEN,
     FULLSCREEN_EXIT = ICON_FULLSCREEN_EXIT,
     SETTINGS = ICON_SETTINGS,
+    // Reuses an icon already in the font subset (no text-encoding glyph there yet).
+    ENCODING = ICON_SYNC,
 }
 
 /// A button with `icon` before `text`.

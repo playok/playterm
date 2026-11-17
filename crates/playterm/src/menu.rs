@@ -3,7 +3,7 @@
 use eframe::egui::{self, Button};
 use playterm_config::TabColor;
 use playterm_i18n::{t, tr};
-use playterm_term::LogMode;
+use playterm_term::{Charset, LogMode};
 
 use crate::keys::{Shortcut, hint};
 use crate::session::Session;
@@ -77,6 +77,8 @@ pub enum Command {
     /// Whether this tab receives simultaneous input.
     ToggleInBroadcast(usize),
     SetTabColor(usize, Option<TabColor>),
+    /// Sets the encoding of tab `i`; `Auto` starts detecting it again.
+    SetCharset(usize, Charset),
 
     TogglePreventScreensaver,
 
@@ -196,6 +198,28 @@ pub fn session_items(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, s: 
             item(ui, out, t!("menu.start_raw_log"), "", true, Command::StartLog(i, LogMode::Raw));
         }
         item(ui, out, t!("menu.open_log_folder"), "", true, Command::OpenLogFolder);
+    });
+    ui.add_enabled_ui(s.can_change_charset(), |ui| {
+        submenu(ui, t!("menu.encoding"), |ui| charset_items(ui, out, i, s.charset()));
+    });
+}
+
+/// The encodings to pick for tab `i` (`current` is checked): "auto-detect" first, which also
+/// detects again when picked while another one is set, then every fixed one in a scroll area.
+pub fn charset_items(ui: &mut egui::Ui, out: &mut Option<Command>, i: usize, current: Charset) {
+    let auto = Button::new((lead(ui, current == Charset::Auto), t!("charset.auto_detect"))).shortcut_text(t!("menu.detect_again"));
+    if ui.add(auto).clicked() {
+        *out = Some(Command::SetCharset(i, Charset::Auto));
+        ui.close();
+    }
+    ui.separator();
+    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+        for charset in Charset::ALL.into_iter().filter(|c| *c != Charset::Auto) {
+            if ui.add(Button::new((lead(ui, current == charset), charset.to_string()))).clicked() {
+                *out = Some(Command::SetCharset(i, charset));
+                ui.close();
+            }
+        }
     });
 }
 

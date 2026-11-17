@@ -293,7 +293,10 @@ impl PlaytermApp {
         if self.settings.status_bar {
             let session = self.sessions.get(self.active);
             let awake = status_bar::Awake { sleep: self.sleep_guard.active(), screensaver: self.screensaver_guard.active() };
-            egui::Panel::bottom("status").show(ui, |ui| status_bar::show(ui, session, awake));
+            let command = egui::Panel::bottom("status").show(ui, |ui| status_bar::show(ui, session, self.active, awake)).inner;
+            if let Some(command) = command {
+                self.run(&ctx, command);
+            }
         }
         let style = self.view_style();
         let output = egui::CentralPanel::no_frame()

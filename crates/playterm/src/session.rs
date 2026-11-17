@@ -1329,6 +1329,22 @@ impl Session {
         }
     }
 
+    /// The encoding setting (`Auto` while detecting).
+    pub fn charset(&self) -> Charset {
+        self.charset
+    }
+
+    /// Whether the encoding can be changed here: a terminal connection, not an RDP desktop.
+    pub fn can_change_charset(&self) -> bool {
+        self.has_target() && !self.is_rdp()
+    }
+
+    /// Switches the encoding of the running session; `Charset::Auto` detects it again.
+    pub fn set_charset(&mut self, charset: Charset) {
+        self.charset = charset;
+        self.terminal.set_charset(charset);
+    }
+
     /// The encoding for the status bar: the setting, or what automatic detection found.
     pub fn charset_label(&self) -> String {
         match (self.charset, self.terminal.detected_charset()) {

@@ -1,9 +1,11 @@
 //! Status bar under the terminal: connection state, target, encoding, terminal size, bytes
 //! received/sent and the Caps Lock / Num Lock state.
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::containers::menu::MenuButton;
+use eframe::egui::{self, Button, Color32, RichText};
 use playterm_i18n::t;
 
+use crate::menu::Command;
 use crate::session::{Session, SessionState};
 use crate::sftp_view::human_size;
 
@@ -50,7 +52,8 @@ pub struct Awake {
     pub screensaver: bool,
 }
 
-pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
+pub fn show(ui: &mut egui::Ui, session: Option<&Session>, i: usize, awake: Awake) -> Option<Command> {
+    let mut command = None;
     let locks = lit_locks(lock_keys());
     // The site's color at the left edge, as on its tab and connection line.
     let site_color = session.and_then(|s| s.tab_color).map(crate::menu::color32);
@@ -69,9 +72,14 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
             if s.has_target() {
                 ui.separator();
                 ui.label(RichText::new(s.target()).small());
-                if !s.is_rdp() {
+                if s.can_change_charset() {
                     ui.separator();
-                    ui.label(RichText::new(s.charset_label()).small());
+                    // A menu button without a frame, so it looks like the text around it.
+                    let label = Button::new(RichText::new(s.charset_label()).small()).frame(false);
+                    let (response, _) = MenuButton::from_button(label).ui(ui, |ui| {
+                        crate::menu::charset_items(ui, &mut command, i, s.charset());
+                    });
+                    response.on_hover_text(t!("status_bar.click_to_change_the_encoding"));
                 }
             }
             if s.is_logging() {
@@ -114,6 +122,7 @@ pub fn show(ui: &mut egui::Ui, session: Option<&Session>, awake: Awake) {
             }
         });
     });
+    command
 }
 
 #[cfg(test)]
