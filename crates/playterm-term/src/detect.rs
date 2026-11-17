@@ -62,6 +62,47 @@ impl Detector {
             _ => None,
         }
     }
+
+    /// Like [`push`](Self::push), for output after the first decision: only a clear UTF-8 or
+    /// CP949 verdict is returned. Ambiguous, mixed or binary data decides nothing, and a
+    /// verdict or a failed window starts the next window.
+    pub fn push_strict(&mut self, bytes: &[u8]) -> Option<Charset> {
+        let start = if self.sample.is_empty() { bytes.iter().position(|&b| b >= 0x80)? } else { 0 };
+        let bytes = &bytes[start..];
+        self.non_ascii += bytes.iter().filter(|&&b| b >= 0x80).count();
+        let room = SAMPLE_LIMIT.saturating_sub(self.sample.len());
+        self.sample.extend_from_slice(&bytes[..bytes.len().min(room)]);
+        if self.non_ascii < MIN_EVIDENCE {
+            return None;
+        }
+        let (verdict, keep) = match (valid_utf8(&self.sample), valid_cp949(&self.sample)) {
+            (true, false) => (Some(Charset::Utf8), false),
+            (false, true) => (Some(Charset::Cp949), false),
+            (true, true) => (None, self.non_ascii < AMBIGUOUS_LIMIT),
+            (false, false) => (None, false),
+        };
+        if !keep || self.sample.len() >= SAMPLE_LIMIT {
+            self.restart();
+        }
+        verdict
+    }
+
+    /// Starts a new window, keeping a UTF-8 sequence cut off at the end so the next read
+    /// does not begin in the middle of a character.
+    fn restart(&mut self) {
+        *self = self.watcher();
+    }
+
+    /// A detector for the output after this one's window: it starts with the UTF-8 sequence
+    /// cut off at the end of the sample (if any), so the next read does not begin in the
+    /// middle of a character, where continuation bytes could pass for CP949 lead bytes.
+    pub fn watcher(&self) -> Detector {
+        let sample = match std::str::from_utf8(&self.sample) {
+            Err(e) if e.error_len().is_none() => self.sample[e.valid_up_to()..].to_vec(),
+            _ => Vec::new(),
+        };
+        Detector { non_ascii: sample.len(), sample }
+    }
 }
 
 #[cfg(test)]
@@ -108,5 +149,38 @@ mod tests {
     fn garbage_falls_back_to_utf8() {
         let mut d = Detector::default();
         assert_eq!(d.push(&[0xFF, 0xFE, 0x80, 0x80, 0xFF]), Some(Charset::Utf8));
+    }
+
+    #[test]
+    fn strict_decides_only_clear_cases() {
+        let mut d = Detector::default();
+        assert_eq!(d.push_strict("안녕하세요".as_bytes()), Some(Charset::Utf8));
+        assert_eq!(d.push_strict(&cp949("안녕하세요")), Some(Charset::Cp949), "next window starts fresh");
+        // Binary data decides nothing and does not poison the next window.
+        assert_eq!(d.push_strict(&[0xFF, 0xFE, 0x80, 0x80, 0xFF]), None);
+        assert_eq!(d.push_strict(&cp949("한글")), Some(Charset::Cp949));
+    }
+
+    #[test]
+    fn strict_handles_ascii_split_and_ambiguity() {
+        let mut d = Detector::default();
+        assert_eq!(d.push_strict(b"plain ascii"), None);
+        let utf8 = "가나다".as_bytes();
+        assert_eq!(d.push_strict(&utf8[..3]), None);
+        assert_eq!(d.push_strict(&utf8[3..]), Some(Charset::Utf8));
+
+        // A character cut between windows does not look like CP949 at the start of the next.
+        let text = "한".repeat(3);
+        let bytes = text.as_bytes();
+        let mut d = Detector::default();
+        assert_eq!(d.push_strict(&bytes[..8]), Some(Charset::Utf8));
+        assert_eq!(d.push_strict(&bytes[8..]), None, "tail kept, not enough evidence yet");
+
+        // Text valid in both encodings is not decided, however long.
+        let mut d = Detector::default();
+        let data = "¡".repeat(20).into_bytes();
+        assert!(valid_utf8(&data) && valid_cp949(&data));
+        assert_eq!(d.push_strict(&data[..10]), None);
+        assert_eq!(d.push_strict(&data[10..]), None);
     }
 }

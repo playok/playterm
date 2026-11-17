@@ -111,6 +111,9 @@ pub struct Terminal {
     auto: Option<AutoDetect>,
     /// The charset [`Charset::Auto`] settled on.
     detected: Option<Charset>,
+    /// Keeps checking the output after detection settles, to follow a host that changes
+    /// its encoding (`None` unless [`Charset::Auto`] has settled).
+    watch: Option<Detector>,
 }
 
 impl Terminal {
@@ -134,6 +137,7 @@ impl Terminal {
             pending: Vec::new(),
             auto: None,
             detected: None,
+            watch: None,
         };
         terminal.set_charset(charset);
         terminal
@@ -146,7 +150,14 @@ impl Terminal {
                 auto.record(Segment::Remote(bytes.to_vec()), bytes.len());
                 auto.detector.push(bytes)
             }
-            None => None,
+            None => {
+                if let Some(charset) = self.watch.as_mut().and_then(|w| w.push_strict(bytes))
+                    && Some(charset) != self.detected
+                {
+                    self.switch_to(charset);
+                }
+                None
+            }
         };
         self.feed_decoded(bytes);
         if let Some(charset) = detected {
@@ -211,6 +222,7 @@ impl Terminal {
         self.decoder = OutputDecoder::new(charset);
         self.encoder = InputEncoder::new(charset);
         self.detected = None;
+        self.watch = None;
         self.auto = (charset == Charset::Auto).then(|| AutoDetect {
             detector: Detector::default(),
             prefix: self.screen_text(),
@@ -224,15 +236,24 @@ impl Terminal {
         self.detected
     }
 
+    /// Switches decoding and input to `charset` without redrawing (the host changed its
+    /// encoding mid-session, e.g. after `export LANG=...`).
+    fn switch_to(&mut self, charset: Charset) {
+        self.decoder = OutputDecoder::new(charset);
+        self.encoder = InputEncoder::new(charset);
+        self.detected = Some(charset);
+    }
+
     /// Uses `charset` from now on. Output already shown in the wrong one is redrawn.
     fn settle(&mut self, charset: Charset) {
         let Some(auto) = self.auto.take() else { return };
         self.detected = Some(charset);
+        // Utf8 output may have been cut mid-character; the watch starts with that tail.
+        self.watch = Some(if charset == Charset::Utf8 { auto.detector.watcher() } else { Detector::default() });
         if charset == Charset::Utf8 {
             return; // what was shown was decoded as UTF-8 already
         }
-        self.decoder = OutputDecoder::new(charset);
-        self.encoder = InputEncoder::new(charset);
+        self.switch_to(charset);
         if let Some(segments) = auto.segments {
             self.rebuild(&auto.prefix, segments);
         }
@@ -573,6 +594,64 @@ mod tests {
         assert_eq!(t.detected_charset(), Some(Charset::Utf8));
         assert_eq!(row_text(&t, 0), "안녕하세요");
         assert_eq!(t.encode_input("한"), "한".as_bytes());
+    }
+
+    #[test]
+    fn auto_utf8_settle_cut_mid_character_keeps_utf8() {
+        // The chunk that settles detection ends inside the second character; the next one
+        // starts with its continuation bytes, which look like CP949 lead bytes.
+        let text = "걢갋 갰겑곲굓궴긕깶껗\r\n";
+        let bytes = text.as_bytes();
+        let mut t = Terminal::new(40, 3, Charset::Auto, 100);
+        t.feed(&bytes[..4]);
+        assert_eq!(t.detected_charset(), Some(Charset::Utf8));
+        t.feed(&bytes[4..]);
+        assert_eq!(t.detected_charset(), Some(Charset::Utf8));
+        assert_eq!(row_text(&t, 0), "걢갋 갰겑곲굓궴긕깶껗");
+        assert_eq!(t.encode_input("한"), "한".as_bytes());
+    }
+
+    #[test]
+    fn auto_follows_cp949_to_utf8_switch() {
+        let mut t = Terminal::new(30, 5, Charset::Auto, 100);
+        t.feed(&cp949("환영합니다\r\n"));
+        assert_eq!(t.detected_charset(), Some(Charset::Cp949));
+        t.feed(b"$ ls\r\n");
+        t.feed("파일목록\r\n".as_bytes());
+        assert_eq!(t.detected_charset(), Some(Charset::Utf8));
+        assert_eq!(row_text(&t, 0), "환영합니다");
+        assert_eq!(row_text(&t, 2), "파일목록");
+        assert_eq!(t.encode_input("한"), "한".as_bytes());
+    }
+
+    #[test]
+    fn auto_follows_utf8_to_cp949_switch() {
+        let mut t = Terminal::new(30, 5, Charset::Auto, 100);
+        t.feed("안녕하세요\r\n".as_bytes());
+        assert_eq!(t.detected_charset(), Some(Charset::Utf8));
+        t.feed(&cp949("파일목록\r\n"));
+        assert_eq!(t.detected_charset(), Some(Charset::Cp949));
+        assert_eq!(row_text(&t, 0), "안녕하세요");
+        assert_eq!(row_text(&t, 1), "파일목록");
+        assert_eq!(t.encode_input("한"), cp949("한"));
+    }
+
+    #[test]
+    fn fixed_charset_does_not_switch() {
+        let mut t = Terminal::new(30, 3, Charset::Cp949, 100);
+        t.feed("안녕하세요".as_bytes());
+        assert_eq!(t.detected_charset(), None);
+        assert_eq!(t.encode_input("한"), cp949("한"));
+    }
+
+    #[test]
+    fn binary_garbage_does_not_switch() {
+        let mut t = Terminal::new(30, 3, Charset::Auto, 100);
+        t.feed(&cp949("환영합니다\r\n"));
+        assert_eq!(t.detected_charset(), Some(Charset::Cp949));
+        t.feed(&[0xFF, 0xFE, 0x80, 0x80, 0xFF, 0xFE]);
+        assert_eq!(t.detected_charset(), Some(Charset::Cp949));
+        assert_eq!(t.encode_input("한"), cp949("한"));
     }
 
     #[test]

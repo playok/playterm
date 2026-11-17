@@ -190,6 +190,11 @@ impl PlaytermApp {
                     s.tab_color = color;
                 }
             }
+            Command::SetCharset(i, charset) => {
+                if let Some(s) = self.sessions.get_mut(i) {
+                    s.set_charset(charset);
+                }
+            }
             Command::ToggleInBroadcast(i) => {
                 if let Some(s) = self.sessions.get_mut(i) {
                     s.in_broadcast = !s.in_broadcast;

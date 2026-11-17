@@ -1,13 +1,15 @@
 //! The toolbar under the menu bar: the commands used most, as icons (as in Xshell). Each shows
 //! its name and shortcut in a tooltip, and has that name for screen readers.
 
+use eframe::egui::containers::menu::MenuButton;
 use eframe::egui::{self, Role, WidgetInfo};
-use playterm_i18n::t;
+use playterm_i18n::{t, tr};
 
 use crate::icon::{self, MaterialIcon};
 use crate::keys::{Shortcut, hint};
-use crate::menu::Command;
+use crate::menu::{self, Command};
 use crate::session::{Session, SessionState};
+use playterm_term::Charset;
 
 /// What the toolbar shows.
 pub struct ToolbarState<'a> {
@@ -25,16 +27,23 @@ pub struct ToolbarState<'a> {
 /// A toolbar button and what it does.
 struct Tool {
     icon: MaterialIcon,
-    name: &'static str,
+    name: String,
     shortcut: String,
     enabled: bool,
     /// The state of a switch, drawn as selected while on.
     on: Option<bool>,
-    command: Command,
+    action: Action,
+}
+
+/// What a toolbar button does when clicked.
+enum Action {
+    Run(Command),
+    /// Opens the encoding menu of tab `i` (the charset is the current one).
+    CharsetMenu(usize, Charset),
 }
 
 fn tool(icon: MaterialIcon, name: &'static str, shortcut: impl Into<String>, enabled: bool, on: Option<bool>, command: Command) -> Tool {
-    Tool { icon, name, shortcut: shortcut.into(), enabled, on, command }
+    Tool { icon, name: name.to_owned(), shortcut: shortcut.into(), enabled, on, action: Action::Run(command) }
 }
 
 /// The toolbar's buttons, in groups (separated by a line).
@@ -57,6 +66,25 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
     } else {
         tool(icon::FULLSCREEN, t!("common.full_screen"), hint(Shortcut::Fullscreen), true, None, Command::ToggleFullscreen)
     };
+    // The name carries the current encoding, so the tooltip and screen readers say it too.
+    let encoding = match active {
+        Some(s) => Tool {
+            icon: icon::ENCODING,
+            name: tr!("toolbar.encoding", charset = s.charset_label()),
+            shortcut: String::new(),
+            enabled: s.can_change_charset(),
+            on: None,
+            action: Action::CharsetMenu(i, s.charset()),
+        },
+        None => Tool {
+            icon: icon::ENCODING,
+            name: t!("menu.encoding").to_owned(),
+            shortcut: String::new(),
+            enabled: false,
+            on: None,
+            action: Action::CharsetMenu(i, Charset::Auto),
+        },
+    };
     vec![
         vec![sidebar],
         vec![
@@ -73,6 +101,7 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
             tool(icon::PASTE, t!("common.paste"), st.paste_hint, active.is_some(), None, Command::Paste),
             tool(icon::FIND, t!("toolbar.find"), hint(Shortcut::Find), active.is_some(), None, Command::Find),
         ],
+        vec![encoding],
         vec![
             tool(icon::FONT_SMALLER, t!("common.smaller_font"), hint(Shortcut::ZoomOut), true, None, Command::ZoomOut),
             tool(icon::FONT_LARGER, t!("common.larger_font"), hint(Shortcut::ZoomIn), true, None, Command::ZoomIn),
@@ -126,11 +155,17 @@ pub fn show(ui: &mut egui::Ui, st: &ToolbarState<'_>) -> Option<Command> {
             ui.separator();
         }
         for tool in group {
-            let response = button(ui, tool);
+            let response = match &tool.action {
+                Action::Run(command) => {
+                    let response = button(ui, tool);
+                    if response.clicked() {
+                        out = Some(command.clone());
+                    }
+                    response
+                }
+                Action::CharsetMenu(i, current) => menu_button(ui, tool, |ui| menu::charset_items(ui, &mut out, *i, *current)),
+            };
             button_w = response.rect.width() + gap;
-            if response.clicked() {
-                out = Some(tool.command.clone());
-            }
         }
     }
     ui.data_mut(|d| d.insert_temp(width_id, button_w));
@@ -138,12 +173,19 @@ pub fn show(ui: &mut egui::Ui, st: &ToolbarState<'_>) -> Option<Command> {
         ui.separator();
         let more = ui.menu_button(egui::RichText::new("»").strong(), |ui| {
             for tool in &hidden {
-                let mut item = icon::button(tool.icon, tool.name).shortcut_text(tool.shortcut.as_str());
+                if let Action::CharsetMenu(i, current) = &tool.action {
+                    ui.add_enabled_ui(tool.enabled, |ui| {
+                        menu::submenu(ui, &tool.name, |ui| menu::charset_items(ui, &mut out, *i, *current));
+                    });
+                    continue;
+                }
+                let Action::Run(command) = &tool.action else { continue };
+                let mut item = icon::button(tool.icon, tool.name.as_str()).shortcut_text(tool.shortcut.as_str());
                 if tool.on == Some(true) {
                     item = item.selected(true);
                 }
                 if ui.add_enabled(tool.enabled, item).clicked() {
-                    out = Some(tool.command.clone());
+                    out = Some(command.clone());
                     ui.close();
                 }
             }
@@ -156,6 +198,16 @@ pub fn show(ui: &mut egui::Ui, st: &ToolbarState<'_>) -> Option<Command> {
 /// A guess at a button's room before the first one is drawn.
 const MIN_GUESS: f32 = 32.0;
 
+/// A toolbar button that opens a menu (`add_menu`) below it; the same look and names as [`button`].
+fn menu_button(ui: &mut egui::Ui, tool: &Tool, add_menu: impl FnOnce(&mut egui::Ui)) -> egui::Response {
+    let tip = &tool.name;
+    let selected = tool.on.unwrap_or(false);
+    let button = icon::icon_button(tool.icon).frame_when_inactive(selected).selected(selected);
+    let (response, _) = ui.add_enabled_ui(tool.enabled, |ui| MenuButton::from_button(button).ui(ui, add_menu)).inner;
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, tool.enabled, &tool.name));
+    response.on_hover_text(tip).on_disabled_hover_text(tip)
+}
+
 /// A toolbar button: its icon, with its name (and shortcut) in its tooltip.
 fn button(ui: &mut egui::Ui, tool: &Tool) -> egui::Response {
     let tip = if tool.shortcut.is_empty() { tool.name.to_owned() } else { format!("{} ({})", tool.name, tool.shortcut) };
@@ -163,7 +215,7 @@ fn button(ui: &mut egui::Ui, tool: &Tool) -> egui::Response {
     let button = icon::icon_button(tool.icon).frame_when_inactive(selected).selected(selected);
     let response = ui.add_enabled(tool.enabled, button);
     response.widget_info(|| {
-        let mut info = WidgetInfo::labeled(Role::Button, tool.enabled, tool.name);
+        let mut info = WidgetInfo::labeled(Role::Button, tool.enabled, tool.name.clone());
         info.selected = tool.on;
         info
     });
