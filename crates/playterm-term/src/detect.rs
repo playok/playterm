@@ -90,12 +90,18 @@ impl Detector {
     /// Starts a new window, keeping a UTF-8 sequence cut off at the end so the next read
     /// does not begin in the middle of a character.
     fn restart(&mut self) {
-        let tail = match std::str::from_utf8(&self.sample) {
+        *self = self.watcher();
+    }
+
+    /// A detector for the output after this one's window: it starts with the UTF-8 sequence
+    /// cut off at the end of the sample (if any), so the next read does not begin in the
+    /// middle of a character, where continuation bytes could pass for CP949 lead bytes.
+    pub fn watcher(&self) -> Detector {
+        let sample = match std::str::from_utf8(&self.sample) {
             Err(e) if e.error_len().is_none() => self.sample[e.valid_up_to()..].to_vec(),
             _ => Vec::new(),
         };
-        self.non_ascii = tail.len();
-        self.sample = tail;
+        Detector { non_ascii: sample.len(), sample }
     }
 }
 

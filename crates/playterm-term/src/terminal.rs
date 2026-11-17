@@ -248,7 +248,8 @@ impl Terminal {
     fn settle(&mut self, charset: Charset) {
         let Some(auto) = self.auto.take() else { return };
         self.detected = Some(charset);
-        self.watch = Some(Detector::default());
+        // Utf8 output may have been cut mid-character; the watch starts with that tail.
+        self.watch = Some(if charset == Charset::Utf8 { auto.detector.watcher() } else { Detector::default() });
         if charset == Charset::Utf8 {
             return; // what was shown was decoded as UTF-8 already
         }
@@ -592,6 +593,21 @@ mod tests {
         t.feed("안녕하세요\r\n".as_bytes());
         assert_eq!(t.detected_charset(), Some(Charset::Utf8));
         assert_eq!(row_text(&t, 0), "안녕하세요");
+        assert_eq!(t.encode_input("한"), "한".as_bytes());
+    }
+
+    #[test]
+    fn auto_utf8_settle_cut_mid_character_keeps_utf8() {
+        // The chunk that settles detection ends inside the second character; the next one
+        // starts with its continuation bytes, which look like CP949 lead bytes.
+        let text = "걢갋 갰겑곲굓궴긕깶껗\r\n";
+        let bytes = text.as_bytes();
+        let mut t = Terminal::new(40, 3, Charset::Auto, 100);
+        t.feed(&bytes[..4]);
+        assert_eq!(t.detected_charset(), Some(Charset::Utf8));
+        t.feed(&bytes[4..]);
+        assert_eq!(t.detected_charset(), Some(Charset::Utf8));
+        assert_eq!(row_text(&t, 0), "걢갋 갰겑곲굓궴긕깶껗");
         assert_eq!(t.encode_input("한"), "한".as_bytes());
     }
 
