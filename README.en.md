@@ -452,11 +452,13 @@ Native GSSAPI/Kerberos, PKCS#11 and FIDO2 integration is not yet implemented. De
 
 SSH host certificates require an explicitly trusted CA in `known_hosts`. See [configuration and validation](docs/ssh-host-certificates.md) for CA scope, validity, hostname and revocation checks. Manage stored SSH keys and RDP fingerprints from Tools → Remembered host keys and certificates.
 
-1. The key file set for the session (OpenSSH format / PuTTY `.ppk`; asks for the passphrase if it has one)
+1. The key file set for the session (OpenSSH format / PuTTY `.ppk`). If it has a passphrase, the saved site password is tried first and the passphrase is asked only if the server refuses it
 2. SSH agent — `SSH_AUTH_SOCK` if it is a named pipe, otherwise the Windows OpenSSH agent (`\\.\pipe\openssh-ssh-agent`), then Pageant (on macOS, the `SSH_AUTH_SOCK` socket)
 3. The default key files `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa` (if present)
 4. The saved password
 5. keyboard-interactive / password prompt
+
+When a public key was accepted and the server still asks for the plain `password` method (for example `AuthenticationMethods publickey,password`), the saved account password is used instead of prompting again. A further factor asked through keyboard-interactive, such as a one-time code, never gets the saved password.
 
 Local RSA private-key files are skipped before signing as an interim mitigation for RUSTSEC-2023-0071, including renamed files and default `id_rsa` fallback. Ed25519/ECDSA files remain supported. RSA through an external agent uses a separate signer path; the agent's security and remaining RDP scope require separate assessment. See the [RSA mitigation record](docs/security-rsa-223.md). This does not mean the advisory is officially patched.
 

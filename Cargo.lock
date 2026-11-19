@@ -5096,6 +5096,7 @@ dependencies = [
  "ironrdp-tls",
  "ironrdp-tokio",
  "log",
+ "playterm-config",
  "playterm-i18n",
  "playterm-types",
  "rand 0.10.3",
