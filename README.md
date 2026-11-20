@@ -426,11 +426,13 @@ GSSAPI/Kerberos와 PKCS#11·FIDO2의 앱 직접 연동은 아직 지원하지 �
 
 SSH 호스트 인증서는 `known_hosts`에 신뢰하는 CA를 등록해 사용합니다. CA 범위·만료·호스트 이름·폐기 검증과 [설정 방법](docs/ssh-host-certificates.md)을 확인하세요. 저장된 SSH 키와 RDP 지문은 도구 → 저장된 호스트 키·인증서에서 관리합니다.
 
-1. 세션에 지정한 키 파일 (OpenSSH 형식 / PuTTY `.ppk`, 암호가 걸려 있으면 passphrase 입력)
+1. 세션에 지정한 키 파일 (OpenSSH 형식 / PuTTY `.ppk`). 암호가 걸려 있으면 passphrase 를 묻되, 사이트에 저장된 비밀번호가 있으면 먼저 그 비밀번호로 로그인하고 서버가 거부할 때만 passphrase 를 묻습니다
 2. SSH 에이전트 — `SSH_AUTH_SOCK` 이 named pipe 이면 그것, 아니면 Windows OpenSSH 에이전트(`\\.\pipe\openssh-ssh-agent`), 그다음 Pageant (macOS 에서는 `SSH_AUTH_SOCK` 소켓)
 3. 기본 키 파일 `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa` (있을 때만)
 4. 저장된 비밀번호
 5. keyboard-interactive / 비밀번호 입력
+
+키를 먼저 통과한 뒤 서버가 `password` 방식을 추가로 요구하면(예: `AuthenticationMethods publickey,password`) 저장된 계정 비밀번호를 다시 묻지 않고 사용합니다. 비밀번호를 먼저 통과한 뒤 묻는 일회용 코드(OTP) 등 keyboard-interactive 추가 인증에는 저장된 비밀번호를 보내지 않습니다.
 
 로컬 RSA 개인 키 파일은 RUSTSEC-2023-0071의 임시 완화로 서명 전에 건너뜁니다. 이름을 바꾼 파일과 기본 `id_rsa` fallback에도 적용합니다. Ed25519/ECDSA 파일 키는 사용할 수 있고, 외부 에이전트의 RSA 서명은 별도 경로로 유지합니다. 에이전트의 보안 상태와 RDP의 잔여 범위는 [RSA 대응 기록](docs/security-rsa-223.md)을 확인하세요. 취약점의 공식 패치가 완료됐다는 뜻은 아닙니다.
 

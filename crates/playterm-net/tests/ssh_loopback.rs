@@ -105,7 +105,8 @@ impl server::Handler for TestServer {
     }
 
     async fn auth_none(&mut self, user: &str) -> Result<Auth, Self::Error> {
-        Ok(if user.starts_with("twokeys") {
+        Ok(if user.starts_with("twokeys") || user == "keypassword" {
+            // `AuthenticationMethods publickey,password`: the key comes first.
             Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::PublicKey][..])), partial_success: false }
         } else {
             reject()
@@ -115,7 +116,11 @@ impl server::Handler for TestServer {
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         self.auth_calls.lock().unwrap().push("password".into());
         Ok(match (user, password) {
-            ("tester", "secret") => Auth::Accept,
+            ("tester", "secret") | ("keypassword", "secret") => Auth::Accept,
+            // Like `AuthenticationMethods publickey,password`: the password alone is not
+            // accepted until the key has been passed on this connection.
+            ("keypasswordfull", "secret") if self.accepted_keys.is_empty() => reject(),
+            ("keypasswordfull", "secret") => Auth::Accept,
             // Password, then a one-time code (keyboard-interactive).
             ("otp", "secret") => {
                 Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])), partial_success: true }
@@ -165,7 +170,12 @@ impl server::Handler for TestServer {
         }
         self.auth_calls.lock().unwrap().push("publickey".into());
         let known = self.keys.iter().any(|k| k.key_data() == key.public_key.key_data());
-        Ok(if user == "keyotp" && known {
+        Ok(if user == "keypassword" && known {
+            Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::Password][..])), partial_success: true }
+        } else if user == "keypasswordfull" && known {
+            self.accepted_keys.push(key.public_key.clone());
+            Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::Password][..])), partial_success: true }
+        } else if user == "keyotp" && known {
             Auth::Reject { proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])), partial_success: true }
         } else if user == "tester" && known {
             Auth::Accept
@@ -1543,11 +1553,11 @@ fn second_key_passphrase_cancel_aborts_but_skip_allows_the_next_source() {
     let fx = Fixture::new("two-key-cancel", &[&a, &b]);
     fx.trust_host();
     let encrypted = b.encrypt(&mut rand::rng(), "open sesame").unwrap();
+    // No saved password: the encrypted key's passphrase is asked as it is reached.
     let params = ConnectParams {
         username: "twokeys".into(),
         identity_file: Some(fx.write_key("a", &a)),
         default_identity_files: vec![fx.write_key("encrypted-b", &encrypted), fx.write_key("plain-b", &b)],
-        password: Some("secret".into()),
         ..fx.params()
     };
     let h = fx.connect(params.clone());
@@ -1667,8 +1677,9 @@ fn encrypted_key_asks_for_passphrase() {
     password_prompt.answer(Some(vec!["secret".into()]));
     expect_connected(&h);
 
-    // Cancellation must not try an agent, a default key or a saved password, even on a jump host.
-    let default = fx.write_key("default", &key);
+    // Cancelling the passphrase prompt that follows a refused saved password still cancels the
+    // whole connection: no credentials go out after it, not even with a jump host.
+    let default = fx.write_key("default", &random_key(Algorithm::Ed25519));
     let params = ConnectParams {
         identity_file: Some(path),
         default_identity_files: vec![default],
@@ -1676,16 +1687,18 @@ fn encrypted_key_asks_for_passphrase() {
         ssh_legacy_algorithms: false,
         certificate_file: None,
         agent_forwarding: false,
-        password: Some("secret".into()),
+        password: Some("wrong".into()),
         ..fx.params()
     };
     for jump in [false, true] {
         fx.auth_calls.lock().unwrap().clear();
         let connect = if jump { ConnectParams { jump: Some(Box::new(params.clone())), ..fx.params() } } else { params.clone() };
         let h = fx.connect(connect);
-        expect_prompt(&h).answer(None);
+        let prompt = expect_prompt(&h);
+        let before = fx.auth_calls.lock().unwrap().len();
+        prompt.answer(None);
         assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
-        assert!(fx.auth_calls.lock().unwrap().is_empty(), "credentials sent after cancellation");
+        assert_eq!(fx.auth_calls.lock().unwrap().len(), before, "credentials sent after cancellation");
     }
 
     // A fresh connection after cancellation still works.
@@ -1695,13 +1708,79 @@ fn encrypted_key_asks_for_passphrase() {
 }
 
 #[test]
+fn a_saved_password_skips_an_encrypted_keys_passphrase() {
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("saved-password-key", &[&key]);
+    fx.trust_host();
+    let encrypted = key.encrypt(&mut rand::rng(), "open sesame").unwrap();
+    let path = fx.write_key("id_ed25519", &encrypted);
+    let h = fx.connect(ConnectParams { identity_file: Some(path), password: Some("secret".into()), ..fx.params() });
+    expect_connected(&h);
+    assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["password"], "the encrypted key is left for later");
+}
+
+#[test]
+fn a_key_second_factor_uses_the_saved_password() {
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("key-password", &[&key]);
+    fx.trust_host();
+    let h = fx.connect(ConnectParams {
+        username: "keypassword".into(),
+        identity_file: Some(fx.write_key("id_ed25519", &key)),
+        password: Some("secret".into()),
+        ..fx.params()
+    });
+    expect_connected(&h);
+    assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["publickey", "password"]);
+}
+
+#[test]
+fn an_encrypted_key_asks_for_its_passphrase_when_the_key_is_required() {
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("key-password-encrypted", &[&key]);
+    fx.trust_host();
+    let encrypted = key.encrypt(&mut rand::rng(), "open sesame").unwrap();
+    let path = fx.write_key("id_ed25519", &encrypted);
+    let h = fx.connect(ConnectParams {
+        username: "keypassword".into(),
+        identity_file: Some(path),
+        password: Some("secret".into()),
+        ..fx.params()
+    });
+    // The server offers only the key at first, so this is the deferred key's prompt.
+    expect_prompt(&h).answer(Some(vec!["open sesame".into()]));
+    expect_connected(&h);
+    assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["publickey", "password"]);
+}
+
+#[test]
+fn a_password_refused_before_the_key_is_retried_after_it() {
+    // Like a real `publickey,password` server, which advertises both methods before the key is
+    // accepted and refuses a password-only login.
+    let key = random_key(Algorithm::Ed25519);
+    let fx = Fixture::new("key-password-full", &[&key]);
+    fx.trust_host();
+    let encrypted = key.encrypt(&mut rand::rng(), "open sesame").unwrap();
+    let path = fx.write_key("id_ed25519", &encrypted);
+    let h = fx.connect(ConnectParams {
+        username: "keypasswordfull".into(),
+        identity_file: Some(path),
+        password: Some("secret".into()),
+        ..fx.params()
+    });
+    expect_prompt(&h).answer(Some(vec!["open sesame".into()]));
+    expect_connected(&h);
+    assert_eq!(fx.auth_calls.lock().unwrap().as_slice(), ["password", "publickey", "password"]);
+}
+
+#[test]
 fn dropped_passphrase_prompt_and_exhausted_retries_abort() {
     let key = random_key(Algorithm::Ed25519);
     let fx = Fixture::new("passphrase-abort", &[&key]);
     fx.trust_host();
     let encrypted = key.encrypt(&mut rand::rng(), "open sesame").unwrap();
     let path = fx.write_key("encrypted", &encrypted);
-    let params = ConnectParams { identity_file: Some(path), password: Some("secret".into()), ..fx.params() };
+    let params = ConnectParams { identity_file: Some(path), password: Some("wrong".into()), ..fx.params() };
     let h = fx.connect(params.clone());
     drop(expect_prompt(&h));
     assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
@@ -1710,12 +1789,14 @@ fn dropped_passphrase_prompt_and_exhausted_retries_abort() {
         expect_prompt(&h).answer(Some(vec!["wrong".into()]));
     }
     assert!(matches!(skip_notices(&h), SessionEvent::Closed(Some(_))));
-    assert!(fx.auth_calls.lock().unwrap().is_empty());
+    assert!(!fx.auth_calls.lock().unwrap().iter().any(|c| c == "publickey"), "the key was never sent");
 }
 
 /// A real loopback SSH server for native-window authentication checks. Only fake credentials.
 /// Set PLAYTERM_GUI_FIXTURE_DIR to a fresh evidence directory, run with --ignored --nocapture,
 /// then launch playterm with PLAYTERM_CONFIG_DIR=<directory> and the URL from connection.txt.
+/// PLAYTERM_GUI_SAVED_SITE=1 also saves the site with a vault password ("master");
+/// PLAYTERM_GUI_KEY_PASSWORD=1 makes the server require the key before the password.
 /// Create <directory>/stop to stop it. It also exits after 30 minutes.
 #[test]
 #[ignore = "interactive native-window fixture; starts a local SSH server"]
@@ -1751,7 +1832,32 @@ fn native_auth_fixture() {
     std::fs::write(dir.join("encrypted_key"), encrypted.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
     std::fs::write(dir.join("plain_key"), key.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
     std::fs::write(dir.join("settings.toml"), "check_updates = false\nlanguage = \"en\"\n").unwrap();
-    let user = if two_keys { "twokeysotp" } else { "tester" };
+    let key_password = std::env::var_os("PLAYTERM_GUI_KEY_PASSWORD").is_some();
+    let user = if two_keys {
+        "twokeysotp"
+    } else if key_password {
+        "keypassword"
+    } else {
+        "tester"
+    };
+    if std::env::var_os("PLAYTERM_GUI_SAVED_SITE").is_some() {
+        // A saved site whose password is in the vault: connecting from the site list must not
+        // ask for the encrypted key's passphrase (#271).
+        let mut store = playterm_config::ProfileStore::load(dir.join("sessions.toml")).unwrap();
+        let mut site = playterm_config::SessionProfile::new().unwrap();
+        site.name = "saved-password".into();
+        site.host = "127.0.0.1".into();
+        site.port = fx.port;
+        site.username = user.into();
+        site.save_password = true;
+        site.use_agent = false;
+        site.identity_file = dir.join("encrypted_key").display().to_string();
+        store.upsert(site.clone()).unwrap();
+        let mut vault = playterm_config::Vault::new(dir.join("vault.toml"));
+        vault.create("master").unwrap();
+        vault.set(&site.id, &format!("ssh://{user}@127.0.0.1:{}", fx.port), "secret").unwrap();
+        println!("Saved site: {} (vault master password: master)", site.display_name());
+    }
     std::fs::write(dir.join("connection.txt"), format!("ssh://{user}@127.0.0.1:{}", fx.port)).unwrap();
     println!("Native GUI fixture: {} (passphrase: open sesame; password: secret)", dir.display());
     let deadline = Instant::now() + Duration::from_secs(1800);

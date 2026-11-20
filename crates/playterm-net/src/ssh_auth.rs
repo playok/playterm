@@ -8,7 +8,7 @@
 //! 6. keyboard-interactive / password prompts
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::bail;
@@ -89,10 +89,43 @@ pub(crate) async fn authenticate(session: &mut Session, params: &ConnectParams, 
         },
     };
 
-    if allows(&state.methods, MethodKind::PublicKey) && public_keys(session, params, sink, &mut state).await? {
+    // A saved password should let a double-click connect: an encrypted key's passphrase is
+    // deferred (and asked only if the password is refused, as when the server requires the key).
+    let mut deferred = Vec::new();
+    if allows(&state.methods, MethodKind::PublicKey)
+        && public_keys(session, params, sink, &mut state, params.password.is_none(), &mut deferred).await?
+    {
         return Ok(());
     }
-    passwords(session, params, sink, state).await
+    let mut saved_password_rejected = false;
+    if !deferred.is_empty() && params.password.is_some() {
+        match try_saved_password(session, params, &mut state).await? {
+            SavedPassword::Accepted => return Ok(()),
+            // The password was accepted but the server wants another factor: hand that to
+            // `passwords()` instead of asking for the deferred key's passphrase.
+            SavedPassword::Partial => return passwords(session, params, sink, state, true).await,
+            SavedPassword::Rejected => saved_password_rejected = true,
+            SavedPassword::NotTried => {}
+        }
+    }
+    // The password did not log in: the server may require the key, so ask for its passphrase now.
+    if !deferred.is_empty() {
+        let certificate = match &params.certificate_file {
+            Some(path) => Some(read_certificate(path).await?),
+            None => None,
+        };
+        for path in deferred {
+            if !state.allows_keys() {
+                break;
+            }
+            match key_file(session, params, sink, &path, true, certificate.as_ref(), &mut state, true, &mut Vec::new()).await? {
+                KeyAttempt::Accepted => return Ok(()),
+                KeyAttempt::Rejected { keep_trying: false } => break,
+                _ => {}
+            }
+        }
+    }
+    passwords(session, params, sink, state, saved_password_rejected).await
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -109,13 +142,20 @@ enum KeyAttempt {
     Unusable,
 }
 
-async fn public_keys(session: &mut Session, params: &ConnectParams, sink: &EventSink, state: &mut AuthState) -> anyhow::Result<bool> {
+async fn public_keys(
+    session: &mut Session,
+    params: &ConnectParams,
+    sink: &EventSink,
+    state: &mut AuthState,
+    ask_passphrase: bool,
+    deferred: &mut Vec<PathBuf>,
+) -> anyhow::Result<bool> {
     let certificate = match &params.certificate_file {
         Some(path) => Some(read_certificate(path).await?),
         None => None,
     };
     if let Some(path) = &params.identity_file {
-        match key_file(session, params, sink, path, true, certificate.as_ref(), state).await? {
+        match key_file(session, params, sink, path, true, certificate.as_ref(), state, ask_passphrase, deferred).await? {
             KeyAttempt::Accepted => return Ok(true),
             KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
             _ => {}
@@ -130,7 +170,7 @@ async fn public_keys(session: &mut Session, params: &ConnectParams, sink: &Event
     }
 
     for path in &params.default_identity_files {
-        match key_file(session, params, sink, path, false, certificate.as_ref(), state).await? {
+        match key_file(session, params, sink, path, false, certificate.as_ref(), state, ask_passphrase, deferred).await? {
             KeyAttempt::Accepted => return Ok(true),
             KeyAttempt::Rejected { keep_trying: false } => return Ok(false),
             _ => {}
@@ -178,6 +218,8 @@ async fn key_file(
     explicit: bool,
     certificate: Option<&Certificate>,
     state: &mut AuthState,
+    ask_passphrase: bool,
+    deferred: &mut Vec<PathBuf>,
 ) -> anyhow::Result<KeyAttempt> {
     let read = async {
         let mut file = tokio::fs::File::open(path).await?;
@@ -201,7 +243,7 @@ async fn key_file(
             return Ok(KeyAttempt::Unusable);
         }
     };
-    let Some(key) = decode_key(&text, path, sink).await? else {
+    let Some(key) = decode_key(&text, path, sink, ask_passphrase, deferred).await? else {
         return Ok(KeyAttempt::Unusable);
     };
     // RustCrypto rsa currently has no RustSec-patched version for RUSTSEC-2023-0071.
@@ -267,7 +309,13 @@ fn looks_encrypted(text: &str, error: &keys::Error) -> bool {
 }
 
 /// `None` skips an unusable key; cancellation aborts the entire connection.
-async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> anyhow::Result<Option<PrivateKey>> {
+async fn decode_key(
+    text: &str,
+    path: &Path,
+    sink: &EventSink,
+    ask_passphrase: bool,
+    deferred: &mut Vec<PathBuf>,
+) -> anyhow::Result<Option<PrivateKey>> {
     match keys::decode_secret_key(text, None) {
         Ok(key) => return Ok(Some(key)),
         Err(e) if !looks_encrypted(text, &e) => {
@@ -275,6 +323,14 @@ async fn decode_key(text: &str, path: &Path, sink: &EventSink) -> anyhow::Result
             return Ok(None);
         }
         Err(_) => {}
+    }
+
+    if !ask_passphrase {
+        // The site has a saved password: try that first and ask for this key's passphrase only
+        // if the server refuses to log in without the key.
+        log::debug!("deferring the passphrase of {}", path.display());
+        deferred.push(path.to_path_buf());
+        return Ok(None);
     }
 
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -465,14 +521,53 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> russh::Signer for IdentitySigner<
 // -------------------------------------------------------------------------------------------------
 // Passwords and keyboard-interactive
 
-async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSink, state: AuthState) -> anyhow::Result<()> {
+/// The saved password sent before a deferred key's passphrase is asked.
+enum SavedPassword {
+    /// The server accepted it; the session is authenticated.
+    Accepted,
+    /// The password was accepted but the server wants another factor (`partial success`).
+    Partial,
+    /// It was sent and refused: the same password must not be sent again unless a key then
+    /// becomes a required first factor.
+    Rejected,
+    /// Not tried (no saved password, or the server cannot take it now).
+    NotTried,
+}
+
+/// Sends the saved password once, before a deferred key's passphrase is asked. Only the plain
+/// `password` method is used: it always carries the account password, while keyboard-interactive
+/// may ask for a one-time code, which must never be guessed.
+async fn try_saved_password(session: &mut Session, params: &ConnectParams, state: &mut AuthState) -> anyhow::Result<SavedPassword> {
+    let Some(password) = &params.password else { return Ok(SavedPassword::NotTried) };
+    if state.second_factor || !allows(&state.methods, MethodKind::Password) {
+        return Ok(SavedPassword::NotTried);
+    }
+    match session.authenticate_password(params.username.as_str(), password.as_str()).await? {
+        AuthResult::Success => Ok(SavedPassword::Accepted),
+        AuthResult::Failure { remaining_methods, partial_success } => {
+            state.methods = remaining_methods;
+            state.second_factor |= partial_success;
+            Ok(if partial_success { SavedPassword::Partial } else { SavedPassword::Rejected })
+        }
+    }
+}
+
+async fn passwords(
+    session: &mut Session,
+    params: &ConnectParams,
+    sink: &EventSink,
+    state: AuthState,
+    saved_password_rejected: bool,
+) -> anyhow::Result<()> {
     let AuthState { mut methods, mut second_factor, .. } = state;
     let user = params.username.as_str();
-    // Once a method was accepted but the server wants more (`partial success`), what follows
-    // is a second factor such as a one-time code: the stored password must not be spent on it,
-    // and what the user types there must not replace the saved password.
+    // A plain `password` request after a public key (e.g. `AuthenticationMethods
+    // publickey,password`) is the account password; one-time codes come through
+    // keyboard-interactive. What the user types at a later factor must not replace the saved
+    // password, though. A password refused before the key was accepted is retried once here:
+    // the server may simply have required the key first.
     if let Some(password) = &params.password
-        && !second_factor
+        && (!saved_password_rejected || second_factor)
         && allows(&methods, MethodKind::Password)
     {
         match session.authenticate_password(user, password.as_str()).await? {
@@ -485,7 +580,7 @@ async fn passwords(session: &mut Session, params: &ConnectParams, sink: &EventSi
     }
     // A stored password may also answer a single keyboard-interactive password prompt
     // (servers with `PasswordAuthentication no` but PAM keyboard-interactive).
-    let mut autofill = if second_factor { None } else { params.password.clone() };
+    let mut autofill = if second_factor || saved_password_rejected { None } else { params.password.clone() };
 
     let target = format!("{user}@{}", params.host);
     // Some servers advertise keyboard-interactive but reject it without asking anything;
