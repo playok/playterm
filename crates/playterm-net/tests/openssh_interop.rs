@@ -8,6 +8,9 @@ use playterm_net::{AuthPrompt, ConnectParams, NetRuntime, Protocol, SessionEvent
 fn params(known_hosts: PathBuf, port_variable: &str) -> ConnectParams {
     ConnectParams {
         protocol: Protocol::Ssh,
+        proxy: String::new(),
+        proxy_username: String::new(),
+        proxy_remote_dns: true,
         host: "127.0.0.1".into(),
         port: std::env::var(port_variable).unwrap().parse().unwrap(),
         username: std::env::var("PLAYTERM_OPENSSH_USER").unwrap(),

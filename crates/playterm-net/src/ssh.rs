@@ -11,7 +11,6 @@ use playterm_i18n::{t, tr};
 use russh::client;
 use russh::keys::{Algorithm, HashAlg, PublicKeyOrCertificate, known_hosts};
 use russh::{ChannelMsg, Disconnect};
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -267,13 +266,12 @@ fn connect_ssh<'a>(
         };
         let (mut session, hops) = match &params.jump {
             None => {
-                let stream = TcpStream::connect((params.host.as_str(), params.port))
-                    .await
-                    .map_err(|e| crate::session::connect_error(&params.host, params.port, e))?;
+                let stream = crate::proxy::connect(params, sink).await?;
                 stream.set_nodelay(true)?;
                 (client::connect_stream(config, stream, handler).await?, Hops::new())
             }
             Some(jump) => {
+                anyhow::ensure!(params.proxy.is_empty(), "Configure the proxy on the jump host");
                 let (bastion, mut hops) = connect_ssh(jump, sink, None, Arc::default()).await?;
                 let channel = bastion
                     .channel_open_direct_tcpip(params.host.as_str(), params.port.into(), "127.0.0.1", 0)

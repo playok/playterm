@@ -124,6 +124,9 @@ fn kind(protocol: Protocol) -> (&'static str, Color32) {
     match protocol {
         Protocol::Ssh => ("SSH", Color32::from_rgb(46, 140, 80)),
         Protocol::Telnet => ("TEL", Color32::from_rgb(200, 120, 30)),
+        Protocol::TelnetTls => ("TLS", Color32::from_rgb(200, 120, 30)),
+        Protocol::Raw => ("TCP", Color32::GRAY),
+        Protocol::Rlogin => ("RLG", Color32::GRAY),
         Protocol::Serial => ("COM", Color32::from_rgb(140, 80, 190)),
         Protocol::Rdp => ("RDP", Color32::from_rgb(40, 110, 200)),
     }
@@ -135,6 +138,9 @@ pub fn badge(ui: &mut egui::Ui, protocol: Protocol) {
     let name = match protocol {
         Protocol::Ssh => "SSH",
         Protocol::Telnet => "Telnet",
+        Protocol::TelnetTls => "Telnet/SSL",
+        Protocol::Raw => "Raw TCP",
+        Protocol::Rlogin => "rlogin",
         Protocol::Serial => t!("site_tree.serial"),
         Protocol::Rdp => t!("site_tree.remote_desktop_rdp"),
     };

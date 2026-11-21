@@ -36,6 +36,9 @@ sha2 = "0.11"
 smallvec = "1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "sync", "time", "io-util", "macros", "fs"] }
+url = "2.5"
+tokio-socks = "0.5"
+tokio-native-tls = "0.3"
 tokio-serial = "5.5.0"
 x509-cert = { version = "0.3", default-features = false, features = ["std"] }
 zeroize = "1.9.1"

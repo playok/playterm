@@ -157,6 +157,9 @@ impl PlaytermApp {
             .collect();
         ConnectParams {
             protocol: profile.protocol,
+            proxy: profile.proxy.clone(),
+            proxy_username: profile.proxy_username.clone(),
+            proxy_remote_dns: profile.proxy_remote_dns,
             host: profile.host.clone(),
             port: profile.port,
             username: profile.username.clone(),

@@ -797,6 +797,9 @@ impl Fixture {
     fn params(&self) -> ConnectParams {
         ConnectParams {
             protocol: Protocol::Ssh,
+            proxy: String::new(),
+            proxy_username: String::new(),
+            proxy_remote_dns: true,
             host: "127.0.0.1".into(),
             port: self.port,
             username: "tester".into(),

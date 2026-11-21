@@ -111,10 +111,14 @@ pub fn vault_target(p: &SessionProfile) -> String {
     let scheme = match p.protocol {
         Protocol::Ssh => "ssh",
         Protocol::Telnet => "telnet",
+        Protocol::TelnetTls => "telnets",
+        Protocol::Raw => "raw",
+        Protocol::Rlogin => "rlogin",
         Protocol::Rdp => "rdp",
         Protocol::Serial => return format!("serial://{}", p.serial.port),
     };
     let target = format!("{scheme}://{}@{}:{}", p.username, p.host.to_lowercase(), p.port);
+    let target = if p.proxy.is_empty() { target } else { format!("{target} via proxy {:?} (remote DNS: {})", p.proxy, p.proxy_remote_dns) };
     match (p.protocol, p.rdp.gateway()) {
         (Protocol::Rdp, Some(gateway)) => {
             let login = match p.rdp.gateway_user() {
@@ -143,7 +147,7 @@ fn gateway_endpoint(gateway: &str) -> String {
 /// where `p` points now. Not for an RDP site with a gateway: gateways came after targets, so the
 /// gateway was added to the file since, and is not trusted with the password unseen.
 fn may_bind_unbound(p: &SessionProfile) -> bool {
-    !(p.protocol == Protocol::Rdp && p.rdp.gateway().is_some())
+    p.proxy.is_empty() && !(p.protocol == Protocol::Rdp && p.rdp.gateway().is_some())
 }
 
 /// The saved password of `profile`, when it was saved for where the profile points now.

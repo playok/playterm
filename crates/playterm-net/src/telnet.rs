@@ -7,7 +7,6 @@
 use anyhow::Context as _;
 use playterm_i18n::t;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 use crate::keepalive::{IdleTimer, sleep_until};
@@ -244,25 +243,45 @@ fn push_escaped(out: &mut Vec<u8>, b: u8) {
     out.push(b);
 }
 
-pub(crate) async fn run(
+trait TerminalStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin> TerminalStream for T {}
+
+pub(crate) async fn run(params: ConnectParams, commands: mpsc::UnboundedReceiver<SessionCommand>, sink: EventSink) -> anyhow::Result<()> {
+    run_with_tls(params, commands, sink, tokio_native_tls::native_tls::TlsConnector::new).await
+}
+
+async fn run_with_tls(
     params: ConnectParams,
     mut commands: mpsc::UnboundedReceiver<SessionCommand>,
     sink: EventSink,
+    tls_connector: impl FnOnce() -> Result<tokio_native_tls::native_tls::TlsConnector, tokio_native_tls::native_tls::Error>,
 ) -> anyhow::Result<()> {
+    let telnet = matches!(params.protocol, crate::Protocol::Telnet | crate::Protocol::TelnetTls);
     let stream = sink
         .connecting(&params, async {
-            TcpStream::connect((params.host.as_str(), params.port))
-                .await
-                .map_err(|e| crate::session::connect_error(&params.host, params.port, e))
+            let mut tcp = crate::proxy::connect(&params, &sink).await?;
+            tcp.set_nodelay(true)?;
+            if params.protocol == crate::Protocol::TelnetTls {
+                let tls = tls_connector()?;
+                let stream = tokio_native_tls::TlsConnector::from(tls).connect(&params.host, tcp).await?;
+                return Ok(Box::new(stream) as Box<dyn TerminalStream>);
+            }
+            if params.protocol == crate::Protocol::Rlogin {
+                let local = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default();
+                let remote = if params.username.is_empty() { &local } else { &params.username };
+                anyhow::ensure!(![local.as_str(), remote, &params.term_type].iter().any(|s| s.contains('\0')), "Invalid rlogin field");
+                tcp.write_all(format!("\0{local}\0{remote}\0{}/38400\0", params.term_type).as_bytes()).await?;
+                anyhow::ensure!(tcp.read_u8().await? == 0, "rlogin server rejected login");
+            }
+            Ok(Box::new(tcp) as Box<dyn TerminalStream>)
         })
         .await?;
-    stream.set_nodelay(true)?;
     sink.send(SessionEvent::Connected);
 
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, mut writer) = tokio::io::split(stream);
     let mut codec = TelnetCodec::new(&params.term_type, params.cols, params.rows);
     let mut buf = vec![0u8; 16 * 1024];
-    let mut idle = IdleTimer::new(&params.keepalive, true, &sink);
+    let mut idle = IdleTimer::new(&params.keepalive, telnet, &sink);
 
     loop {
         tokio::select! {
@@ -271,6 +290,7 @@ pub(crate) async fn run(
                 if n == 0 {
                     return Ok(());
                 }
+                if !telnet { sink.data(buf[..n].to_vec()).await; continue; }
                 let received = codec.receive(&buf[..n]);
                 if !received.reply.is_empty() {
                     writer.write_all(&received.reply).await?;
@@ -281,15 +301,16 @@ pub(crate) async fn run(
             }
             cmd = commands.recv() => match cmd {
                 Some(SessionCommand::Input(data)) => {
-                    writer.write_all(&codec.encode_input(&data)).await?;
+                    if telnet { writer.write_all(&codec.encode_input(&data)).await?; } else { writer.write_all(&data).await?; }
                     idle.touch();
                 }
                 Some(SessionCommand::Resize { cols, rows }) => {
-                    if let Some(naws) = codec.resize(cols, rows) {
+                    if telnet && let Some(naws) = codec.resize(cols, rows) {
                         writer.write_all(&naws).await?;
                     }
                 }
                 Some(SessionCommand::SendBreak) => {
+                    if !telnet { continue; }
                     writer.write_all(&[IAC, BRK]).await?;
                     sink.notice(t!("common.sent_break"));
                 }
@@ -306,7 +327,8 @@ pub(crate) async fn run(
             },
             _ = sleep_until(idle.deadline()) => {
                 let bytes = match &idle.text {
-                    Some(text) => codec.encode_input(text),
+                    Some(text) if telnet => codec.encode_input(text),
+                    Some(text) => text.clone(),
                     None => vec![IAC, NOP],
                 };
                 writer.write_all(&bytes).await?;
@@ -378,6 +400,226 @@ mod tests {
         assert_eq!(c.encode_input(b"a\r\nb"), b"a\r\nb");
     }
 
+    fn test_params(port: u16) -> ConnectParams {
+        ConnectParams {
+            protocol: crate::Protocol::Telnet,
+            proxy: String::new(),
+            proxy_username: String::new(),
+            proxy_remote_dns: true,
+            host: "127.0.0.1".into(),
+            port,
+            username: String::new(),
+            password: None,
+            identity_file: None,
+            default_identity_files: Vec::new(),
+            use_agent: false,
+            ssh_legacy_algorithms: false,
+            certificate_file: None,
+            agent_forwarding: false,
+            agent_pipe: None,
+            forwards: Vec::new(),
+            serial: Default::default(),
+            keepalive: Default::default(),
+            rdp: Default::default(),
+            desktop: (1024, 768),
+            term_type: "xterm".into(),
+            cols: 80,
+            rows: 24,
+            known_hosts: Default::default(),
+            connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
+            jump: None,
+            x11: None,
+        }
+    }
+
+    async fn next_event(handle: &crate::session::SessionHandle) -> SessionEvent {
+        loop {
+            if let Some(event) = handle.try_recv() {
+                return event;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    }
+
+    async fn check_terminal(handle: &crate::session::SessionHandle) {
+        assert!(matches!(next_event(handle).await, SessionEvent::Connected));
+        handle.send(b"ping".to_vec());
+        let mut output = Vec::new();
+        while output.len() < 4 {
+            let SessionEvent::Data(bytes) = next_event(handle).await else { panic!("expected terminal output") };
+            output.extend(bytes);
+        }
+        assert_eq!(output, b"pong");
+        handle.close();
+    }
+
+    #[tokio::test]
+    async fn rlogin_over_authenticated_connect_relay() {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let device = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let destination = device.local_addr().unwrap();
+            let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut p = test_params(destination.port());
+            p.protocol = crate::Protocol::Rlogin;
+            p.username = "remote".into();
+            p.proxy = format!("http://{}", proxy.local_addr().unwrap());
+            p.proxy_username = "test".into();
+            let relay = tokio::spawn(async move {
+                let (mut client, _) = proxy.accept().await.unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(client.read_u8().await.unwrap());
+                }
+                let header = String::from_utf8(header).unwrap();
+                assert!(header.starts_with(&format!("CONNECT {destination} HTTP/1.1\r\n")));
+                assert!(header.contains("\r\nProxy-Authorization: Basic dGVzdDpwYXNz\r\n"));
+                let mut upstream = tokio::net::TcpStream::connect(destination).await.unwrap();
+                client.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+                tokio::io::copy_bidirectional(&mut client, &mut upstream).await.unwrap();
+            });
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = device.accept().await.unwrap();
+                let mut login = Vec::new();
+                while login.iter().filter(|&&b| b == 0).count() < 4 {
+                    login.push(socket.read_u8().await.unwrap());
+                }
+                assert!(login.ends_with(b"\0remote\0xterm/38400\0"));
+                socket.write_u8(0).await.unwrap();
+                let mut data = [0; 4];
+                socket.read_exact(&mut data).await.unwrap();
+                assert_eq!(&data, b"ping");
+                socket.write_all(b"pong").await.unwrap();
+            });
+            let (handle, commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+            let client = tokio::spawn(run(p, commands, sink));
+            let SessionEvent::AuthPrompt(prompt) = next_event(&handle).await else { panic!("expected proxy prompt") };
+            prompt.answer(Some(vec!["pass".into()]));
+            check_terminal(&handle).await;
+            client.await.unwrap().unwrap();
+            server.await.unwrap();
+            relay.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn telnet_over_trusted_local_tls_server() {
+        use tokio_rustls::rustls;
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let identity = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+            let root = tokio_native_tls::native_tls::Certificate::from_der(identity.cert.der()).unwrap();
+            let key = rustls::pki_types::PrivateKeyDer::Pkcs8(identity.signing_key.serialize_der().into());
+            let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![identity.cert.der().clone()], key)
+                .unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut p = test_params(listener.local_addr().unwrap().port());
+            p.protocol = crate::Protocol::TelnetTls;
+            p.host = "localhost".into();
+            let server = tokio::spawn(async move {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let mut tls = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config)).accept(tcp).await.unwrap();
+                let mut data = [0; 4];
+                tls.read_exact(&mut data).await.unwrap();
+                assert_eq!(&data, b"ping");
+                tls.write_all(b"pong").await.unwrap();
+                tls.shutdown().await.unwrap();
+            });
+            let (handle, commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+            let client = tokio::spawn(run_with_tls(p, commands, sink, move || {
+                tokio_native_tls::native_tls::TlsConnector::builder().add_root_certificate(root).build()
+            }));
+            check_terminal(&handle).await;
+            client.await.unwrap().unwrap();
+            server.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn raw_over_http_proxy_preserves_bytes_and_remote_hostname() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut p = test_params(5555);
+        p.protocol = crate::Protocol::Raw;
+        p.host = "device.invalid".into();
+        p.proxy = format!("http://{}", listener.local_addr().unwrap());
+        let (handle, commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+        let task = tokio::spawn(run(p, commands, sink));
+        let (mut tcp, _) = listener.accept().await.unwrap();
+        let mut header = Vec::new();
+        while !header.ends_with(b"\r\n\r\n") {
+            header.push(tcp.read_u8().await.unwrap());
+        }
+        assert!(header.starts_with(b"CONNECT device.invalid:5555 HTTP/1.1\r\n"));
+        tcp.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+        handle.send(vec![255, 13, 0]);
+        let mut data = [0; 3];
+        tcp.read_exact(&mut data).await.unwrap();
+        assert_eq!(data, [255, 13, 0]);
+        handle.close();
+        task.await.unwrap().unwrap();
+    }
+    #[tokio::test]
+    async fn socks_proxies_receive_remote_hostname() {
+        for scheme in ["socks4", "socks5"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut p = test_params(23);
+            p.protocol = crate::Protocol::Raw;
+            p.host = "router.invalid".into();
+            p.proxy = format!("{scheme}://{}", listener.local_addr().unwrap());
+            let (handle, commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+            let task = tokio::spawn(run(p, commands, sink));
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            if scheme == "socks5" {
+                let mut hello = [0; 3];
+                tcp.read_exact(&mut hello).await.unwrap();
+                assert_eq!(hello, [5, 1, 0]);
+                tcp.write_all(&[5, 0]).await.unwrap();
+                let mut connect = vec![0; 7 + b"router.invalid".len()];
+                tcp.read_exact(&mut connect).await.unwrap();
+                assert_eq!(&connect[5..connect.len() - 2], b"router.invalid");
+                tcp.write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 23]).await.unwrap();
+            } else {
+                let mut connect = vec![0; 10 + b"router.invalid".len()];
+                tcp.read_exact(&mut connect).await.unwrap();
+                assert_eq!(&connect[9..connect.len() - 1], b"router.invalid");
+                tcp.write_all(&[0, 90, 0, 23, 127, 0, 0, 1]).await.unwrap();
+            }
+            handle.send(vec![42]);
+            assert_eq!(tcp.read_u8().await.unwrap(), 42);
+            handle.close();
+            task.await.unwrap().unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn tls_rejects_plaintext_and_rlogin_requires_ack() {
+        for protocol in [crate::Protocol::TelnetTls, crate::Protocol::Rlogin] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut p = test_params(listener.local_addr().unwrap().port());
+            p.protocol = protocol;
+            p.username = "remote".into();
+            let (_handle, commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+            let task = tokio::spawn(run(p, commands, sink));
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            if protocol == crate::Protocol::Rlogin {
+                let mut handshake = Vec::new();
+                while handshake.iter().filter(|&&b| b == 0).count() < 4 {
+                    handshake.push(tcp.read_u8().await.unwrap());
+                }
+                assert!(handshake.ends_with(b"\0remote\0xterm/38400\0"));
+                tcp.write_all(&[1]).await.unwrap();
+            } else {
+                tcp.write_all(b"plaintext login prompt\r\n").await.unwrap();
+            }
+            drop(tcp);
+            assert!(task.await.unwrap().is_err());
+        }
+    }
     #[tokio::test]
     async fn keepalive_nop_and_text() {
         use std::sync::Arc;
@@ -388,32 +630,7 @@ mod tests {
         for (mode, expected) in [(KeepAliveMode::Protocol, vec![IAC, NOP]), (KeepAliveMode::Text, b"\r\n".to_vec())] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
-            let params = ConnectParams {
-                protocol: crate::Protocol::Telnet,
-                host: "127.0.0.1".into(),
-                port,
-                username: String::new(),
-                password: None,
-                identity_file: None,
-                default_identity_files: Vec::new(),
-                use_agent: false,
-                ssh_legacy_algorithms: false,
-                certificate_file: None,
-                agent_forwarding: false,
-                agent_pipe: None,
-                forwards: Vec::new(),
-                serial: Default::default(),
-                keepalive: KeepAlive { mode, interval: 1, text: "\\r".into() },
-                rdp: Default::default(),
-                desktop: (1024, 768),
-                term_type: "xterm".into(),
-                cols: 80,
-                rows: 24,
-                known_hosts: Default::default(),
-                connect_timeout: ConnectParams::DEFAULT_CONNECT_TIMEOUT,
-                jump: None,
-                x11: None,
-            };
+            let params = ConnectParams { keepalive: KeepAlive { mode, interval: 1, text: r"\r".into() }, ..test_params(port) };
             let (handle, commands, sink) = SessionHandle::new(Arc::new(|| {}));
             let task = tokio::spawn(run(params, commands, sink));
             let (mut server, _) = listener.accept().await.unwrap();

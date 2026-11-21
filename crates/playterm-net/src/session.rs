@@ -30,6 +30,9 @@ pub struct X11Request {
 pub struct ConnectParams {
     pub protocol: Protocol,
     pub host: String,
+    pub proxy: String,
+    pub proxy_username: String,
+    pub proxy_remote_dns: bool,
     pub port: u16,
     /// SSH user name. Unused for Telnet (the remote login prompt asks for it).
     pub username: String,
@@ -542,6 +545,9 @@ mod tests {
         let (handle, _commands, sink) = SessionHandle::new(Arc::new(|| {}));
         let params = ConnectParams {
             protocol: Protocol::Ssh,
+            proxy: String::new(),
+            proxy_username: String::new(),
+            proxy_remote_dns: true,
             host: "example.com".into(),
             port: 22,
             username: String::new(),
