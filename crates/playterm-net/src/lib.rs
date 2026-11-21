@@ -10,6 +10,7 @@ mod forward;
 mod host_certificate;
 mod keepalive;
 pub mod ping;
+mod proxy;
 mod rdp;
 mod secret;
 mod serial;
@@ -59,7 +60,9 @@ impl NetRuntime {
         self.rt.spawn(async move {
             let result = match params.protocol {
                 Protocol::Ssh => ssh::run(params, commands, sink.clone()).await,
-                Protocol::Telnet => telnet::run(params, commands, sink.clone()).await,
+                Protocol::Telnet | Protocol::TelnetTls | Protocol::Raw | Protocol::Rlogin => {
+                    telnet::run(params, commands, sink.clone()).await
+                }
                 Protocol::Serial => serial::run(params, commands, sink.clone()).await,
                 Protocol::Rdp => unreachable!("started above"),
             };

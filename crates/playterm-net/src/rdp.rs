@@ -38,7 +38,6 @@ use ironrdp_tokio::{FramedWrite as _, TokioFramed};
 use playterm_i18n::{t, tr};
 use sha2::Digest as _;
 use smallvec::SmallVec;
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
@@ -840,11 +839,12 @@ async fn connect(
 ) -> anyhow::Result<Result<(ironrdp_connector::ConnectionResult, Upgraded), ConnectorError>> {
     let mut rdp = params.rdp.clone();
     let (stream, client_addr): (Transport, _) = match params.rdp.gateway() {
-        Some(gateway) => open_gateway(params, gateway, logins, &mut rdp, sink).await?,
+        Some(gateway) => {
+            anyhow::ensure!(params.proxy.is_empty(), "Choose either a proxy or an RD Gateway");
+            open_gateway(params, gateway, logins, &mut rdp, sink).await?
+        }
         None => {
-            let stream = TcpStream::connect((params.host.as_str(), params.port))
-                .await
-                .map_err(|e| crate::session::connect_error(&params.host, params.port, e))?;
+            let stream = crate::proxy::connect(params, sink).await?;
             stream.set_nodelay(true)?;
             let client_addr = stream.local_addr()?;
             (Box::new(stream), client_addr)
@@ -1190,6 +1190,9 @@ mod tests {
     fn test_params() -> ConnectParams {
         ConnectParams {
             protocol: crate::Protocol::Rdp,
+            proxy: String::new(),
+            proxy_username: String::new(),
+            proxy_remote_dns: true,
             host: "pc".into(),
             port: 3389,
             username: "u".into(),

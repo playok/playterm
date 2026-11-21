@@ -9,6 +9,9 @@ use playterm_net::{ConnectParams, NetRuntime, Protocol, SerialSettings, SessionE
 fn params(port: &str) -> ConnectParams {
     ConnectParams {
         protocol: Protocol::Serial,
+        proxy: String::new(),
+        proxy_username: String::new(),
+        proxy_remote_dns: true,
         host: port.into(),
         port: 0,
         username: String::new(),

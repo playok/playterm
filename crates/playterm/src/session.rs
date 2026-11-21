@@ -517,7 +517,7 @@ impl Session {
     }
 
     pub fn can_break(&self) -> bool {
-        self.state == SessionState::Connected && matches!(self.protocol(), Some(Protocol::Serial | Protocol::Telnet))
+        self.state == SessionState::Connected && matches!(self.protocol(), Some(Protocol::Serial | Protocol::Telnet | Protocol::TelnetTls))
     }
 
     pub fn send_break(&mut self) {
@@ -1747,6 +1747,9 @@ mod tests {
         let net = NetRuntime::new().unwrap();
         let params = ConnectParams {
             protocol: Protocol::Telnet,
+            proxy: String::new(),
+            proxy_username: String::new(),
+            proxy_remote_dns: true,
             host: "127.0.0.1".into(),
             port,
             username: "admin".into(),
@@ -1892,6 +1895,9 @@ mod tests {
         let net = NetRuntime::new().unwrap();
         let params = ConnectParams {
             protocol: Protocol::Telnet,
+            proxy: String::new(),
+            proxy_username: String::new(),
+            proxy_remote_dns: true,
             host: "127.0.0.1".into(),
             port,
             username: String::new(),

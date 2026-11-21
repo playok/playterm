@@ -22,6 +22,9 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
         Some((scheme, rest)) => match scheme.to_ascii_lowercase().as_str() {
             "ssh" => (Protocol::Ssh, rest),
             "telnet" => (Protocol::Telnet, rest),
+            "telnets" => (Protocol::TelnetTls, rest),
+            "raw" => (Protocol::Raw, rest),
+            "rlogin" => (Protocol::Rlogin, rest),
             "serial" | "com" => (Protocol::Serial, rest),
             "rdp" => (Protocol::Rdp, rest),
             other => return Err(tr!("profile_form.unsupported_protocol", other = other)),
@@ -750,6 +753,16 @@ impl ProfileForm {
                 submit |= enter(ui, &host);
                 ui.end_row();
 
+                ui.label("Proxy URL");
+                ui.add(egui::TextEdit::singleline(&mut p.proxy).hint_text("http://, socks4://, socks5://"));
+                ui.end_row();
+                if !p.proxy.is_empty() {
+                    ui.label("Proxy username");
+                    ui.text_edit_singleline(&mut p.proxy_username);
+                    ui.end_row();
+                    ui.checkbox(&mut p.proxy_remote_dns, "Resolve destination on proxy");
+                    ui.end_row();
+                }
                 ui.label(t!("profile_form.port"));
                 let port = ui.add(egui::TextEdit::singleline(&mut self.port).desired_width(80.0));
                 submit |= enter(ui, &port);
@@ -948,6 +961,9 @@ impl ProfileForm {
         p.ensure_id().map_err(|e| e.to_string())?;
         p.name = p.name.trim().to_owned();
         p.folder = p.folder.trim().to_owned();
+        if p.proxy.contains('@') {
+            return Err("Enter proxy username separately. The password is requested on connection.".into());
+        }
         p.host = p.host.trim().to_owned();
         p.username = p.username.trim().to_owned();
         p.identity_file = p.identity_file.trim().trim_matches('"').to_owned();
@@ -1001,7 +1017,7 @@ impl ProfileForm {
                 p.identity_file.clear();
                 p.forwards.clear();
             }
-            Protocol::Telnet => {
+            Protocol::Telnet | Protocol::TelnetTls | Protocol::Raw | Protocol::Rlogin => {
                 // The user name and password are for the automatic login at the remote prompt.
                 p.identity_file.clear();
                 p.forwards.clear();
