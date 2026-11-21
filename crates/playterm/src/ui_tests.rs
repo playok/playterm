@@ -801,3 +801,87 @@ fn malformed_sessions_start_with_preserved_backup() {
     assert_eq!(backups.len(), 1);
     assert_eq!(std::fs::read(&backups[0]).unwrap(), original);
 }
+
+#[test]
+fn quick_connect_raw_through_http_proxy() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = app(dir.path());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert_eq!(line, "CONNECT router.invalid:5555 HTTP/1.1\r\n");
+        loop {
+            line.clear();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            if line == "\r\n" {
+                break;
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\n\r\nrouter# ").unwrap();
+        let mut input = [0; 4];
+        reader.read_exact(&mut input).unwrap();
+        assert_eq!(&input, b"ping");
+        stream.write_all(b"GUI-PONG\r\n").unwrap();
+    });
+    click(&mut harness, "빠른 연결");
+    harness.get_by_role(Role::Dialog).get_by_role_and_label(Role::RadioButton, "Raw TCP").click();
+    harness.run_steps(2);
+    let dialog = harness.get_by_role(Role::Dialog);
+    let inputs: Vec<_> = dialog.query_all_by_role(Role::TextInput).collect();
+    assert_eq!(inputs.len(), 3);
+    for (index, text) in ["router.invalid", "5555", &proxy].iter().enumerate() {
+        let node = harness.get_by_role(Role::Dialog).query_all_by_role(Role::TextInput).nth(index).unwrap();
+        type_into(&harness, &node, text);
+        harness.run_steps(2);
+    }
+    let actual: Vec<_> = harness
+        .get_by_role(Role::Dialog)
+        .query_all_by_role(Role::TextInput)
+        .map(|n| n.accesskit_node().value().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(actual, ["router.invalid", "5555", &proxy, ""]);
+    harness.run_steps(12);
+    click(&mut harness, "연결");
+    assert!(!harness.state().test_modal_open(), "dialog stayed open");
+    let profile = harness.state_mut().test_sessions()[0].profile().unwrap();
+    assert_eq!((&profile.proxy, profile.proxy_remote_dns, profile.protocol), (&proxy, true, playterm_net::Protocol::Raw));
+    run_until(&mut harness, "proxy tunnel prompt", |h| h.state_mut().test_sessions()[0].screen_contains("router#"));
+    harness.event(egui::Event::Text("ping".into()));
+    run_until(&mut harness, "response to typed input", |h| h.state_mut().test_sessions()[0].screen_contains("GUI-PONG"));
+    server.join().unwrap();
+}
+
+#[test]
+fn quick_connect_telnet_tls_refuses_plaintext_device() {
+    use std::io::{Read, Write};
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = app(dir.path());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut record = [0; 3];
+        stream.read_exact(&mut record).unwrap();
+        assert_eq!(&record[..2], &[22, 3], "TLS handshake record");
+        stream.write_all(b"plaintext login prompt\r\n").unwrap();
+    });
+    click(&mut harness, "빠른 연결");
+    harness.get_by_role(Role::Dialog).get_by_role_and_label(Role::RadioButton, "Telnet/SSL").click();
+    harness.run_steps(2);
+    let dialog = harness.get_by_role(Role::Dialog);
+    let inputs: Vec<_> = dialog.query_all_by_role(Role::TextInput).collect();
+    type_into(&harness, &inputs[0], "127.0.0.1");
+    type_into(&harness, &inputs[1], &port.to_string());
+    harness.run_steps(3);
+    click(&mut harness, "연결");
+    run_until(&mut harness, "plaintext rejection", |h| h.state_mut().test_sessions()[0].state == SessionState::Closed);
+    assert!(!harness.state_mut().test_sessions()[0].screen_contains("plaintext login prompt"));
+    server.join().unwrap();
+}

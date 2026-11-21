@@ -753,16 +753,6 @@ impl ProfileForm {
                 submit |= enter(ui, &host);
                 ui.end_row();
 
-                ui.label("Proxy URL");
-                ui.add(egui::TextEdit::singleline(&mut p.proxy).hint_text("http://, socks4://, socks5://"));
-                ui.end_row();
-                if !p.proxy.is_empty() {
-                    ui.label("Proxy username");
-                    ui.text_edit_singleline(&mut p.proxy_username);
-                    ui.end_row();
-                    ui.checkbox(&mut p.proxy_remote_dns, "Resolve destination on proxy");
-                    ui.end_row();
-                }
                 ui.label(t!("profile_form.port"));
                 let port = ui.add(egui::TextEdit::singleline(&mut self.port).desired_width(80.0));
                 submit |= enter(ui, &port);
@@ -802,6 +792,19 @@ impl ProfileForm {
                 if opts.save_password {
                     ui.label("");
                     ui.checkbox(&mut p.save_password, t!("profile_form.save_password_encrypted_with_the_master_password"));
+                    ui.end_row();
+                }
+            }
+
+            if p.protocol != Protocol::Serial {
+                ui.label("Proxy URL");
+                ui.add(egui::TextEdit::singleline(&mut p.proxy).hint_text("http://, socks4://, socks5://"));
+                ui.end_row();
+                if !p.proxy.is_empty() {
+                    ui.label("Proxy username");
+                    ui.text_edit_singleline(&mut p.proxy_username);
+                    ui.end_row();
+                    ui.checkbox(&mut p.proxy_remote_dns, "Resolve destination on proxy");
                     ui.end_row();
                 }
             }
