@@ -246,10 +246,15 @@ fn push_escaped(out: &mut Vec<u8>, b: u8) {
 trait TerminalStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin> TerminalStream for T {}
 
-pub(crate) async fn run(
+pub(crate) async fn run(params: ConnectParams, commands: mpsc::UnboundedReceiver<SessionCommand>, sink: EventSink) -> anyhow::Result<()> {
+    run_with_tls(params, commands, sink, tokio_native_tls::native_tls::TlsConnector::new).await
+}
+
+async fn run_with_tls(
     params: ConnectParams,
     mut commands: mpsc::UnboundedReceiver<SessionCommand>,
     sink: EventSink,
+    tls_connector: impl FnOnce() -> Result<tokio_native_tls::native_tls::TlsConnector, tokio_native_tls::native_tls::Error>,
 ) -> anyhow::Result<()> {
     let telnet = matches!(params.protocol, crate::Protocol::Telnet | crate::Protocol::TelnetTls);
     let stream = sink
@@ -257,7 +262,7 @@ pub(crate) async fn run(
             let mut tcp = crate::proxy::connect(&params, &sink).await?;
             tcp.set_nodelay(true)?;
             if params.protocol == crate::Protocol::TelnetTls {
-                let tls = tokio_native_tls::native_tls::TlsConnector::new()?;
+                let tls = tls_connector()?;
                 let stream = tokio_native_tls::TlsConnector::from(tls).connect(&params.host, tcp).await?;
                 return Ok(Box::new(stream) as Box<dyn TerminalStream>);
             }
@@ -425,6 +430,115 @@ mod tests {
             jump: None,
             x11: None,
         }
+    }
+
+    async fn next_event(handle: &crate::session::SessionHandle) -> SessionEvent {
+        loop {
+            if let Some(event) = handle.try_recv() {
+                return event;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    }
+
+    async fn check_terminal(handle: &crate::session::SessionHandle) {
+        assert!(matches!(next_event(handle).await, SessionEvent::Connected));
+        handle.send(b"ping".to_vec());
+        let mut output = Vec::new();
+        while output.len() < 4 {
+            let SessionEvent::Data(bytes) = next_event(handle).await else { panic!("expected terminal output") };
+            output.extend(bytes);
+        }
+        assert_eq!(output, b"pong");
+        handle.close();
+    }
+
+    #[tokio::test]
+    async fn rlogin_over_authenticated_connect_relay() {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let device = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let destination = device.local_addr().unwrap();
+            let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut p = test_params(destination.port());
+            p.protocol = crate::Protocol::Rlogin;
+            p.username = "remote".into();
+            p.proxy = format!("http://{}", proxy.local_addr().unwrap());
+            p.proxy_username = "test".into();
+            let relay = tokio::spawn(async move {
+                let (mut client, _) = proxy.accept().await.unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(client.read_u8().await.unwrap());
+                }
+                let header = String::from_utf8(header).unwrap();
+                assert!(header.starts_with(&format!("CONNECT {destination} HTTP/1.1\r\n")));
+                assert!(header.contains("\r\nProxy-Authorization: Basic dGVzdDpwYXNz\r\n"));
+                let mut upstream = tokio::net::TcpStream::connect(destination).await.unwrap();
+                client.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+                tokio::io::copy_bidirectional(&mut client, &mut upstream).await.unwrap();
+            });
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = device.accept().await.unwrap();
+                let mut login = Vec::new();
+                while login.iter().filter(|&&b| b == 0).count() < 4 {
+                    login.push(socket.read_u8().await.unwrap());
+                }
+                assert!(login.ends_with(b"\0remote\0xterm/38400\0"));
+                socket.write_u8(0).await.unwrap();
+                let mut data = [0; 4];
+                socket.read_exact(&mut data).await.unwrap();
+                assert_eq!(&data, b"ping");
+                socket.write_all(b"pong").await.unwrap();
+            });
+            let (handle, commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+            let client = tokio::spawn(run(p, commands, sink));
+            let SessionEvent::AuthPrompt(prompt) = next_event(&handle).await else { panic!("expected proxy prompt") };
+            prompt.answer(Some(vec!["pass".into()]));
+            check_terminal(&handle).await;
+            client.await.unwrap().unwrap();
+            server.await.unwrap();
+            relay.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn telnet_over_trusted_local_tls_server() {
+        use tokio_rustls::rustls;
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let identity = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+            let root = tokio_native_tls::native_tls::Certificate::from_der(identity.cert.der()).unwrap();
+            let key = rustls::pki_types::PrivateKeyDer::Pkcs8(identity.signing_key.serialize_der().into());
+            let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![identity.cert.der().clone()], key)
+                .unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut p = test_params(listener.local_addr().unwrap().port());
+            p.protocol = crate::Protocol::TelnetTls;
+            p.host = "localhost".into();
+            let server = tokio::spawn(async move {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let mut tls = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config)).accept(tcp).await.unwrap();
+                let mut data = [0; 4];
+                tls.read_exact(&mut data).await.unwrap();
+                assert_eq!(&data, b"ping");
+                tls.write_all(b"pong").await.unwrap();
+                tls.shutdown().await.unwrap();
+            });
+            let (handle, commands, sink) = crate::session::SessionHandle::new(std::sync::Arc::new(|| {}));
+            let client = tokio::spawn(run_with_tls(p, commands, sink, move || {
+                tokio_native_tls::native_tls::TlsConnector::builder().add_root_certificate(root).build()
+            }));
+            check_terminal(&handle).await;
+            client.await.unwrap().unwrap();
+            server.await.unwrap();
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
