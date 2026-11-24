@@ -1284,6 +1284,12 @@ impl Session {
             return;
         }
         self.start_screen = false;
+        // Connecting has no remote shell to interrupt yet. Cancel the background
+        // attempt instead of ignoring Ctrl+C until the connection timeout expires.
+        if self.state == SessionState::Connecting && bytes == [0x03] {
+            self.close();
+            return;
+        }
         // Typing takes over from a running macro (focus and mouse reports are not typing).
         if !(bytes == b"\x1b[I" || bytes == b"\x1b[O" || bytes.starts_with(b"\x1b[<") || bytes.starts_with(b"\x1b[M")) {
             self.stop_macro();
@@ -1717,6 +1723,30 @@ mod tests {
         session.sftp_error = Some("SFTP subsystem refused".into());
         session.reconnect(&net, std::sync::Arc::new(|| {}));
         assert_eq!(session.sftp_error(), None, "the new connection may try again");
+    }
+
+    #[test]
+    fn ctrl_c_cancels_a_reconnect_waiting_for_the_ssh_banner() {
+        let (mut session, net, _lines) = device_tab(Duration::ZERO, None, None);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let remote = session.remote.as_mut().unwrap();
+        remote.params.protocol = Protocol::Ssh;
+        remote.params.port = listener.local_addr().unwrap().port();
+        remote.params.connect_timeout = Duration::from_secs(60);
+        session.reconnect(&net, std::sync::Arc::new(|| {}));
+        let (_silent_server, _) = listener.accept().unwrap();
+        assert_eq!(session.state, SessionState::Connecting);
+
+        session.send_bytes(vec![0x03]);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while session.state != SessionState::Closed {
+            assert!(Instant::now() < deadline, "Ctrl+C must cancel before the connection timeout");
+            session.poll(Path::new(""), false);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(shows(&mut session, t!("session.connection_cancelled")));
+        assert!(session.in_console());
+        assert!(session.has_target(), "the cancelled target remains available for another reconnect");
     }
 
     /// A tab connected over Telnet to a fake device on this PC: it shows `router#` and answers
