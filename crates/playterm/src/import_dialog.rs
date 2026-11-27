@@ -79,7 +79,8 @@ fn sensitive_settings(p: &SessionProfile) -> Vec<String> {
     }
     if p.x11_forwarding {
         let trusted = if p.x11_trusted { format!(" {}", t!("profile_form.trusted_y")) } else { String::new() };
-        found.push(format!("{}{trusted}", t!("profile_form.x11_forwarding")));
+        let display = if p.x11_display.is_empty() { String::new() } else { format!(" → {}", p.x11_display) };
+        found.push(format!("{}{trusted}{display}", t!("profile_form.x11_forwarding")));
     }
     if !p.forwards.is_empty() {
         found.push(tr!("profile_form.port_forwarding", arg0 = p.forwards.len()));
@@ -96,6 +97,32 @@ fn sensitive_settings(p: &SessionProfile) -> Vec<String> {
     }
     if !p.identity_file.is_empty() {
         found.push(format!("{}: {}", t!("profile_form.key_file"), p.identity_file));
+    }
+    if !p.certificate_file.is_empty() {
+        found.push(format!("{}: {}", t!("profile_form.user_certificate"), p.certificate_file));
+    }
+    // The connection (and a Telnet session's plain text) goes through another host.
+    if !p.proxy.is_empty() {
+        found.push(format!("Proxy URL: {}", p.proxy));
+    }
+    // Types text (the password too) at the prompts it waits for.
+    if p.auto_login.enabled && !p.auto_login.steps.is_empty() {
+        found.push(tr!("profile_form.automatic_login_steps", arg0 = p.auto_login.steps.len()));
+    }
+    // A folder of this PC opened to the remote desktop.
+    if !p.rdp.drive_folder.is_empty() {
+        let access =
+            if p.rdp.drive_read_only { format!(" ({})", t!("profile_form.read_only_cannot_be_changed_remotely")) } else { String::new() };
+        found.push(format!("{}: {}{access}", t!("profile_form.shared_folder"), p.rdp.drive_folder));
+    }
+    // The password may go to the gateway.
+    if !p.rdp.gateway.is_empty() {
+        let user = if p.rdp.gateway_user.is_empty() {
+            String::new()
+        } else {
+            format!(" ({}: {})", t!("profile_form.gateway_user"), p.rdp.gateway_user)
+        };
+        found.push(format!("{}: {}{user}", t!("profile_form.rd_gateway"), p.rdp.gateway));
     }
     found
 }
@@ -443,11 +470,21 @@ mod tests {
         let mut forwarding = site("forwarding", "db01", "");
         forwarding.agent_forwarding = true;
         forwarding.jump_host = "evil.example".into();
-        let sites = [plain, forwarding].into_iter().map(|profile| playterm_config::ExportedSite { profile, password: None }).collect();
+        let mut desktop = site("desktop", "desk01", "");
+        desktop.rdp.drive_folder = "/Users/me".into();
+        let mut proxied = site("proxied", "router", "");
+        proxied.proxy = "socks5://proxy.invalid:1080".into();
+        let sites = [plain, forwarding, desktop, proxied]
+            .into_iter()
+            .map(|profile| playterm_config::ExportedSite { profile, password: None })
+            .collect();
         let d = ImportDialog::exported(&store, sites).unwrap();
         assert!(d.items[0].checked && d.items[0].session.notes.is_empty());
         assert!(!d.items[1].checked, "the user checks it after seeing the settings");
         let note = &d.items[1].session.notes[0];
         assert!(note.contains(t!("profile_form.ssh_agent_forwarding_a")) && note.contains("evil.example"), "{note}");
+        for (item, shown) in [(&d.items[2], "/Users/me"), (&d.items[3], "proxy.invalid")] {
+            assert!(!item.checked && item.session.notes[0].contains(shown), "{:?}", item.session.notes);
+        }
     }
 }
