@@ -14,7 +14,9 @@ playterm 是以 Rust（egui、alacritty_terminal、russh、IronRDP）開發的�
 - Ctrl/Shift+點選多個站台並一併連線，將站台與配置儲存為範本。
 - SSH 金鑰、憑證及外部代理程式驗證，跳板主機，`-L` / `-R` / `-D` 連接埠轉送與 X11 轉送。
 - SFTP 面板、ZMODEM 收發（`sz` / `rz`）、自動登入、巨集、同時輸入和工作階段記錄。
-- 以主密碼加密的密碼保管庫（Argon2id + XChaCha20-Poly1305）。
+- 密碼保管庫：金鑰保存在系統鑰匙圈中（macOS 鑰匙圈、Windows 認證管理員、Linux Secret Service；XChaCha20-Poly1305），連線時不再詢問主密碼。舊版本的保管庫只在第一次詢問一次主密碼，隨後完成轉換。
+- 站台清單匯出/匯入（檔案 → 匯出站台…，檔案 → 匯入 → 匯出的 playterm 站台…）：將站台與已儲存的密碼匯出為一個 `.ptsites` 檔案，以匯出時設定的主密碼加密（Argon2id + XChaCha20-Poly1305）。
+- 工具列位址欄：`user@host`、`ssh://…`、`telnet://…` 直接連線；沒有使用者名稱的主機會開啟已填好的快速連線。
 - 匯入 PuTTY、Xshell 與 SecureCRT 工作階段；支援資料夾、分頁色彩與連線範本。
 - 十種介面語言、深色與淺色佈景主題、字型選擇、捲動歷史搜尋與多語言字元編碼。
 
@@ -81,7 +83,7 @@ Windows 預設設定目錄是 `%APPDATA%\playterm\config\`。可透過 `PLAYTERM
 | --- | --- |
 | `sessions.toml` | 站台與範本，不含密碼 |
 | `settings.toml` | 語言、顯示、按鍵、巨集及更新設定等 |
-| `vault.toml` | 以主密碼加密的已儲存密碼 |
+| `vault.toml` | 以保存在系統鑰匙圈中的隨機金鑰加密的已儲存密碼 |
 | `known_hosts` | 已信任的 SSH 主機金鑰 |
 | `known_rdp_hosts` | 已信任的 RDP 憑證指紋 |
 

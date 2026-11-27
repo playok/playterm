@@ -4,6 +4,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use zeroize::Zeroizing;
 
@@ -14,6 +15,10 @@ pub trait KeyStore: Send + Sync {
     fn load(&self, id: &str) -> io::Result<Option<Zeroizing<String>>>;
     fn store(&self, id: &str, key: &str) -> io::Result<()>;
     fn delete(&self, id: &str) -> io::Result<()>;
+    /// Whether a key was stored in a plain private file because there is no keychain here.
+    fn used_file_fallback(&self) -> bool {
+        false
+    }
 }
 
 /// Keys as private files (`vault-<id>.key`, mode 0600) in a folder: the fallback without a
@@ -56,17 +61,24 @@ impl KeyStore for FileKeyStore {
     }
 }
 
-/// The OS keychain, with a [`FileKeyStore`] in `fallback_dir` where the keychain cannot be used
-/// (a Linux desktop without a Secret Service, say).
+/// The OS keychain. Only where a desktop may have none (Linux and other Unix without a Secret
+/// Service) are new keys kept in a [`FileKeyStore`] in `fallback_dir` instead, and that is
+/// reported ([`KeyStore::used_file_fallback`]). On macOS and Windows a keychain that cannot
+/// store the key (access denied, say) is an error: the key is never quietly left in a file.
+/// Keys already in such a file are still read (a vault set up by a test fixture).
 pub struct OsKeyStore {
     fallback: FileKeyStore,
+    used_fallback: AtomicBool,
 }
+
+/// Whether this system may lack a keychain, so a file stands in for it.
+const FILE_FALLBACK: bool = cfg!(all(unix, not(target_os = "macos")));
 
 const SERVICE: &str = "playterm";
 
 impl OsKeyStore {
     pub fn new(fallback_dir: &Path) -> Self {
-        Self { fallback: FileKeyStore::new(fallback_dir) }
+        Self { fallback: FileKeyStore::new(fallback_dir), used_fallback: AtomicBool::new(false) }
     }
 
     fn entry(id: &str) -> keyring::Result<keyring::Entry> {
@@ -95,11 +107,18 @@ impl KeyStore for OsKeyStore {
     fn store(&self, id: &str, key: &str) -> io::Result<()> {
         match Self::entry(id).and_then(|entry| entry.set_password(key)) {
             Ok(()) => Ok(()),
-            Err(e) => {
-                log::warn!("keychain unavailable ({e}); keeping the vault key in a private file");
-                self.fallback.store(id, key)
+            Err(e @ (keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_))) if FILE_FALLBACK => {
+                log::warn!("no keychain ({e}); keeping the vault key in a private file");
+                self.fallback.store(id, key)?;
+                self.used_fallback.store(true, Ordering::Relaxed);
+                Ok(())
             }
+            Err(e) => Err(io::Error::other(format!("keychain: {e}"))),
         }
+    }
+
+    fn used_file_fallback(&self) -> bool {
+        self.used_fallback.load(Ordering::Relaxed)
     }
 
     fn delete(&self, id: &str) -> io::Result<()> {

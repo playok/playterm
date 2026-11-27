@@ -25,6 +25,7 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **Remote Desktop**: resolution that follows the tab size, sound, Unicode/IME input, and certificate pinning. Clipboard, folder and printer sharing are Windows only
 - **Password vault**: saved passwords are encrypted with a key kept in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service; XChaCha20-Poly1305), so connecting never asks for a master password
 - **Site list export/import**: the sites and their saved passwords go to one file, to import on another PC; only that file is encrypted with a master password (Argon2id + XChaCha20-Poly1305)
+- **Toolbar address box**: `user@host`, `ssh://…`, `telnet://…` connect at once; a host without a user opens Quick Connect filled in
 - **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads and uploads (`sz`/`rz`)
 - **Site manager**: folders, per-site tab colors, PuTTY, Xshell and SecureCRT session import, and a `playterm>` command prompt in unconnected tabs
 - Korean / English / Japanese / Simplified Chinese / Spanish / Brazilian Portuguese / German / French / Traditional Chinese / Russian UI, dark / light themes

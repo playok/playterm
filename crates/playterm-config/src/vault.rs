@@ -309,6 +309,11 @@ impl Vault {
         &self.path
     }
 
+    /// Whether the key had to be kept in a plain private file (no keychain on this system).
+    pub fn key_in_file(&self) -> bool {
+        self.keys.used_file_fallback()
+    }
+
     /// What kind of vault the file is (cheap: no key is derived or loaded).
     pub fn kind(&self) -> Result<VaultKind, VaultError> {
         let text = match std::fs::read_to_string(&self.path) {

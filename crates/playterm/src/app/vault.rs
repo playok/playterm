@@ -120,6 +120,10 @@ impl PlaytermApp {
 
     /// Applies what waited for the saved passwords to open.
     fn vault_opened(&mut self) {
+        // Said once: without a keychain the key is only as safe as the settings folder.
+        if self.vault.key_in_file() && !std::mem::replace(&mut self.key_file_noted, true) {
+            self.status = Some(t!("app.vault.there_is_no_keychain_on_this_computer_so").into());
+        }
         // Changes made while it was locked. Nothing else is removed: the site list may be
         // incomplete (unreadable file, another window), and a lost password cannot come back.
         for todo in std::mem::take(&mut self.vault_todo) {

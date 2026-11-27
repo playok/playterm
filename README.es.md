@@ -14,7 +14,9 @@ Esta guía en español describe la rama de desarrollo `master`. Para las funcion
 - Selección de varios sitios con Ctrl/Mayús+clic; conexión conjunta y plantillas con sitios y disposición.
 - Autenticación SSH con claves, certificados y agentes externos; hosts de salto, reenvío `-L` / `-R` / `-D` y X11.
 - Panel SFTP, transferencias ZMODEM (`sz` / `rz`), inicio de sesión automático, macros, entrada simultánea y registros de sesión.
-- Bóveda de contraseñas cifrada con una contraseña maestra (Argon2id + XChaCha20-Poly1305).
+- Bóveda de contraseñas: la clave se guarda en el llavero del sistema (Llavero de macOS, Administrador de credenciales de Windows, Secret Service de Linux; XChaCha20-Poly1305), así que conectar nunca pide una contraseña maestra. Una bóveda de una versión anterior pide su contraseña maestra una sola vez y se convierte.
+- Exportar/importar la lista de sitios (Archivo → Exportar sitios…, Archivo → Importar → Sitios de playterm exportados…): sitios y contraseñas guardadas en un archivo `.ptsites`, cifrado con una contraseña maestra elegida al exportar (Argon2id + XChaCha20-Poly1305).
+- Cuadro de dirección en la barra de herramientas: `usuario@host`, `ssh://…`, `telnet://…` conectan al instante; un host sin usuario abre Conexión rápida ya rellenada.
 - Importación de sesiones de PuTTY, Xshell y SecureCRT; carpetas y colores de pestañas.
 - Interfaz en diez idiomas, temas oscuro y claro, fuentes configurables, búsqueda en el historial y codificaciones internacionales.
 
@@ -81,7 +83,7 @@ En Windows, la configuración está en `%APPDATA%\playterm\config\`. La variable
 | --- | --- |
 | `sessions.toml` | Sitios y plantillas, sin contraseñas |
 | `settings.toml` | Idioma, aspecto, teclas, macros y actualizaciones |
-| `vault.toml` | Contraseñas guardadas, cifradas con la contraseña maestra |
+| `vault.toml` | Contraseñas guardadas, cifradas con una clave aleatoria guardada en el llavero del sistema |
 | `known_hosts` | Claves de host SSH de confianza |
 | `known_rdp_hosts` | Huellas de certificados RDP de confianza |
 

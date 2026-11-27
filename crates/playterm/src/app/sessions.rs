@@ -192,14 +192,19 @@ impl PlaytermApp {
         }
     }
 
-    /// Connects to an address typed into the toolbar: a saved site by its exact name, a complete
-    /// address at once, or a bare host through the quick-connect form (for the user name).
+    /// Connects to an address typed into the toolbar: a complete address at once, a bare host
+    /// through the quick-connect form (for the user name), or a saved site by its exact name.
+    /// Anything shaped like an address (a dot, colon, `@` or `/` in it) is taken as one: a site
+    /// named `10.0.0.1` or `bank.example` that points elsewhere must not stand in for it.
     pub(super) fn connect_address(&mut self, address: &str) {
         let address = address.trim();
         if address.is_empty() {
             return;
         }
-        let site = self.store.profiles().iter().find(|p| p.display_name().eq_ignore_ascii_case(address)).map(|p| p.id.clone());
+        let address_like = address.contains(['.', ':', '@', '/']);
+        let site = (!address_like)
+            .then(|| self.store.profiles().iter().find(|p| p.display_name().eq_ignore_ascii_case(address)).map(|p| p.id.clone()))
+            .flatten();
         if let Some(id) = site {
             return self.connect_saved(&id);
         }

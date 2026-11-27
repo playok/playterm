@@ -238,6 +238,8 @@ pub struct PlaytermApp {
     show_sidebar: bool,
     /// The address typed into the toolbar's connect box.
     address: String,
+    /// The user was told that the vault key is kept in a file (no keychain here).
+    key_file_noted: bool,
     /// The site manager window; app modals (vault, delete confirmation) stack above it.
     site_manager: Option<SiteManager>,
     /// The site manager was just opened: the terminal gives up the keyboard to it.
@@ -346,6 +348,7 @@ impl PlaytermApp {
             sidebar: Sidebar::default(),
             show_sidebar: true,
             address: String::new(),
+            key_file_noted: false,
             site_manager: None,
             site_manager_opened: false,
             status,

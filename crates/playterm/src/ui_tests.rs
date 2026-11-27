@@ -994,3 +994,27 @@ fn the_toolbar_address_box_connects() {
     assert!(values.iter().any(|v| v == "192.0.2.10"), "{values:?}");
     assert!(values.iter().any(|v| v == "2222"), "{values:?}");
 }
+
+/// A saved site named like an address does not stand in for that address in the toolbar box.
+#[test]
+fn an_address_in_the_toolbar_box_is_not_taken_for_a_site_named_like_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = playterm_config::ProfileStore::load(dir.path().join("sessions.toml")).unwrap();
+    let decoy = playterm_config::SessionProfile {
+        name: "example.com".into(),
+        host: "elsewhere.invalid".into(),
+        username: "me".into(),
+        ..playterm_config::SessionProfile::new().unwrap()
+    };
+    store.upsert(decoy).unwrap();
+    let mut harness = app(dir.path());
+    let field = harness.get_by_role_and_label(Role::TextInput, "주소로 연결");
+    type_into(&harness, &field, "example.com");
+    harness.run_steps(2);
+    press(&mut harness, egui::Key::Enter);
+    let dialog = harness.get_by_role(Role::Dialog);
+    let values: Vec<String> =
+        dialog.query_all_by_role(Role::TextInput).filter_map(|n| n.accesskit_node().value().map(|v| v.to_string())).collect();
+    assert!(values.iter().any(|v| v == "example.com"), "the typed host, not the site's: {values:?}");
+    assert_eq!(harness.state_mut().test_sessions().len(), 1, "no connection to the site");
+}

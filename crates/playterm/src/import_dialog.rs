@@ -64,6 +64,40 @@ struct Item {
     checked: bool,
     /// A site with the same address (or the same name in the target folder) exists.
     duplicate: bool,
+    /// It comes with settings that reach beyond the connection (see [`sensitive_settings`]):
+    /// not checked until the user has seen them.
+    sensitive: bool,
+}
+
+/// What an exported site does beyond connecting: hands the server this computer's agent or
+/// display, opens ports, writes files, runs a macro, goes through another host, or uses a key
+/// file. A file made elsewhere may carry them, so they are shown before it is imported.
+fn sensitive_settings(p: &SessionProfile) -> Vec<String> {
+    let mut found = Vec::new();
+    if p.agent_forwarding {
+        found.push(t!("profile_form.ssh_agent_forwarding_a").to_owned());
+    }
+    if p.x11_forwarding {
+        let trusted = if p.x11_trusted { format!(" {}", t!("profile_form.trusted_y")) } else { String::new() };
+        found.push(format!("{}{trusted}", t!("profile_form.x11_forwarding")));
+    }
+    if !p.forwards.is_empty() {
+        found.push(tr!("profile_form.port_forwarding", arg0 = p.forwards.len()));
+    }
+    if p.log.auto {
+        let dir = if p.log.dir.is_empty() { String::new() } else { format!(": {}", p.log.dir) };
+        found.push(format!("{}{dir}", t!("profile_form.start_logging_automatically_on_connect")));
+    }
+    if !p.after_connect_macro.is_empty() {
+        found.push(format!("{}: {}", t!("profile_form.macro_after_connecting"), p.after_connect_macro));
+    }
+    if !p.jump_host.is_empty() {
+        found.push(format!("{}: {}", t!("profile_form.jump_host"), p.jump_host));
+    }
+    if !p.identity_file.is_empty() {
+        found.push(format!("{}: {}", t!("profile_form.key_file"), p.identity_file));
+    }
+    found
 }
 
 pub struct ImportDialog {
@@ -128,13 +162,15 @@ impl ImportDialog {
                 }
                 _ => profile.save_password = false,
             }
-            let session = ImportedSession {
-                name: profile.display_name(),
-                folder: std::mem::take(&mut profile.folder),
-                profile: Ok(profile),
-                notes: Vec::new(),
+            let sensitive = sensitive_settings(&profile);
+            let notes = if sensitive.is_empty() {
+                Vec::new()
+            } else {
+                vec![tr!("import_dialog.check_these_settings_before_importing", settings = sensitive.join(", "))]
             };
-            items.push(Item { session, checked: false, duplicate: false });
+            let session =
+                ImportedSession { name: profile.display_name(), folder: std::mem::take(&mut profile.folder), profile: Ok(profile), notes };
+            items.push(Item { session, checked: false, duplicate: false, sensitive: !sensitive.is_empty() });
         }
         let mut dialog =
             Self { source: ImportSource::Playterm, dir: None, items, folder: String::new(), truncated: false, error: None, secrets };
@@ -157,7 +193,7 @@ impl ImportDialog {
         };
         self.error = error;
         self.truncated = truncated;
-        self.items = sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false }).collect();
+        self.items = sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false, sensitive: false }).collect();
         self.mark_duplicates(store, true);
     }
 
@@ -170,7 +206,7 @@ impl ImportDialog {
             let folder = target_folder(&self.folder, &item.session.folder);
             let duplicate = store.profiles().iter().any(|e| same_address(e, p) || (e.name == p.name && e.folder == folder));
             if reset || duplicate != item.duplicate {
-                item.checked = !duplicate;
+                item.checked = !duplicate && !item.sensitive;
             }
             item.duplicate = duplicate;
         }
@@ -358,7 +394,7 @@ mod tests {
         ImportDialog {
             source: ImportSource::Xshell,
             dir: None,
-            items: sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false }).collect(),
+            items: sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false, sensitive: false }).collect(),
             folder: folder.into(),
             truncated: false,
             error: None,
@@ -398,5 +434,20 @@ mod tests {
         d.folder = "New".into();
         d.mark_duplicates(&store, false);
         assert_eq!(state(&d)[0], (false, true));
+    }
+
+    #[test]
+    fn exported_sites_with_far_reaching_settings_start_unchecked_and_say_why() {
+        let store = ProfileStore::empty("unused.toml");
+        let plain = site("plain", "web01", "");
+        let mut forwarding = site("forwarding", "db01", "");
+        forwarding.agent_forwarding = true;
+        forwarding.jump_host = "evil.example".into();
+        let sites = [plain, forwarding].into_iter().map(|profile| playterm_config::ExportedSite { profile, password: None }).collect();
+        let d = ImportDialog::exported(&store, sites).unwrap();
+        assert!(d.items[0].checked && d.items[0].session.notes.is_empty());
+        assert!(!d.items[1].checked, "the user checks it after seeing the settings");
+        let note = &d.items[1].session.notes[0];
+        assert!(note.contains(t!("profile_form.ssh_agent_forwarding_a")) && note.contains("evil.example"), "{note}");
     }
 }

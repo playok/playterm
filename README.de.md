@@ -14,7 +14,9 @@ Diese deutsche Anleitung beschreibt den Entwicklungszweig `master`. Bereits ver�
 - Mehrere Sites mit Strg/Umschalt+Klick auswählen und gemeinsam verbinden; Sites und Anordnung als Vorlage speichern.
 - SSH-Anmeldung mit Schlüsseln, Zertifikaten und externen Agenten; Sprunghosts, Portweiterleitungen `-L` / `-R` / `-D` und X11.
 - SFTP-Seitenleiste, ZMODEM-Transfers (`sz` / `rz`), automatische Anmeldung, Makros, gleichzeitige Eingabe und Sitzungsprotokolle.
-- Passworttresor mit Masterpasswort-Verschlüsselung (Argon2id + XChaCha20-Poly1305).
+- Passworttresor: der Schlüssel liegt im Schlüsselbund des Betriebssystems (macOS-Schlüsselbund, Windows-Anmeldeinformationsverwaltung, Linux Secret Service; XChaCha20-Poly1305), daher fragt das Verbinden nie nach einem Masterpasswort. Ein Tresor einer älteren Version fragt einmal nach seinem Masterpasswort und wird dann umgestellt.
+- Site-Liste exportieren/importieren (Datei → Sites exportieren…, Datei → Importieren → Exportierte playterm-Sites…): Sites und gespeicherte Passwörter in einer `.ptsites`-Datei, verschlüsselt mit einem beim Export gewählten Masterpasswort (Argon2id + XChaCha20-Poly1305).
+- Adressfeld in der Symbolleiste: `user@host`, `ssh://…`, `telnet://…` verbinden sofort; ein Host ohne Benutzer öffnet die ausgefüllte Schnellverbindung.
 - Import von PuTTY-, Xshell- und SecureCRT-Sitzungen; Ordner und Tab-Farben.
 - Oberfläche in zehn Sprachen, helle und dunkle Designs, Schriftwahl, Suche im Verlauf und internationale Zeichencodierungen.
 
@@ -81,7 +83,7 @@ Unter Windows liegt die Konfiguration in `%APPDATA%\playterm\config\`. Mit `PLAY
 | --- | --- |
 | `sessions.toml` | Sites und Vorlagen ohne Passwörter |
 | `settings.toml` | Sprache, Darstellung, Tasten, Makros und Updates |
-| `vault.toml` | Mit dem Masterpasswort verschlüsselte gespeicherte Passwörter |
+| `vault.toml` | Gespeicherte Passwörter, verschlüsselt mit einem Zufallsschlüssel im Schlüsselbund des Betriebssystems |
 | `known_hosts` | Vertrauenswürdige SSH-Hostschlüssel |
 | `known_rdp_hosts` | Vertrauenswürdige RDP-Zertifikatsfingerabdrücke |
 
