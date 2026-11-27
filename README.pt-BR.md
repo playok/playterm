@@ -14,7 +14,9 @@ Este guia em português brasileiro descreve a branch de desenvolvimento `master`
 - Seleção de vários sites com Ctrl/Shift+clique, conexão conjunta e modelos com sites e disposição dos painéis.
 - Autenticação SSH com chaves, certificados e agentes externos; hosts de salto, encaminhamento `-L` / `-R` / `-D` e X11.
 - Painel SFTP, transferências ZMODEM (`sz` / `rz`), login automático, macros, entrada simultânea e logs de sessão.
-- Cofre de senhas criptografado com uma senha mestra (Argon2id + XChaCha20-Poly1305).
+- Cofre de senhas: a chave fica no chaveiro do sistema (Chaveiro do macOS, Gerenciador de Credenciais do Windows, Secret Service do Linux; XChaCha20-Poly1305), então conectar nunca pede senha mestra. Um cofre de uma versão anterior pede a senha mestra uma única vez e é convertido.
+- Exportar/importar a lista de sites (Arquivo → Exportar sites…, Arquivo → Importar → Sites do playterm exportados…): sites e senhas salvas em um arquivo `.ptsites`, criptografado com uma senha mestra escolhida ao exportar (Argon2id + XChaCha20-Poly1305).
+- Campo de endereço na barra de ferramentas: `usuário@host`, `ssh://…`, `telnet://…` conectam na hora; um host sem usuário abre a Conexão rápida já preenchida.
 - Importação de sessões do PuTTY, Xshell e SecureCRT, pastas e cores de abas.
 - Interface em dez idiomas, temas claro e escuro, escolha de fontes, busca no histórico e codificações internacionais.
 
@@ -81,7 +83,7 @@ No Windows, a configuração fica em `%APPDATA%\playterm\config\`. A variável `
 | --- | --- |
 | `sessions.toml` | Sites e modelos, sem senhas |
 | `settings.toml` | Idioma, aparência, teclas, macros e atualizações |
-| `vault.toml` | Senhas salvas, criptografadas com a senha mestra |
+| `vault.toml` | Senhas salvas, criptografadas com uma chave aleatória guardada no chaveiro do sistema |
 | `known_hosts` | Chaves de hosts SSH confiáveis |
 | `known_rdp_hosts` | Impressões digitais de certificados RDP confiáveis |
 

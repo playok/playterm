@@ -566,28 +566,13 @@ impl Session {
         self.tx_bytes = 0;
     }
 
-    /// Forgets the password this tab connects with (the vault was locked): a reconnect asks
-    /// again, or for the vault to be unlocked.
-    pub fn forget_password(&mut self) {
-        use zeroize::Zeroize as _;
-        if let Some(remote) = &mut self.remote
-            && let Some(mut password) = remote.params.password.take()
-        {
-            password.zeroize();
-        }
-        if let Some(script) = &mut self.login_script {
-            script.password = None;
-        }
-        self.login = None;
-        self.save_on_login = None;
-    }
-
-    /// Whether this tab's site saves its password but the tab has none (the vault was locked).
+    /// Whether this tab's site saves its password but the tab has none (the saved passwords
+    /// were not open when it connected).
     pub fn lacks_saved_password(&self) -> bool {
         self.profile.as_ref().is_some_and(|p| p.save_password) && self.remote.as_ref().is_some_and(|r| r.params.password.is_none())
     }
 
-    /// Gives the tab its saved password again (the vault was unlocked to reconnect).
+    /// Gives the tab its saved password (the saved passwords were opened to reconnect).
     pub fn restore_password(&mut self, password: playterm_net::Password) {
         if let Some(script) = &mut self.login_script {
             script.password = Some(password.clone().into_zeroizing());

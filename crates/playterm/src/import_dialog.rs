@@ -1,10 +1,13 @@
-//! "세션 가져오기" dialog: lists the sessions saved by PuTTY, Xshell or SecureCRT to pick from.
+//! "세션 가져오기" dialog: lists the sessions saved by PuTTY, Xshell or SecureCRT, or the
+//! sites of a list exported by playterm, to pick from.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui::{self, RichText};
 use playterm_config::{ProfileStore, SessionProfile, normalize_folder};
 use playterm_i18n::{t, tr};
+use zeroize::Zeroizing;
 
 use crate::icon;
 use crate::{putty, securecrt, sidebar, xshell};
@@ -15,6 +18,8 @@ pub enum ImportSource {
     Putty,
     Xshell,
     SecureCrt,
+    /// A site list exported by playterm.
+    Playterm,
 }
 
 impl ImportSource {
@@ -23,6 +28,7 @@ impl ImportSource {
             Self::Putty => "PuTTY",
             Self::Xshell => "Xshell",
             Self::SecureCrt => "SecureCRT",
+            Self::Playterm => "playterm",
         }
     }
 }
@@ -48,6 +54,8 @@ pub enum ImportResult {
         source: ImportSource,
         folder: String,
         profiles: Vec<SessionProfile>,
+        /// The saved passwords that came with them (exported playterm sites), by site id.
+        secrets: Vec<(String, Zeroizing<String>)>,
     },
 }
 
@@ -56,6 +64,67 @@ struct Item {
     checked: bool,
     /// A site with the same address (or the same name in the target folder) exists.
     duplicate: bool,
+    /// It comes with settings that reach beyond the connection (see [`sensitive_settings`]):
+    /// not checked until the user has seen them.
+    sensitive: bool,
+}
+
+/// What an exported site does beyond connecting: hands the server this computer's agent or
+/// display, opens ports, writes files, runs a macro, goes through another host, or uses a key
+/// file. A file made elsewhere may carry them, so they are shown before it is imported.
+fn sensitive_settings(p: &SessionProfile) -> Vec<String> {
+    let mut found = Vec::new();
+    if p.agent_forwarding {
+        found.push(t!("profile_form.ssh_agent_forwarding_a").to_owned());
+    }
+    if p.x11_forwarding {
+        let trusted = if p.x11_trusted { format!(" {}", t!("profile_form.trusted_y")) } else { String::new() };
+        let display = if p.x11_display.is_empty() { String::new() } else { format!(" → {}", p.x11_display) };
+        found.push(format!("{}{trusted}{display}", t!("profile_form.x11_forwarding")));
+    }
+    if !p.forwards.is_empty() {
+        found.push(tr!("profile_form.port_forwarding", arg0 = p.forwards.len()));
+    }
+    if p.log.auto {
+        let dir = if p.log.dir.is_empty() { String::new() } else { format!(": {}", p.log.dir) };
+        found.push(format!("{}{dir}", t!("profile_form.start_logging_automatically_on_connect")));
+    }
+    if !p.after_connect_macro.is_empty() {
+        found.push(format!("{}: {}", t!("profile_form.macro_after_connecting"), p.after_connect_macro));
+    }
+    if !p.jump_host.is_empty() {
+        found.push(format!("{}: {}", t!("profile_form.jump_host"), p.jump_host));
+    }
+    if !p.identity_file.is_empty() {
+        found.push(format!("{}: {}", t!("profile_form.key_file"), p.identity_file));
+    }
+    if !p.certificate_file.is_empty() {
+        found.push(format!("{}: {}", t!("profile_form.user_certificate"), p.certificate_file));
+    }
+    // The connection (and a Telnet session's plain text) goes through another host.
+    if !p.proxy.is_empty() {
+        found.push(format!("Proxy URL: {}", p.proxy));
+    }
+    // Types text (the password too) at the prompts it waits for.
+    if p.auto_login.enabled && !p.auto_login.steps.is_empty() {
+        found.push(tr!("profile_form.automatic_login_steps", arg0 = p.auto_login.steps.len()));
+    }
+    // A folder of this PC opened to the remote desktop.
+    if !p.rdp.drive_folder.is_empty() {
+        let access =
+            if p.rdp.drive_read_only { format!(" ({})", t!("profile_form.read_only_cannot_be_changed_remotely")) } else { String::new() };
+        found.push(format!("{}: {}{access}", t!("profile_form.shared_folder"), p.rdp.drive_folder));
+    }
+    // The password may go to the gateway.
+    if !p.rdp.gateway.is_empty() {
+        let user = if p.rdp.gateway_user.is_empty() {
+            String::new()
+        } else {
+            format!(" ({}: {})", t!("profile_form.gateway_user"), p.rdp.gateway_user)
+        };
+        found.push(format!("{}: {}{user}", t!("profile_form.rd_gateway"), p.rdp.gateway));
+    }
+    found
 }
 
 pub struct ImportDialog {
@@ -67,6 +136,8 @@ pub struct ImportDialog {
     /// Only part of the sessions folder was read (it is too big).
     truncated: bool,
     error: Option<String>,
+    /// Passwords of the sites (exported playterm sites), by site id.
+    secrets: HashMap<String, Zeroizing<String>>,
 }
 
 /// Same protocol, host, port and user.
@@ -89,10 +160,49 @@ impl ImportDialog {
             ImportSource::Putty => None,
             ImportSource::Xshell => xshell::default_dir(),
             ImportSource::SecureCrt => securecrt::default_dir(),
+            ImportSource::Playterm => None,
         };
-        let mut dialog = Self { source, dir, items: Vec::new(), folder: source.name().to_owned(), truncated: false, error: None };
+        let mut dialog = Self {
+            source,
+            dir,
+            items: Vec::new(),
+            folder: source.name().to_owned(),
+            truncated: false,
+            error: None,
+            secrets: HashMap::new(),
+        };
         dialog.load(store);
         dialog
+    }
+
+    /// The sites of an exported playterm list, each with a new id (the list may come back to
+    /// the computer it was exported from), keeping their folders.
+    pub fn exported(store: &ProfileStore, sites: Vec<playterm_config::ExportedSite>) -> std::io::Result<Self> {
+        let mut items = Vec::new();
+        let mut secrets = HashMap::new();
+        for site in sites {
+            let mut profile = SessionProfile { id: String::new(), ..site.profile };
+            profile.ensure_id()?;
+            match site.password {
+                Some(password) if profile.save_password => {
+                    secrets.insert(profile.id.clone(), password);
+                }
+                _ => profile.save_password = false,
+            }
+            let sensitive = sensitive_settings(&profile);
+            let notes = if sensitive.is_empty() {
+                Vec::new()
+            } else {
+                vec![tr!("import_dialog.check_these_settings_before_importing", settings = sensitive.join(", "))]
+            };
+            let session =
+                ImportedSession { name: profile.display_name(), folder: std::mem::take(&mut profile.folder), profile: Ok(profile), notes };
+            items.push(Item { session, checked: false, duplicate: false, sensitive: !sensitive.is_empty() });
+        }
+        let mut dialog =
+            Self { source: ImportSource::Playterm, dir: None, items, folder: String::new(), truncated: false, error: None, secrets };
+        dialog.mark_duplicates(store, true);
+        Ok(dialog)
     }
 
     /// (Re)reads the sessions and marks those that already exist.
@@ -101,6 +211,7 @@ impl ImportDialog {
             (ImportSource::Putty, _) => putty::load(&putty::sessions_key()).map(|s| (s, false)),
             (ImportSource::Xshell, Some(dir)) => xshell::load(dir).map(|l| (l.sessions, l.truncated)),
             (ImportSource::SecureCrt, Some(dir)) => securecrt::load(dir).map(|l| (l.sessions, l.truncated)),
+            (ImportSource::Playterm, _) => return,
             (_, None) => Ok((Vec::new(), false)),
         };
         let (sessions, truncated, error) = match loaded {
@@ -109,7 +220,7 @@ impl ImportDialog {
         };
         self.error = error;
         self.truncated = truncated;
-        self.items = sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false }).collect();
+        self.items = sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false, sensitive: false }).collect();
         self.mark_duplicates(store, true);
     }
 
@@ -122,7 +233,7 @@ impl ImportDialog {
             let folder = target_folder(&self.folder, &item.session.folder);
             let duplicate = store.profiles().iter().any(|e| same_address(e, p) || (e.name == p.name && e.folder == folder));
             if reset || duplicate != item.duplicate {
-                item.checked = !duplicate;
+                item.checked = !duplicate && !item.sensitive;
             }
             item.duplicate = duplicate;
         }
@@ -130,7 +241,7 @@ impl ImportDialog {
 
     /// The sessions folder line (Xshell, SecureCRT), with a button to read another folder.
     fn location(&mut self, ui: &mut egui::Ui, store: &ProfileStore) {
-        if self.source == ImportSource::Putty {
+        if matches!(self.source, ImportSource::Putty | ImportSource::Playterm) {
             return;
         }
         let source = self.source.name();
@@ -182,6 +293,7 @@ impl ImportDialog {
                         ImportSource::Putty => t!("import_dialog.passwords_are_not_imported_because_putty_does_not"),
                         ImportSource::Xshell => t!("import_dialog.xshell_s_subfolders_are_kept_inside_the_folder"),
                         ImportSource::SecureCrt => t!("import_dialog.securecrt_s_subfolders_are_kept_inside_the_folder"),
+                        ImportSource::Playterm => t!("import_dialog.the_sites_keep_their_folders_inside_the_folder"),
                     });
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -217,7 +329,7 @@ impl ImportDialog {
                 {
                     if main.clicked() {
                         let folder = normalize_folder(&self.folder);
-                        let profiles = self
+                        let profiles: Vec<SessionProfile> = self
                             .items
                             .iter()
                             .filter(|i| i.checked)
@@ -226,7 +338,8 @@ impl ImportDialog {
                                 i.session.profile.clone().ok().map(|p| SessionProfile { folder, ..p })
                             })
                             .collect();
-                        result = ImportResult::Import { source: self.source, folder, profiles };
+                        let secrets = profiles.iter().filter_map(|p| Some((p.id.clone(), self.secrets.get(&p.id)?.clone()))).collect();
+                        result = ImportResult::Import { source: self.source, folder, profiles, secrets };
                     }
                     if cancel.clicked() {
                         result = ImportResult::Cancel;
@@ -308,10 +421,11 @@ mod tests {
         ImportDialog {
             source: ImportSource::Xshell,
             dir: None,
-            items: sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false }).collect(),
+            items: sessions.into_iter().map(|session| Item { session, checked: false, duplicate: false, sensitive: false }).collect(),
             folder: folder.into(),
             truncated: false,
             error: None,
+            secrets: HashMap::new(),
         }
     }
 
@@ -347,5 +461,30 @@ mod tests {
         d.folder = "New".into();
         d.mark_duplicates(&store, false);
         assert_eq!(state(&d)[0], (false, true));
+    }
+
+    #[test]
+    fn exported_sites_with_far_reaching_settings_start_unchecked_and_say_why() {
+        let store = ProfileStore::empty("unused.toml");
+        let plain = site("plain", "web01", "");
+        let mut forwarding = site("forwarding", "db01", "");
+        forwarding.agent_forwarding = true;
+        forwarding.jump_host = "evil.example".into();
+        let mut desktop = site("desktop", "desk01", "");
+        desktop.rdp.drive_folder = "/Users/me".into();
+        let mut proxied = site("proxied", "router", "");
+        proxied.proxy = "socks5://proxy.invalid:1080".into();
+        let sites = [plain, forwarding, desktop, proxied]
+            .into_iter()
+            .map(|profile| playterm_config::ExportedSite { profile, password: None })
+            .collect();
+        let d = ImportDialog::exported(&store, sites).unwrap();
+        assert!(d.items[0].checked && d.items[0].session.notes.is_empty());
+        assert!(!d.items[1].checked, "the user checks it after seeing the settings");
+        let note = &d.items[1].session.notes[0];
+        assert!(note.contains(t!("profile_form.ssh_agent_forwarding_a")) && note.contains("evil.example"), "{note}");
+        for (item, shown) in [(&d.items[2], "/Users/me"), (&d.items[3], "proxy.invalid")] {
+            assert!(!item.checked && item.session.notes[0].contains(shown), "{:?}", item.session.notes);
+        }
     }
 }

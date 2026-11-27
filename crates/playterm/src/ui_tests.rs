@@ -885,3 +885,136 @@ fn quick_connect_telnet_tls_refuses_plaintext_device() {
     assert!(!harness.state_mut().test_sessions()[0].screen_contains("plaintext login prompt"));
     server.join().unwrap();
 }
+
+/// A saved site whose password is in the vault, in `dir` (the vault key in a file there).
+fn saved_site_with_password(dir: &Path, password: &str) -> String {
+    let mut store = playterm_config::ProfileStore::load(dir.join("sessions.toml")).unwrap();
+    let site = playterm_config::SessionProfile {
+        name: "운영 DB".into(),
+        folder: "운영".into(),
+        host: "db01.example".into(),
+        username: "ops".into(),
+        save_password: true,
+        ..playterm_config::SessionProfile::new().unwrap()
+    };
+    store.upsert(site.clone()).unwrap();
+    let mut vault = playterm_config::Vault::new(dir.join("vault.toml"));
+    vault.create().unwrap();
+    vault.set(&site.id, &crate::app::vault_target(&site), password).unwrap();
+    site.id
+}
+
+/// Types `password` into every field of the open master password dialog.
+fn type_master_password(harness: &mut App, password: &str) {
+    let fields: Vec<Node<'_>> = harness.get_by_role(Role::Dialog).query_all_by_role(Role::PasswordInput).collect();
+    for field in &fields {
+        type_into(harness, field, password);
+    }
+    harness.run_steps(2);
+}
+
+#[test]
+fn saved_passwords_open_without_a_master_password_and_travel_in_an_export() {
+    let from = tempfile::tempdir().unwrap();
+    let id = saved_site_with_password(from.path(), "db-secret");
+    let mut harness = app(from.path());
+    // Opened at start with the key kept on this computer: nothing is asked.
+    assert!(!harness.state().test_modal_open());
+    assert_eq!(harness.state().test_vault().get(&id), Some("db-secret"));
+
+    let file = from.path().join("exported.ptsites");
+    let _picker = {
+        let file = file.clone();
+        crate::picker::fake::answer_with(move |_| Some(vec![file.clone()]))
+    };
+    let ctx = harness.ctx.clone();
+    harness.state_mut().test_run(&ctx, Command::ExportSites);
+    harness.run_steps(3);
+    // The export asks for a master password, typed twice.
+    type_master_password(&mut harness, "export-master");
+    click(&mut harness, "내보내기");
+    run_until(&mut harness, "the export", |h| !h.state().test_modal_open());
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(!text.contains("db-secret") && !text.contains("db01.example"), "encrypted");
+    drop(harness);
+
+    // On another computer: the import asks for that master password.
+    let to = tempfile::tempdir().unwrap();
+    let mut harness = app(to.path());
+    let ctx = harness.ctx.clone();
+    harness.state_mut().test_run(&ctx, Command::ImportSites);
+    harness.run_steps(3);
+    type_master_password(&mut harness, "wrong-master");
+    click(&mut harness, "가져오기");
+    run_until(&mut harness, "the wrong password", |h| has_label_text(h, "마스터 비밀번호가 틀렸습니다"));
+    type_master_password(&mut harness, "export-master");
+    click(&mut harness, "가져오기");
+    run_until(&mut harness, "the sites to pick", |h| has_button(h, "가져오기 (1)"));
+    click(&mut harness, "가져오기 (1)");
+    let store = harness.state().test_store();
+    assert_eq!(store.profiles().len(), 1);
+    let site = store.profiles()[0].clone();
+    assert_eq!((site.name.as_str(), site.folder.as_str(), site.save_password), ("운영 DB", "운영", true));
+    assert_ne!(site.id, id, "a new id");
+    // The password came along, into this computer's saved passwords: connecting does not ask.
+    assert_eq!(harness.state().test_vault().get(&site.id), Some("db-secret"));
+    assert!(!harness.state().test_modal_open());
+}
+
+/// The toolbar's address box: an address typed there connects on Enter, and the keys typed
+/// go to the box, not to the terminal's prompt.
+#[test]
+fn the_toolbar_address_box_connects() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = fake_device();
+    let mut harness = app(dir.path());
+    let field = harness.get_by_role_and_label(Role::TextInput, "주소로 연결");
+    type_into(&harness, &field, &format!("telnet://127.0.0.1:{port}"));
+    harness.run_steps(2);
+    assert!(!harness.state_mut().test_sessions()[0].screen_contains("telnet://"), "not typed at the prompt");
+    press(&mut harness, egui::Key::Enter);
+    run_until(&mut harness, "the device's prompt", |h| {
+        h.state_mut().test_sessions().iter_mut().any(|s| s.state == SessionState::Connected && s.screen_contains("router#"))
+    });
+
+    // A host without a user name: the quick-connect form, filled in, asks for the rest.
+    let field = harness.get_by_role_and_label(Role::TextInput, "주소로 연결");
+    type_into(&harness, &field, "192.0.2.10:2222");
+    harness.run_steps(2);
+    press(&mut harness, egui::Key::Enter);
+    // The Enter that ended the typing went to the box only, not to the connected device too.
+    for _ in 0..20 {
+        harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(harness.state_mut().test_sessions().iter_mut().all(|s| !s.screen_contains("out:")), "Enter leaked into the terminal");
+    let dialog = harness.get_by_role(Role::Dialog);
+    let values: Vec<String> =
+        dialog.query_all_by_role(Role::TextInput).filter_map(|n| n.accesskit_node().value().map(|v| v.to_string())).collect();
+    assert!(values.iter().any(|v| v == "192.0.2.10"), "{values:?}");
+    assert!(values.iter().any(|v| v == "2222"), "{values:?}");
+}
+
+/// A saved site named like an address does not stand in for that address in the toolbar box.
+#[test]
+fn an_address_in_the_toolbar_box_is_not_taken_for_a_site_named_like_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = playterm_config::ProfileStore::load(dir.path().join("sessions.toml")).unwrap();
+    let decoy = playterm_config::SessionProfile {
+        name: "example.com".into(),
+        host: "elsewhere.invalid".into(),
+        username: "me".into(),
+        ..playterm_config::SessionProfile::new().unwrap()
+    };
+    store.upsert(decoy).unwrap();
+    let mut harness = app(dir.path());
+    let field = harness.get_by_role_and_label(Role::TextInput, "주소로 연결");
+    type_into(&harness, &field, "example.com");
+    harness.run_steps(2);
+    press(&mut harness, egui::Key::Enter);
+    let dialog = harness.get_by_role(Role::Dialog);
+    let values: Vec<String> =
+        dialog.query_all_by_role(Role::TextInput).filter_map(|n| n.accesskit_node().value().map(|v| v.to_string())).collect();
+    assert!(values.iter().any(|v| v == "example.com"), "the typed host, not the site's: {values:?}");
+    assert_eq!(harness.state_mut().test_sessions().len(), 1, "no connection to the site");
+}

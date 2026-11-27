@@ -14,6 +14,8 @@ use crate::sidebar::VaultState;
 #[derive(Clone)]
 pub enum Command {
     QuickConnect,
+    /// Connect to an address typed into the toolbar (`user@host`, a URL, a host, a site's name).
+    ConnectAddress(String),
     /// Connect this saved site (start screen).
     ConnectSite(String),
     NewTab,
@@ -24,6 +26,10 @@ pub enum Command {
     ImportPutty,
     ImportXshell,
     ImportSecureCrt,
+    /// Import a site list exported by playterm.
+    ImportSites,
+    /// Export the site list, with the saved passwords, to a file.
+    ExportSites,
     Quit,
 
     Copy,
@@ -50,8 +56,7 @@ pub enum Command {
     StopLog(usize),
     RevealLog(usize),
     OpenLogFolder,
-    LockVault,
-    SetUpVault,
+    /// Open the saved passwords of an older version (once, with their master password).
     UnlockVault,
 
     Activate(usize),
@@ -242,7 +247,10 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 item(ui, out, t!("menu.putty_sessions"), "", true, Command::ImportPutty);
                 item(ui, out, t!("menu.xshell_sessions"), "", true, Command::ImportXshell);
                 item(ui, out, t!("menu.securecrt_sessions"), "", true, Command::ImportSecureCrt);
+                ui.separator();
+                item(ui, out, t!("menu.exported_playterm_sites"), "", true, Command::ImportSites);
             });
+            item(ui, out, t!("menu.export_sites"), "", true, Command::ExportSites);
             ui.separator();
             item(ui, out, t!("menu.exit"), keys("Alt+F4", "⌘Q"), true, Command::Quit);
         });
@@ -291,11 +299,9 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>) -> Option<Command> {
                 item(ui, out, t!("menu.stop_the_running_macro"), "", running, Command::StopMacro);
                 item(ui, out, t!("common.manage_macros"), "", true, Command::Macros);
             });
-            ui.separator();
-            match st.vault {
-                VaultState::Missing => item(ui, out, t!("menu.set_up_saved_passwords"), "", true, Command::SetUpVault),
-                VaultState::Locked => item(ui, out, t!("menu.unlock_saved_passwords"), "", true, Command::UnlockVault),
-                VaultState::Unlocked => item(ui, out, t!("menu.lock_saved_passwords"), "", true, Command::LockVault),
+            if st.vault == VaultState::Legacy {
+                ui.separator();
+                item(ui, out, t!("menu.unlock_saved_passwords"), "", true, Command::UnlockVault);
             }
             if crate::power::SUPPORTED {
                 ui.separator();

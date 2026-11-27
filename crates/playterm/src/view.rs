@@ -774,6 +774,9 @@ fn start_card(ui: &mut egui::Ui, style: &ViewStyle, command: &mut Option<crate::
         if ui.add(crate::icon::button(crate::icon::IMPORT, t!("common.import_securecrt"))).clicked() {
             *command = Some(Command::ImportSecureCrt);
         }
+        if ui.add(crate::icon::button(crate::icon::IMPORT, t!("common.import_exported_sites"))).clicked() {
+            *command = Some(Command::ImportSites);
+        }
     });
     ui.add_space(8.0);
     ui.weak(t!("view.to_use_commands_just_type_ssh_telnet_open"));

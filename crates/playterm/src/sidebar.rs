@@ -28,47 +28,23 @@ pub enum SidebarAction {
     ImportPutty,
     ImportXshell,
     ImportSecureCrt,
+    /// Import a site list exported by playterm.
+    ImportSites,
     /// Hide the list.
     Hide,
     Duplicate(String),
     Delete(String),
-    LockVault,
+    /// Open the saved passwords of an older version (once, with their master password).
     UnlockVault,
-    /// Set the master password (no vault yet).
-    SetUpVault,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// The saved passwords: open with the key in the OS keychain, without asking, except those
+/// of an older version, which ask for their master password once.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VaultState {
-    Missing,
-    Locked,
-    Unlocked,
-}
-
-/// The saved-passwords line of the sidebar: what the vault's state means in plain words, and
-/// the one thing to do about it.
-struct VaultLine {
-    text: &'static str,
-    icon: icon::MaterialIcon,
-    button: &'static str,
-    action: SidebarAction,
-}
-
-impl VaultLine {
-    fn explain() -> &'static str {
-        t!("sidebar.site_passwords_are_stored_on_this_pc_encrypted")
-    }
-
-    fn of(vault: VaultState) -> Self {
-        let (text, icon, button, action) = match vault {
-            VaultState::Missing => {
-                (t!("sidebar.saved_passwords_not_set_up"), icon::VAULT_SET_UP, t!("sidebar.set_up"), SidebarAction::SetUpVault)
-            }
-            VaultState::Locked => (t!("sidebar.saved_passwords_locked"), icon::UNLOCK, t!("common.unlock"), SidebarAction::UnlockVault),
-            VaultState::Unlocked => (t!("sidebar.saved_passwords_unlocked"), icon::LOCK, t!("sidebar.lock"), SidebarAction::LockVault),
-        };
-        Self { text, icon, button, action }
-    }
+    Ready,
+    /// Saved by an older version: they open with the master password once.
+    Legacy,
 }
 
 /// Whether a site's name, host, user or folder contains `filter` (ignoring case).
@@ -244,18 +220,22 @@ impl Sidebar {
         });
         ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(t!("common.search")).desired_width(f32::INFINITY));
 
-        // The button first (from the right), so a narrow list shortens the text, not the button.
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let line = VaultLine::of(vault);
-                if ui.add(icon::button(line.icon, line.button).small()).on_hover_text(VaultLine::explain()).clicked() {
-                    action = Some(line.action);
-                }
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.add(egui::Label::new(RichText::new(line.text).small()).truncate()).on_hover_text(VaultLine::explain());
+        // Passwords saved by an older version wait for their master password, once. The button
+        // first (from the right), so a narrow list shortens the text, not the button.
+        if vault == VaultState::Legacy {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let explain = t!("sidebar.passwords_saved_by_an_older_version_open_with");
+                    if ui.add(icon::button(icon::UNLOCK, t!("common.unlock")).small()).on_hover_text(explain).clicked() {
+                        action = Some(SidebarAction::UnlockVault);
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(RichText::new(t!("sidebar.saved_passwords_locked")).small()).truncate())
+                            .on_hover_text(explain);
+                    });
                 });
             });
-        });
+        }
         // Sites deleted elsewhere are no longer selected.
         self.chosen.retain(|id| store.get(id).is_some());
         // Under the list, so the list does not move while sites are being picked.
@@ -306,6 +286,9 @@ impl Sidebar {
                 }
                 if ui.add(icon::button(icon::IMPORT, t!("common.import_securecrt"))).clicked() {
                     action = Some(SidebarAction::ImportSecureCrt);
+                }
+                if ui.add(icon::button(icon::IMPORT, t!("common.import_exported_sites"))).clicked() {
+                    action = Some(SidebarAction::ImportSites);
                 }
                 return;
             }
@@ -472,21 +455,5 @@ mod tests {
         p.protocol = Protocol::Telnet;
         p.port = 23;
         assert_eq!(summary(&p), "Telnet [::1]:23");
-    }
-}
-
-#[cfg(test)]
-mod vault_line_tests {
-    use super::*;
-
-    #[test]
-    fn every_vault_state_offers_its_action() {
-        assert!(matches!(VaultLine::of(VaultState::Missing).action, SidebarAction::SetUpVault));
-        assert!(matches!(VaultLine::of(VaultState::Locked).action, SidebarAction::UnlockVault));
-        assert!(matches!(VaultLine::of(VaultState::Unlocked).action, SidebarAction::LockVault));
-        // No jargon: the words say what is stored.
-        for state in [VaultState::Missing, VaultState::Locked, VaultState::Unlocked] {
-            assert!(!VaultLine::of(state).text.contains("볼트"));
-        }
     }
 }

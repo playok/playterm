@@ -45,8 +45,9 @@ impl eframe::App for PlaytermApp {
         }
         self.zmodem_folders(&ctx);
         // "Save password" from a login dialog, once that login has succeeded. Waits while another
-        // dialog is open if the vault still has to be unlocked (that needs a dialog of its own).
-        if (self.modal.is_none() || self.vault.is_unlocked())
+        // dialog is open if the saved passwords of an older version still have to be unlocked
+        // (that needs a dialog of its own).
+        if (self.modal.is_none() || self.vault.is_unlocked() || self.vault_state() == VaultState::Ready)
             && let Some((id, password)) = self.sessions.iter_mut().find_map(Session::take_password_to_save)
         {
             self.save_site_password(id, password);

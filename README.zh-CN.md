@@ -14,7 +14,9 @@ playterm 是使用 Rust（egui、alacritty_terminal、russh、IronRDP）开发�
 - Ctrl/Shift+单击选择多个站点并一起连接，将站点和布局保存为模板。
 - SSH 密钥、证书和外部代理认证，跳板机，`-L` / `-R` / `-D` 端口转发及 X11 转发。
 - SFTP 面板、ZMODEM 收发（`sz` / `rz`）、自动登录、宏、同时输入和会话日志。
-- 使用主密码加密的密码库（Argon2id + XChaCha20-Poly1305）。
+- 密码库：密钥保存在系统钥匙串中（macOS 钥匙串、Windows 凭据管理器、Linux Secret Service；XChaCha20-Poly1305），连接时不再询问主密码。旧版本的密码库只在第一次询问一次主密码，随后完成转换。
+- 站点列表导出/导入（文件 → 导出站点…，文件 → 导入 → 导出的 playterm 站点…）：将站点和已保存的密码导出为一个 `.ptsites` 文件，用导出时设置的主密码加密（Argon2id + XChaCha20-Poly1305）。
+- 工具栏地址栏：`user@host`、`ssh://…`、`telnet://…` 直接连接；没有用户名的主机会打开已填好的快速连接。
 - 导入 PuTTY、Xshell 和 SecureCRT 会话；支持文件夹、标签颜色和连接模板。
 - 十种界面语言、深色与浅色主题、字体选择、回滚搜索和多语言字符编码。
 
@@ -81,7 +83,7 @@ Windows 默认配置目录为 `%APPDATA%\playterm\config\`。可通过 `PLAYTERM
 | --- | --- |
 | `sessions.toml` | 站点和模板，不含密码 |
 | `settings.toml` | 语言、显示、按键、宏和更新设置等 |
-| `vault.toml` | 使用主密码加密的已保存密码 |
+| `vault.toml` | 使用保存在系统钥匙串中的随机密钥加密的已保存密码 |
 | `known_hosts` | 已信任的 SSH 主机密钥 |
 | `known_rdp_hosts` | 已信任的 RDP 证书指纹 |
 

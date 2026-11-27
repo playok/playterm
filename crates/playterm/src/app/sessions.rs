@@ -192,7 +192,34 @@ impl PlaytermApp {
         }
     }
 
-    /// Connects a saved profile, unlocking the vault first if its password is stored there.
+    /// Connects to an address typed into the toolbar: a complete address at once, a bare host
+    /// through the quick-connect form (for the user name), or a saved site by its exact name.
+    /// Anything shaped like an address (a dot, colon, `@` or `/` in it) is taken as one: a site
+    /// named `10.0.0.1` or `bank.example` that points elsewhere must not stand in for it.
+    pub(super) fn connect_address(&mut self, address: &str) {
+        let address = address.trim();
+        if address.is_empty() {
+            return;
+        }
+        let address_like = address.contains(['.', ':', '@', '/']);
+        let site = (!address_like)
+            .then(|| self.store.profiles().iter().find(|p| p.display_name().eq_ignore_ascii_case(address)).map(|p| p.id.clone()))
+            .flatten();
+        if let Some(id) = site {
+            return self.connect_saved(&id);
+        }
+        match crate::profile_form::parse_address(address) {
+            Ok(crate::profile_form::AddressTarget::Connect(profile)) => self.open_session(&profile, None, None),
+            Ok(crate::profile_form::AddressTarget::Ask(profile)) => {
+                self.modal = Some(Modal::QuickConnect(Box::new(QuickConnect::with(profile))));
+                self.dialog_target = None;
+            }
+            Err(e) => self.status = Some(e),
+        }
+    }
+
+    /// Connects a saved profile with its saved password (opening the saved passwords of an older
+    /// version first, with their master password, once).
     pub(super) fn connect_saved(&mut self, id: &str) {
         let Some(profile) = self.store.get(id).cloned() else { return };
         // For the start screen's "recent" list.
@@ -200,7 +227,7 @@ impl PlaytermApp {
         self.settings_unsaved = Some(Instant::now());
         // SSH logs in with it; Telnet and serial sites type it at the prompt (automatic login).
         let wants_secret = profile.save_password;
-        if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
+        if wants_secret && self.open_vault(false) == Gate::Master {
             let dialog = VaultDialog::new(VaultMode::Unlock, tr!("app.sessions.uses_the_saved_password_of", arg0 = profile.display_name()));
             let target = self.connect_target.take();
             self.modal = Some(Modal::Vault(dialog, Pending::Connect(id.to_owned(), target)));
@@ -245,19 +272,11 @@ impl PlaytermApp {
         self.vault.set(id, &target, password)
     }
 
-    /// Locks the vault and takes the passwords it gave out back from the open tabs, so a
-    /// locked vault really means no saved password is at hand.
-    pub(super) fn lock_vault(&mut self) {
-        self.vault.lock();
-        for session in &mut self.sessions {
-            session.forget_password();
-        }
-    }
-
-    /// Reconnects tab `i`, unlocking the vault first if its site's password was taken back.
+    /// Reconnects tab `i`, opening the saved passwords first if its site's password is not at
+    /// hand.
     pub(super) fn reconnect(&mut self, i: usize) {
-        let session = &self.sessions[i];
-        if session.lacks_saved_password() && !self.vault.is_unlocked() && self.vault.exists() {
+        if self.sessions[i].lacks_saved_password() && self.open_vault(false) == Gate::Master {
+            let session = &self.sessions[i];
             let name = session.profile().map(|p| p.display_name()).unwrap_or_default();
             let reason = tr!("app.sessions.uses_the_saved_password_of_2", name = name);
             self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, reason), Pending::Reconnect(session.id)));
@@ -279,9 +298,9 @@ impl PlaytermApp {
         self.sessions[i].reconnect(&self.net, waker);
     }
 
-    /// Forgets the password of `id` now, or on the next unlock if the vault is locked.
+    /// Forgets the password of `id` now, or once the saved passwords open.
     pub(super) fn forget_secret(&mut self, id: &str) {
-        if self.vault.is_unlocked() {
+        if self.open_vault(false) == Gate::Open {
             let r = self.vault.remove(id);
             self.report(t!("common.could_not_update_the_saved_passwords"), r);
         } else {
@@ -296,7 +315,7 @@ impl PlaytermApp {
             return;
         }
         let wants_secret = ids.iter().filter_map(|id| self.store.get(id)).any(|p| p.save_password);
-        if wants_secret && !self.vault.is_unlocked() && self.vault.exists() {
+        if wants_secret && self.open_vault(false) == Gate::Master {
             let reason = tr!("app.sessions.uses_the_saved_passwords_of_sites", arg0 = ids.len());
             self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, reason), Pending::ConnectMany(ids, layout)));
             return;

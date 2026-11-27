@@ -1,18 +1,21 @@
-//! Password vault: secrets encrypted with a key derived from a master password.
+//! Password vault: saved site passwords, encrypted with a random key kept in the OS keychain
+//! (see [`crate::keystore`]), so connecting never asks for a master password.
 //!
-//! - KDF: Argon2id (parameters and salt stored in the file)
 //! - Cipher: XChaCha20-Poly1305 with a fresh random nonce on every save
-//! - The KDF parameters and salt are bound as associated data, so tampering with the
-//!   header makes decryption fail instead of silently weakening the key.
+//! - The file header (format, the vault's id) is bound as associated data.
 //! - Each secret records the target it was saved for (`ssh://user@host:port`), inside the
 //!   encrypted part: the site list is plain text, and a password must not follow a site that
 //!   was pointed somewhere else.
 //! - Every change re-reads the file first and applies just that change, so two playterm
 //!   windows do not undo each other's saved passwords.
+//! - Vaults of older versions are encrypted with a key derived from a master password
+//!   (Argon2id). [`Vault::migrate`] opens one with it once and rewrites it with a keychain key.
+//! - A master password now only protects exported site lists: [`seal`] and [`unseal`].
 
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -25,11 +28,17 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::fsutil::write_private_atomic;
+use crate::keystore::{FileKeyStore, KeyStore};
 
-const FORMAT_VERSION: u32 = 1;
+/// Vaults encrypted with a master password (older versions).
+const MASTER_VERSION: u32 = 1;
 const KDF_NAME: &str = "argon2id";
+/// Vaults encrypted with a key from the key store.
+const LOCAL_VERSION: u32 = 2;
+const LOCAL_KDF: &str = "keystore";
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
+const KEY_LEN: usize = 32;
 /// Refuse absurd KDF costs from a (possibly tampered) file: 1 GiB, 16 passes.
 const MAX_M_COST_KIB: u32 = 1024 * 1024;
 const MAX_T_COST: u32 = 16;
@@ -64,6 +73,8 @@ pub enum VaultError {
     AlreadyExists,
     Missing,
     EmptyPassword,
+    /// The key of the vault is not in the keychain (or does not open it).
+    KeyMissing,
     Format(String),
     /// The file was replaced (another window reset and recreated the vault) since unlocking.
     Replaced,
@@ -79,6 +90,7 @@ impl std::fmt::Display for VaultError {
             VaultError::AlreadyExists => f.write_str(t!("vault.the_password_vault_already_exists")),
             VaultError::Missing => f.write_str(t!("vault.the_password_vault_file_does_not_exist")),
             VaultError::EmptyPassword => f.write_str(t!("vault.the_master_password_cannot_be_empty")),
+            VaultError::KeyMissing => f.write_str(t!("vault.the_key_of_the_saved_passwords_is_not")),
             VaultError::Replaced => f.write_str(t!("vault.the_password_vault_was_recreated_in_another_window")),
             VaultError::Format(detail) => f.write_str(&tr!("vault.invalid_password_vault_file", detail = detail)),
             // Transparent, like the inner error.
@@ -106,9 +118,13 @@ impl From<io::Error> for VaultError {
 struct VaultFile {
     version: u32,
     kdf: String,
+    #[serde(default)]
     m_cost: u32,
+    #[serde(default)]
     t_cost: u32,
+    #[serde(default)]
     p_cost: u32,
+    /// The Argon2 salt; for a key-store vault, its id.
     salt: String,
     nonce: String,
     ciphertext: String,
@@ -129,7 +145,7 @@ struct Contents {
     targets: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Kdf {
     m_cost: u32,
     t_cost: u32,
@@ -139,30 +155,80 @@ struct Kdf {
 impl Kdf {
     const DEFAULT: Kdf = Kdf { m_cost: 64 * 1024, t_cost: 3, p_cost: 1 };
 
-    fn upgraded(self) -> Self {
-        Self { m_cost: self.m_cost.max(Self::DEFAULT.m_cost), t_cost: self.t_cost.max(Self::DEFAULT.t_cost), p_cost: self.p_cost }
+    /// The costs read from a file, unless absurd.
+    fn checked(m_cost: u32, t_cost: u32, p_cost: u32) -> Result<Self, VaultError> {
+        if m_cost > MAX_M_COST_KIB || t_cost > MAX_T_COST {
+            return Err(VaultError::Format(t!("vault.the_kdf_cost_is_abnormally_high").into()));
+        }
+        Ok(Kdf { m_cost, t_cost, p_cost })
     }
 
-    fn derive(&self, master: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, VaultError> {
-        let params = Params::new(self.m_cost, self.t_cost, self.p_cost, Some(32))
+    fn derive(&self, master: &str, salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>, VaultError> {
+        let params = Params::new(self.m_cost, self.t_cost, self.p_cost, Some(KEY_LEN))
             .map_err(|e| VaultError::Format(tr!("vault.kdf_parameters", e = e)))?;
-        let mut key = Zeroizing::new([0u8; 32]);
+        let mut key = Zeroizing::new([0u8; KEY_LEN]);
         Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
             .hash_password_into(master.as_bytes(), salt, key.as_mut())
             .map_err(|e| VaultError::Format(format!("KDF: {e}")))?;
         Ok(key)
     }
+}
+
+/// How a vault file's key is had.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Protection {
+    /// Derived from a master password (older versions).
+    Master(Kdf),
+    /// Kept in the key store.
+    Local,
+}
+
+impl Protection {
+    fn of(file: &VaultFile) -> Result<Self, VaultError> {
+        match (file.version, file.kdf.as_str()) {
+            (MASTER_VERSION, KDF_NAME) => Ok(Protection::Master(Kdf::checked(file.m_cost, file.t_cost, file.p_cost)?)),
+            (LOCAL_VERSION, LOCAL_KDF) => Ok(Protection::Local),
+            (version, kdf) => Err(VaultError::Format(tr!("vault.unsupported_version_v", arg0 = version, arg1 = kdf))),
+        }
+    }
 
     fn aad(&self, salt: &[u8]) -> Vec<u8> {
-        format!("playterm-vault:v{FORMAT_VERSION}:{KDF_NAME}:{}:{}:{}:{}", self.m_cost, self.t_cost, self.p_cost, B64.encode(salt))
-            .into_bytes()
+        match self {
+            Protection::Master(k) => {
+                format!("playterm-vault:v{MASTER_VERSION}:{KDF_NAME}:{}:{}:{}:{}", k.m_cost, k.t_cost, k.p_cost, B64.encode(salt))
+            }
+            Protection::Local => format!("playterm-vault:v{LOCAL_VERSION}:{LOCAL_KDF}:{}", B64.encode(salt)),
+        }
+        .into_bytes()
     }
+}
+
+/// What kind of vault file there is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VaultKind {
+    /// No vault yet: nothing saved.
+    Missing,
+    /// Encrypted with a master password by an older version: [`Vault::migrate`] it once.
+    Master,
+    /// Opens with the key in the key store ([`Vault::open`]).
+    Local,
+}
+
+/// The key store id of the vault with this salt.
+fn key_id(salt: &[u8]) -> String {
+    salt.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn random<const N: usize>() -> Result<[u8; N], VaultError> {
+    let mut bytes = [0u8; N];
+    getrandom::fill(&mut bytes).map_err(|e| io::Error::other(e.to_string()))?;
+    Ok(bytes)
 }
 
 #[derive(Clone)]
 struct Unlocked {
-    key: Zeroizing<[u8; 32]>,
-    kdf: Kdf,
+    key: Zeroizing<[u8; KEY_LEN]>,
+    protection: Protection,
     salt: [u8; SALT_LEN],
     secrets: BTreeMap<String, Zeroizing<String>>,
     targets: BTreeMap<String, String>,
@@ -179,12 +245,11 @@ impl Unlocked {
         };
         let file: VaultFile = toml::from_str(&text).map_err(|e| VaultError::Format(e.to_string()))?;
         let salt: [u8; SALT_LEN] = decode_fixed(&file.salt, "salt")?;
-        let same_kdf = (file.m_cost, file.t_cost, file.p_cost) == (self.kdf.m_cost, self.kdf.t_cost, self.kdf.p_cost);
-        if salt != self.salt || !same_kdf {
+        // Migrated or recreated in another window since.
+        if salt != self.salt || Protection::of(&file).ok() != Some(self.protection) {
             return Err(VaultError::Replaced);
         }
-        let contents = decrypt(&self.key, self.kdf, &salt, &file).map_err(|_| VaultError::Replaced)?;
-        Ok(contents)
+        decrypt(&self.key, self.protection, &salt, &file).map_err(|_| VaultError::Replaced)
     }
 }
 
@@ -192,11 +257,11 @@ impl Unlocked {
 type Decrypted = (BTreeMap<String, Zeroizing<String>>, BTreeMap<String, String>);
 
 /// Decrypts the contents of `file` (whose salt is `salt`) with `key`.
-fn decrypt(key: &[u8; 32], kdf: Kdf, salt: &[u8], file: &VaultFile) -> Result<Decrypted, VaultError> {
+fn decrypt(key: &[u8; KEY_LEN], protection: Protection, salt: &[u8], file: &VaultFile) -> Result<Decrypted, VaultError> {
     let nonce: [u8; NONCE_LEN] = decode_fixed(&file.nonce, "nonce")?;
     let ciphertext = B64.decode(&file.ciphertext).map_err(|e| VaultError::Format(e.to_string()))?;
     let cipher = XChaCha20Poly1305::new(&Key::from(*key));
-    let aad = kdf.aad(salt);
+    let aad = protection.aad(salt);
     let plaintext = Zeroizing::new(
         cipher.decrypt(&XNonce::from(nonce), Payload { msg: &ciphertext, aad: &aad }).map_err(|_| VaultError::WrongPassword)?,
     );
@@ -206,15 +271,30 @@ fn decrypt(key: &[u8; 32], kdf: Kdf, salt: &[u8], file: &VaultFile) -> Result<De
     Ok((secrets, contents.targets))
 }
 
-/// The `vault.toml` file. Starts locked; secrets are only available after [`Vault::unlock`].
+/// The `vault.toml` file. Starts closed; secrets are only available after [`Vault::open`],
+/// [`Vault::create`] or [`Vault::migrate`].
 pub struct Vault {
     path: PathBuf,
+    keys: Arc<dyn KeyStore>,
     unlocked: Option<Unlocked>,
 }
 
 impl Vault {
+    /// A vault whose key is kept in a private file next to it (tests, and the fallback).
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into(), unlocked: None }
+        let path = path.into();
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        Self::with_keys(path, Arc::new(FileKeyStore::new(dir)))
+    }
+
+    /// A vault whose key is kept in `keys` (the OS keychain in the app).
+    pub fn with_keys(path: impl Into<PathBuf>, keys: Arc<dyn KeyStore>) -> Self {
+        Self { path: path.into(), keys, unlocked: None }
+    }
+
+    /// The same file and key store, closed (for a computation on another thread).
+    pub fn reopen(&self) -> Self {
+        Self { path: self.path.clone(), keys: self.keys.clone(), unlocked: None }
     }
 
     pub fn exists(&self) -> bool {
@@ -229,76 +309,111 @@ impl Vault {
         &self.path
     }
 
-    /// Creates a new, empty vault protected by `master` and leaves it unlocked.
-    pub fn create(&mut self, master: &str) -> Result<(), VaultError> {
-        self.create_cancellable(master, || true)
+    /// Whether the key had to be kept in a plain private file (no keychain on this system).
+    pub fn key_in_file(&self) -> bool {
+        self.keys.used_file_fallback()
     }
 
-    /// Checks permission to commit after the expensive derivation, before persisting anything.
-    /// Returning false leaves both the data file and this vault's state unchanged.
-    pub fn create_cancellable(&mut self, master: &str, commit: impl FnOnce() -> bool) -> Result<(), VaultError> {
-        if master.is_empty() {
-            return Err(VaultError::EmptyPassword);
-        }
+    /// What kind of vault the file is (cheap: no key is derived or loaded).
+    pub fn kind(&self) -> Result<VaultKind, VaultError> {
+        let text = match std::fs::read_to_string(&self.path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(VaultKind::Missing),
+            Err(e) => return Err(e.into()),
+        };
+        let file: VaultFile = toml::from_str(&text).map_err(|e| VaultError::Format(e.to_string()))?;
+        Ok(match Protection::of(&file)? {
+            Protection::Master(_) => VaultKind::Master,
+            Protection::Local => VaultKind::Local,
+        })
+    }
+
+    /// Creates a new, empty vault with a new key in the key store, and leaves it open.
+    pub fn create(&mut self) -> Result<(), VaultError> {
         let _lock = lock_file(&self.path)?;
         if self.exists() {
             return Err(VaultError::AlreadyExists);
         }
-        let mut salt = [0u8; SALT_LEN];
-        getrandom::fill(&mut salt).map_err(|e| io::Error::other(e.to_string()))?;
-        let kdf = Kdf::DEFAULT;
-        let key = kdf.derive(master, &salt)?;
-        let unlocked = Unlocked { key, kdf, salt, secrets: BTreeMap::new(), targets: BTreeMap::new() };
-        if !commit() {
-            return Err(VaultError::Cancelled);
-        }
-        self.save_unlocked(&unlocked)?;
+        let unlocked = Unlocked {
+            key: Zeroizing::new(random()?),
+            protection: Protection::Local,
+            salt: random()?,
+            secrets: BTreeMap::new(),
+            targets: BTreeMap::new(),
+        };
+        self.commit_local(&unlocked)?;
         self.unlocked = Some(unlocked);
         Ok(())
     }
 
-    pub fn unlock(&mut self, master: &str) -> Result<(), VaultError> {
-        self.unlock_cancellable(master, || true)
+    /// Opens a key-store vault with its key.
+    pub fn open(&mut self) -> Result<(), VaultError> {
+        let _lock = lock_file(&self.path)?;
+        let file = self.read_file()?;
+        if Protection::of(&file)? != Protection::Local {
+            return Err(VaultError::Locked);
+        }
+        let salt: [u8; SALT_LEN] = decode_fixed(&file.salt, "salt")?;
+        let stored = self.keys.load(&key_id(&salt))?.ok_or(VaultError::KeyMissing)?;
+        let key: Zeroizing<[u8; KEY_LEN]> = Zeroizing::new(decode_fixed(&stored, "key").map_err(|_| VaultError::KeyMissing)?);
+        let (secrets, targets) = decrypt(&key, Protection::Local, &salt, &file).map_err(|e| match e {
+            VaultError::WrongPassword => VaultError::KeyMissing,
+            e => e,
+        })?;
+        self.unlocked = Some(Unlocked { key, protection: Protection::Local, salt, secrets, targets });
+        Ok(())
     }
 
-    /// Decrypts and upgrades weak KDF parameters while holding the same cross-process lock
-    /// used for updates. The commit check also guards adopting the decrypted state.
-    pub fn unlock_cancellable(&mut self, master: &str, commit: impl FnOnce() -> bool) -> Result<(), VaultError> {
+    /// Opens a vault of an older version with its master password and rewrites it with a new
+    /// key in the key store, so it is not asked for again.
+    pub fn migrate(&mut self, master: &str) -> Result<(), VaultError> {
+        self.migrate_cancellable(master, || true)
+    }
+
+    /// Checks permission to commit after the expensive derivation, before persisting anything.
+    /// Returning false leaves both the data file and this vault's state unchanged.
+    pub fn migrate_cancellable(&mut self, master: &str, commit: impl FnOnce() -> bool) -> Result<(), VaultError> {
+        if master.is_empty() {
+            return Err(VaultError::EmptyPassword);
+        }
         let _lock = lock_file(&self.path)?;
+        let file = self.read_file()?;
+        let Protection::Master(kdf) = Protection::of(&file)? else {
+            // Already migrated (in another window): it opens without the password.
+            drop(_lock);
+            return if commit() { self.open() } else { Err(VaultError::Cancelled) };
+        };
+        let salt: [u8; SALT_LEN] = decode_fixed(&file.salt, "salt")?;
+        let key = kdf.derive(master, &salt)?;
+        let (secrets, targets) = decrypt(&key, Protection::Master(kdf), &salt, &file)?;
+        let unlocked = Unlocked { key: Zeroizing::new(random()?), protection: Protection::Local, salt: random()?, secrets, targets };
+        if !commit() {
+            return Err(VaultError::Cancelled);
+        }
+        self.commit_local(&unlocked)?;
+        self.unlocked = Some(unlocked);
+        Ok(())
+    }
+
+    /// Stores the key of a new key-store vault, then the file; the key goes again if the file
+    /// cannot be written. Caller holds the lock.
+    fn commit_local(&self, unlocked: &Unlocked) -> Result<(), VaultError> {
+        let id = key_id(&unlocked.salt);
+        self.keys.store(&id, &Zeroizing::new(B64.encode(*unlocked.key)))?;
+        if let Err(e) = self.save_unlocked(unlocked) {
+            let _ = self.keys.delete(&id);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn read_file(&self) -> Result<VaultFile, VaultError> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(t) => t,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(VaultError::Missing),
             Err(e) => return Err(e.into()),
         };
-        let file: VaultFile = toml::from_str(&text).map_err(|e| VaultError::Format(e.to_string()))?;
-        if file.version != FORMAT_VERSION || file.kdf != KDF_NAME {
-            return Err(VaultError::Format(tr!("vault.unsupported_version_v", arg0 = file.version, arg1 = file.kdf)));
-        }
-        if file.m_cost > MAX_M_COST_KIB || file.t_cost > MAX_T_COST {
-            return Err(VaultError::Format(t!("vault.the_kdf_cost_is_abnormally_high").into()));
-        }
-        let salt: [u8; SALT_LEN] = decode_fixed(&file.salt, "salt")?;
-        let kdf = Kdf { m_cost: file.m_cost, t_cost: file.t_cost, p_cost: file.p_cost };
-        let key = kdf.derive(master, &salt)?;
-        let (secrets, targets) = decrypt(&key, kdf, &salt, &file)?;
-        let upgraded = kdf.upgraded();
-        let needs_upgrade = (upgraded.m_cost, upgraded.t_cost) != (kdf.m_cost, kdf.t_cost);
-        let unlocked = if needs_upgrade {
-            let mut new_salt = [0u8; SALT_LEN];
-            getrandom::fill(&mut new_salt).map_err(|e| io::Error::other(e.to_string()))?;
-            let new_key = upgraded.derive(master, &new_salt)?;
-            Unlocked { key: new_key, kdf: upgraded, salt: new_salt, secrets, targets }
-        } else {
-            Unlocked { key, kdf, salt, secrets, targets }
-        };
-        if !commit() {
-            return Err(VaultError::Cancelled);
-        }
-        if needs_upgrade {
-            self.save_unlocked(&unlocked)?;
-        }
-        self.unlocked = Some(unlocked);
-        Ok(())
+        toml::from_str(&text).map_err(|e| VaultError::Format(e.to_string()))
     }
 
     /// Forgets the key and all decrypted secrets (they are zeroed on drop).
@@ -370,9 +485,9 @@ impl Vault {
         Ok(())
     }
 
-    /// Starts over without the stored secrets (the master password is lost). The old file is
-    /// kept as `vault.toml.bak` (replacing an older one), not deleted: a file that only looked
-    /// like a wrong password (damaged by a crash, say) can still be recovered.
+    /// Starts over without the stored secrets (the master password of an older vault is lost).
+    /// The old file is kept as `vault.toml.bak` (replacing an older one), not deleted: a file
+    /// that only looked like a wrong password (damaged by a crash, say) can still be recovered.
     pub fn reset(&mut self) -> Result<(), VaultError> {
         let _lock = lock_file(&self.path)?;
         self.lock();
@@ -390,21 +505,17 @@ impl Vault {
         let contents =
             ContentsRef { secrets: unlocked.secrets.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect(), targets: &unlocked.targets };
         let plaintext = Zeroizing::new(toml::to_string(&contents).map_err(|e| VaultError::Format(e.to_string()))?);
-
-        let mut nonce = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce).map_err(|e| io::Error::other(e.to_string()))?;
-        let cipher = XChaCha20Poly1305::new(&Key::from(*unlocked.key));
-        let aad = unlocked.kdf.aad(&unlocked.salt);
-        let ciphertext = cipher
-            .encrypt(&XNonce::from(nonce), Payload { msg: plaintext.as_bytes(), aad: &aad })
-            .map_err(|_| VaultError::Format(t!("vault.encryption_failed").into()))?;
-
+        let (nonce, ciphertext) = encrypt(&unlocked.key, &unlocked.protection.aad(&unlocked.salt), plaintext.as_bytes())?;
+        let (version, kdf, cost) = match unlocked.protection {
+            Protection::Master(k) => (MASTER_VERSION, KDF_NAME, k),
+            Protection::Local => (LOCAL_VERSION, LOCAL_KDF, Kdf { m_cost: 0, t_cost: 0, p_cost: 0 }),
+        };
         let file = VaultFile {
-            version: FORMAT_VERSION,
-            kdf: KDF_NAME.into(),
-            m_cost: unlocked.kdf.m_cost,
-            t_cost: unlocked.kdf.t_cost,
-            p_cost: unlocked.kdf.p_cost,
+            version,
+            kdf: kdf.into(),
+            m_cost: cost.m_cost,
+            t_cost: cost.t_cost,
+            p_cost: cost.p_cost,
             salt: B64.encode(unlocked.salt),
             nonce: B64.encode(nonce),
             ciphertext: B64.encode(ciphertext),
@@ -415,11 +526,88 @@ impl Vault {
     }
 }
 
+/// Encrypts `plaintext` with a fresh random nonce.
+fn encrypt(key: &[u8; KEY_LEN], aad: &[u8], plaintext: &[u8]) -> Result<([u8; NONCE_LEN], Vec<u8>), VaultError> {
+    let nonce: [u8; NONCE_LEN] = random()?;
+    let cipher = XChaCha20Poly1305::new(&Key::from(*key));
+    let ciphertext = cipher
+        .encrypt(&XNonce::from(nonce), Payload { msg: plaintext, aad })
+        .map_err(|_| VaultError::Format(t!("vault.encryption_failed").into()))?;
+    Ok((nonce, ciphertext))
+}
+
 fn decode_fixed<const N: usize>(b64: &str, what: &str) -> Result<[u8; N], VaultError> {
     B64.decode(b64)
         .ok()
         .and_then(|v| <[u8; N]>::try_from(v).ok())
         .ok_or_else(|| VaultError::Format(tr!("vault.invalid_value", what = what)))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Data sealed with a password (exported site lists)
+
+const SEALED_FORMAT: &str = "playterm-sealed";
+const SEALED_VERSION: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct SealedFile {
+    format: String,
+    /// What the data is (`sites`): a file of one kind is not taken for another.
+    kind: String,
+    version: u32,
+    kdf: String,
+    m_cost: u32,
+    t_cost: u32,
+    p_cost: u32,
+    salt: String,
+    nonce: String,
+    ciphertext: String,
+}
+
+fn sealed_aad(kind: &str, kdf: Kdf, salt: &[u8]) -> Vec<u8> {
+    format!("{SEALED_FORMAT}:{kind}:v{SEALED_VERSION}:{KDF_NAME}:{}:{}:{}:{}", kdf.m_cost, kdf.t_cost, kdf.p_cost, B64.encode(salt))
+        .into_bytes()
+}
+
+/// `plaintext` encrypted with a key derived from `password` (Argon2id), as the text of a file.
+pub fn seal(kind: &str, password: &str, plaintext: &[u8]) -> Result<String, VaultError> {
+    if password.is_empty() {
+        return Err(VaultError::EmptyPassword);
+    }
+    let kdf = Kdf::DEFAULT;
+    let salt: [u8; SALT_LEN] = random()?;
+    let key = kdf.derive(password, &salt)?;
+    let (nonce, ciphertext) = encrypt(&key, &sealed_aad(kind, kdf, &salt), plaintext)?;
+    let file = SealedFile {
+        format: SEALED_FORMAT.into(),
+        kind: kind.into(),
+        version: SEALED_VERSION,
+        kdf: KDF_NAME.into(),
+        m_cost: kdf.m_cost,
+        t_cost: kdf.t_cost,
+        p_cost: kdf.p_cost,
+        salt: B64.encode(salt),
+        nonce: B64.encode(nonce),
+        ciphertext: B64.encode(ciphertext),
+    };
+    toml::to_string_pretty(&file).map_err(|e| VaultError::Format(e.to_string()))
+}
+
+/// The data [`seal`]ed in `text`, if `password` is the one it was sealed with.
+pub fn unseal(kind: &str, password: &str, text: &str) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+    let file: SealedFile = toml::from_str(text).map_err(|e| VaultError::Format(e.to_string()))?;
+    if file.format != SEALED_FORMAT || file.kind != kind || file.version != SEALED_VERSION || file.kdf != KDF_NAME {
+        return Err(VaultError::Format(tr!("vault.unsupported_version_v", arg0 = file.version, arg1 = file.kind)));
+    }
+    let kdf = Kdf::checked(file.m_cost, file.t_cost, file.p_cost)?;
+    let salt: [u8; SALT_LEN] = decode_fixed(&file.salt, "salt")?;
+    let nonce: [u8; NONCE_LEN] = decode_fixed(&file.nonce, "nonce")?;
+    let ciphertext = B64.decode(&file.ciphertext).map_err(|e| VaultError::Format(e.to_string()))?;
+    let key = kdf.derive(password, &salt)?;
+    let cipher = XChaCha20Poly1305::new(&Key::from(*key));
+    let aad = sealed_aad(kind, kdf, &salt);
+    let plaintext = cipher.decrypt(&XNonce::from(nonce), Payload { msg: &ciphertext, aad: &aad }).map_err(|_| VaultError::WrongPassword)?;
+    Ok(Zeroizing::new(plaintext))
 }
 
 #[cfg(test)]
@@ -443,14 +631,14 @@ mod tests {
         let op = std::env::var("PLAYTERM_VAULT_TEST_OP").unwrap();
         let mut v = Vault::new(dir.join("vault.toml"));
         if op != "create" {
-            v.unlock("test-master").unwrap();
+            v.open().unwrap();
         }
         std::fs::write(dir.join(format!("ready-{name}")), "").unwrap();
         wait_file(&dir.join(format!("start-{name}")));
         if op == "reset" {
             v.reset().unwrap();
         } else if op == "create" {
-            let result = v.create("test-master");
+            let result = v.create();
             assert!(result.is_ok() || matches!(result, Err(VaultError::AlreadyExists)));
         } else {
             v.update(|u| {
@@ -488,7 +676,7 @@ mod tests {
     fn separate_processes_serialize_add_remove_and_reset() {
         for op in ["add", "remove", "reset"] {
             let (dir, mut v) = vault();
-            v.create("test-master").unwrap();
+            v.create().unwrap();
             v.set("old", "ssh://old", "old-secret").unwrap();
             let mut a = worker(dir.path(), "a", "add");
             let mut b = worker(dir.path(), "b", op);
@@ -511,10 +699,10 @@ mod tests {
             if op == "reset" {
                 assert!(!v.exists());
                 assert!(matches!(v.set("resurrect", "t", "x"), Err(VaultError::Replaced)));
-                v.create("new-master").unwrap();
+                v.create().unwrap();
                 continue;
             }
-            v.unlock("test-master").unwrap();
+            v.open().unwrap();
             assert_eq!(v.get("a"), Some("fake-secret"));
             if op == "add" {
                 assert_eq!(v.get("b"), Some("fake-secret"));
@@ -540,7 +728,7 @@ mod tests {
         }
         assert!(a.wait().unwrap().success());
         assert!(b.wait().unwrap().success());
-        v.unlock("test-master").unwrap();
+        v.open().unwrap();
         let mut crashed = worker(dir.path(), "crash", "add");
         wait_file(&dir.path().join("ready-crash"));
         signal(dir.path(), "start-crash");
@@ -549,14 +737,14 @@ mod tests {
         crashed.wait().unwrap();
         v.set("survivor", "ssh://test", "fake").unwrap();
         assert_eq!(v.get("crash"), None);
-        v.unlock("test-master").unwrap();
+        v.open().unwrap();
         assert_eq!(v.get("survivor"), Some("fake"));
     }
 
     #[test]
     fn lock_timeout_preserves_memory_and_file() {
         let (_dir, mut v) = vault();
-        v.create("test-master").unwrap();
+        v.create().unwrap();
         v.set("old", "ssh://test", "fake").unwrap();
         let before = std::fs::read(&v.path).unwrap();
         let guard = lock_file(&v.path).unwrap();
@@ -576,92 +764,119 @@ mod tests {
     }
 
     #[test]
-    fn create_set_lock_unlock() {
+    fn create_set_lock_open_without_a_password() {
         let (_dir, mut v) = vault();
         assert!(!v.exists());
-        v.create("correct horse").unwrap();
+        assert_eq!(v.kind().unwrap(), VaultKind::Missing);
+        v.create().unwrap();
+        assert_eq!(v.kind().unwrap(), VaultKind::Local);
         v.set("p1", "ssh://me@a:22", "s3cret!").unwrap();
         v.set("p2", "telnet://b:23", "한글비번").unwrap();
         v.lock();
         assert_eq!(v.get("p1"), None);
         assert!(matches!(v.set("p3", "x", "x"), Err(VaultError::Locked)));
 
-        v.unlock("correct horse").unwrap();
+        v.open().unwrap();
         assert_eq!(v.get("p1"), Some("s3cret!"));
         assert_eq!(v.get("p2"), Some("한글비번"));
         assert_eq!(v.target("p1"), Some("ssh://me@a:22"));
 
         v.rebind("p1", "ssh://me@new:22").unwrap();
         v.lock();
-        v.unlock("correct horse").unwrap();
+        v.open().unwrap();
         assert_eq!(v.target("p1"), Some("ssh://me@new:22"));
 
         v.remove("p1").unwrap();
         v.remove("p2").unwrap();
         v.lock();
-        v.unlock("correct horse").unwrap();
+        v.open().unwrap();
         assert_eq!((v.get("p1"), v.get("p2"), v.target("p1")), (None, None, None));
+    }
+
+    #[test]
+    fn a_vault_without_its_key_does_not_open() {
+        let (dir, mut v) = vault();
+        v.create().unwrap();
+        v.set("p", "ssh://t", "secret").unwrap();
+        v.lock();
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "key") {
+                std::fs::write(&path, B64.encode([9u8; KEY_LEN])).unwrap();
+            }
+        }
+        assert!(matches!(v.open(), Err(VaultError::KeyMissing)));
+        let mut other = Vault::with_keys(v.path().to_owned(), Arc::new(FileKeyStore::new(dir.path().join("elsewhere"))));
+        assert!(matches!(other.open(), Err(VaultError::KeyMissing)));
+        assert!(!v.is_unlocked() && !other.is_unlocked());
     }
 
     #[cfg(unix)]
     #[test]
-    fn vault_writes_keep_mode_0600_including_legacy_rehash() {
+    fn vault_and_key_writes_keep_mode_0600_including_migration() {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("vault.toml");
         let mut vault = Vault::new(&path);
-        vault.create("test-master").unwrap();
+        vault.create().unwrap();
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "key") {
+                assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            }
+        }
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
         vault.set("site", "ssh://test", "fake-password").unwrap();
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-        vault.remove("site").unwrap();
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         let (_legacy_dir, mut legacy) = legacy_vault(Kdf { m_cost: 19 * 1024, t_cost: 2, p_cost: 1 });
         std::fs::set_permissions(legacy.path(), std::fs::Permissions::from_mode(0o666)).unwrap();
-        legacy.unlock("test-master").unwrap();
+        legacy.migrate("test-master").unwrap();
         assert_eq!(std::fs::metadata(legacy.path()).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[test]
-    fn wrong_password_and_no_plaintext_on_disk() {
+    fn no_plaintext_on_disk() {
         let (_dir, mut v) = vault();
-        v.create("master").unwrap();
+        v.create().unwrap();
         // A long id: random ciphertext text could contain a short one like "p1" by chance.
         v.set("site-id-for-plaintext-check", "ssh://user@target-host-check:22", "very-secret-value").unwrap();
         let raw = std::fs::read_to_string(&v.path).unwrap();
         assert!(!raw.contains("very-secret-value"));
         assert!(!raw.contains("target-host-check"), "targets are encrypted too");
         assert!(!raw.contains("site-id-for-plaintext-check"), "secret ids are encrypted too");
-
-        v.lock();
-        assert!(matches!(v.unlock("nope"), Err(VaultError::WrongPassword)));
-        assert!(!v.is_unlocked());
     }
 
     #[test]
     fn tampered_header_is_rejected() {
         let (_dir, mut v) = vault();
-        v.create("master").unwrap();
+        v.create().unwrap();
         v.lock();
         let raw = std::fs::read_to_string(&v.path).unwrap();
-        let tampered = raw.replace(&format!("t_cost = {}", Kdf::DEFAULT.t_cost), "t_cost = 1");
+        let tampered = raw.replace(&format!("version = {LOCAL_VERSION}"), &format!("version = {MASTER_VERSION}"));
         assert_ne!(raw, tampered);
         std::fs::write(&v.path, tampered).unwrap();
-        assert!(matches!(v.unlock("master"), Err(VaultError::WrongPassword)));
+        assert!(v.open().is_err());
+
+        let (_dir, mut legacy) = legacy_vault(Kdf::DEFAULT);
+        let raw = std::fs::read_to_string(&legacy.path).unwrap();
+        let tampered = raw.replace(&format!("t_cost = {}", Kdf::DEFAULT.t_cost), "t_cost = 1");
+        assert_ne!(raw, tampered);
+        std::fs::write(&legacy.path, tampered).unwrap();
+        assert!(matches!(legacy.migrate("test-master"), Err(VaultError::WrongPassword)));
     }
 
     #[test]
     fn create_rules_and_reset() {
         let (_dir, mut v) = vault();
-        assert!(matches!(v.create(""), Err(VaultError::EmptyPassword)));
-        assert!(matches!(v.unlock("x"), Err(VaultError::Missing)));
-        v.create("a").unwrap();
-        assert!(matches!(v.create("b"), Err(VaultError::AlreadyExists)));
+        assert!(matches!(v.open(), Err(VaultError::Missing)));
+        assert!(matches!(v.migrate("x"), Err(VaultError::Missing)));
+        v.create().unwrap();
+        assert!(matches!(v.create(), Err(VaultError::AlreadyExists)));
         v.reset().unwrap();
         assert!(!v.exists() && !v.is_unlocked());
         assert!(v.path.with_file_name("vault.toml.bak").exists(), "the old vault is kept");
-        v.create("b").unwrap();
+        v.create().unwrap();
         let leftovers: Vec<_> = std::fs::read_dir(v.path.parent().unwrap())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -673,28 +888,28 @@ mod tests {
     #[test]
     fn two_windows_keep_each_others_passwords() {
         let (dir, mut a) = vault();
-        a.create("m").unwrap();
+        a.create().unwrap();
         let mut b = Vault::new(dir.path().join("vault.toml"));
-        b.unlock("m").unwrap();
+        b.open().unwrap();
         // Each window saves a password the other one has not seen.
         a.set("from-a", "ssh://a", "1").unwrap();
         b.set("from-b", "ssh://b", "2").unwrap();
         a.remove("missing").unwrap();
         a.set("from-a-2", "ssh://a2", "3").unwrap();
         let mut c = Vault::new(dir.path().join("vault.toml"));
-        c.unlock("m").unwrap();
+        c.open().unwrap();
         assert_eq!((c.get("from-a"), c.get("from-b"), c.get("from-a-2")), (Some("1"), Some("2"), Some("3")));
 
         // A vault recreated elsewhere is not overwritten with old contents.
         c.reset().unwrap();
-        c.create("other").unwrap();
+        c.create().unwrap();
         assert!(matches!(a.set("x", "t", "y"), Err(VaultError::Replaced)));
     }
 
     #[test]
     fn older_secrets_get_their_target_once() {
         let (_dir, mut v) = vault();
-        v.create("m").unwrap();
+        v.create().unwrap();
         v.set("p1", "ssh://kept", "1").unwrap();
         // As written by an older version: a secret without a target.
         v.unlocked.as_mut().unwrap().secrets.insert("old".into(), Zeroizing::new("2".into()));
@@ -708,7 +923,7 @@ mod tests {
     #[test]
     fn each_save_uses_a_new_nonce() {
         let (_dir, mut v) = vault();
-        v.create("m").unwrap();
+        v.create().unwrap();
         let first = std::fs::read_to_string(&v.path).unwrap();
         v.set("a", "t", "1").unwrap();
         v.remove("a").unwrap();
@@ -716,13 +931,14 @@ mod tests {
         assert_ne!(first, second);
     }
 
+    /// A vault as older versions wrote it: protected by the master password `test-master`.
     fn legacy_vault(kdf: Kdf) -> (tempfile::TempDir, Vault) {
         let (dir, vault) = vault();
         let salt = [7; SALT_LEN];
         let key = kdf.derive("test-master", &salt).unwrap();
         let unlocked = Unlocked {
             key,
-            kdf,
+            protection: Protection::Master(kdf),
             salt,
             secrets: BTreeMap::from([("site".into(), Zeroizing::new("saved-secret".into()))]),
             targets: BTreeMap::from([("site".into(), "ssh://test@localhost:22".into())]),
@@ -733,57 +949,48 @@ mod tests {
     }
 
     #[test]
-    fn new_vault_uses_desktop_kdf_cost() {
-        let (_dir, mut vault) = vault();
-        let started = Instant::now();
-        vault.create("test-master").unwrap();
-        eprintln!("64 MiB / t=3 create: {:?}", started.elapsed());
-        let file: VaultFile = toml::from_str(&std::fs::read_to_string(&vault.path).unwrap()).unwrap();
-        assert!(file.m_cost >= 64 * 1024);
-        assert_eq!((file.t_cost, file.p_cost), (3, 1));
-    }
-
-    #[test]
-    fn old_kdf_upgrades_only_after_successful_password_and_preserves_secrets() {
-        let (_dir, mut vault) = legacy_vault(Kdf { m_cost: 19 * 1024, t_cost: 2, p_cost: 1 });
+    fn an_older_vault_migrates_once_with_its_master_password() {
+        let (dir, mut vault) = legacy_vault(Kdf { m_cost: 19 * 1024, t_cost: 2, p_cost: 1 });
+        assert_eq!(vault.kind().unwrap(), VaultKind::Master);
+        assert!(matches!(vault.open(), Err(VaultError::Locked)));
         let old = std::fs::read(&vault.path).unwrap();
-        assert!(matches!(vault.unlock("wrong"), Err(VaultError::WrongPassword)));
+        assert!(matches!(vault.migrate("wrong"), Err(VaultError::WrongPassword)));
         assert_eq!(std::fs::read(&vault.path).unwrap(), old);
         assert!(!vault.is_unlocked());
-        vault.unlock("test-master").unwrap();
+
+        vault.migrate("test-master").unwrap();
+        assert_eq!(vault.kind().unwrap(), VaultKind::Local);
         assert_eq!(vault.get("site"), Some("saved-secret"));
         assert_eq!(vault.target("site"), Some("ssh://test@localhost:22"));
-        let new: VaultFile = toml::from_str(&std::fs::read_to_string(&vault.path).unwrap()).unwrap();
-        let previous: VaultFile = toml::from_str(std::str::from_utf8(&old).unwrap()).unwrap();
-        assert_eq!((new.m_cost, new.t_cost, new.p_cost), (64 * 1024, 3, 1));
-        assert_ne!(new.salt, previous.salt);
         vault.set("next", "ssh://next", "next-secret").unwrap();
-        vault.lock();
-        vault.unlock("test-master").unwrap();
-        assert_eq!(vault.get("next"), Some("next-secret"));
+
+        // Another window (or the next start) opens it without the master password.
+        let mut again = Vault::new(dir.path().join("vault.toml"));
+        again.open().unwrap();
+        assert_eq!((again.get("site"), again.get("next")), (Some("saved-secret"), Some("next-secret")));
+        // A window that still asked for the master password just opens it.
+        let mut late = Vault::new(dir.path().join("vault.toml"));
+        late.migrate("whatever").unwrap();
+        assert_eq!(late.get("next"), Some("next-secret"));
     }
 
     #[test]
-    fn cancellation_never_persists_creation_or_rehash_and_stronger_costs_stay() {
-        let (_dir, mut fresh) = vault();
-        assert!(matches!(fresh.create_cancellable("test-master", || false), Err(VaultError::Cancelled)));
-        assert!(!fresh.exists() && !fresh.is_unlocked());
+    fn cancellation_never_persists_migration() {
         let (_dir, mut old) = legacy_vault(Kdf { m_cost: 19 * 1024, t_cost: 2, p_cost: 1 });
         let original = std::fs::read(&old.path).unwrap();
-        assert!(matches!(old.unlock_cancellable("test-master", || false), Err(VaultError::Cancelled)));
+        assert!(matches!(old.migrate_cancellable("test-master", || false), Err(VaultError::Cancelled)));
         assert_eq!(std::fs::read(&old.path).unwrap(), original);
         assert!(!old.is_unlocked());
-        let (_dir, mut strong) = legacy_vault(Kdf { m_cost: 64 * 1024, t_cost: 4, p_cost: 1 });
-        let original = std::fs::read(&strong.path).unwrap();
-        strong.unlock("test-master").unwrap();
-        assert_eq!(std::fs::read(&strong.path).unwrap(), original);
+        let keys = std::fs::read_dir(old.path.parent().unwrap())
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|e| e == "key"))
+            .count();
+        assert_eq!(keys, 0, "no key is stored for a cancelled migration");
     }
 
     #[test]
     fn excessive_kdf_costs_are_rejected_without_rewriting() {
-        let (_dir, mut vault) = vault();
-        vault.create("test-master").unwrap();
-        vault.lock();
+        let (_dir, mut vault) = legacy_vault(Kdf::DEFAULT);
         let original = std::fs::read_to_string(&vault.path).unwrap();
         for (m, t) in [(MAX_M_COST_KIB + 1, 3), (64 * 1024, MAX_T_COST + 1)] {
             let mut file: VaultFile = toml::from_str(&original).unwrap();
@@ -791,12 +998,25 @@ mod tests {
             file.t_cost = t;
             let tampered = toml::to_string(&file).unwrap();
             std::fs::write(&vault.path, &tampered).unwrap();
-            assert!(matches!(vault.unlock("test-master"), Err(VaultError::Format(_))));
+            assert!(matches!(vault.migrate("test-master"), Err(VaultError::Format(_))));
             assert_eq!(std::fs::read_to_string(&vault.path).unwrap(), tampered);
         }
     }
 
-    /// Fake encrypted data for an actual-window cancellation/rehash check.
+    #[test]
+    fn sealed_data_opens_only_with_its_password_and_kind() {
+        let text = seal("sites", "export-pass", "host = \"db01\"\npassword = \"hunter2\"".as_bytes()).unwrap();
+        assert!(!text.contains("db01") && !text.contains("hunter2"));
+        let plain = unseal("sites", "export-pass", &text).unwrap();
+        assert_eq!(std::str::from_utf8(&plain).unwrap(), "host = \"db01\"\npassword = \"hunter2\"");
+        assert!(matches!(unseal("sites", "wrong", &text), Err(VaultError::WrongPassword)));
+        assert!(matches!(unseal("other", "export-pass", &text), Err(VaultError::Format(_))));
+        assert!(matches!(seal("sites", "", b"x"), Err(VaultError::EmptyPassword)));
+        let tampered = text.replace("kind = \"sites\"", "kind = \"other\"");
+        assert!(unseal("other", "export-pass", &tampered).is_err());
+    }
+
+    /// Fake encrypted data for an actual-window migration check.
     #[test]
     #[ignore = "interactive vault fixture; set PLAYTERM_VAULT_GUI_DIR and optionally PLAYTERM_VAULT_GUI_SLOW"]
     fn native_vault_fixture() {

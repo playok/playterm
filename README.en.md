@@ -23,7 +23,9 @@ It ships as a single portable `.exe` for x64 and ARM64, with no installer and no
 - **Connect many at once**: Ctrl/Shift+click sites to open them together, or save them as a **template** (tabs, columns, rows or grid) and open it with a double-click
 - **SSH extras**: key authentication (OpenSSH / PuTTY `.ppk`, Pageant, Windows OpenSSH agent), `-L` / `-R` / `-D` port forwarding, and an SFTP explorer panel beside the terminal
 - **Remote Desktop**: resolution that follows the tab size, sound, Unicode/IME input, and certificate pinning. Clipboard, folder and printer sharing are Windows only
-- **Password vault**: saved passwords are encrypted with a master password (Argon2id + XChaCha20-Poly1305)
+- **Password vault**: saved passwords are encrypted with a key kept in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service; XChaCha20-Poly1305), so connecting never asks for a master password
+- **Site list export/import**: the sites and their saved passwords go to one file, to import on another PC; only that file is encrypted with a master password (Argon2id + XChaCha20-Poly1305)
+- **Toolbar address box**: `user@host`, `ssh://…`, `telnet://…` connect at once; a host without a user opens Quick Connect filled in
 - **Network-device friendly**: automatic login, typing into several tabs at once, session logging, keep-alive, CP949 (EUC-KR) with encoding auto-detection, and ZMODEM downloads and uploads (`sz`/`rz`)
 - **Site manager**: folders, per-site tab colors, PuTTY, Xshell and SecureCRT session import, and a `playterm>` command prompt in unconnected tabs
 - Korean / English / Japanese / Simplified Chinese / Spanish / Brazilian Portuguese / German / French / Traditional Chinese / Russian UI, dark / light themes
@@ -210,7 +212,7 @@ Connection commands connect in that tab, and the prompt comes back when the conn
   (blue outline). Closing the last tab of a group removes that pane, and new tabs open in the group of the current tab.
 - **Connect several sites at once**: Ctrl+click (add/remove one) or Shift+click (a range) sites in the site list, and a bar under the list shows
   `N selected [Connect] [Side by side ▾] [Save template]` (also in the right-click menu of the selected sites).
-  [Connect] opens them as tabs; [Side by side] splits the view into columns, rows or a grid. If some of them use passwords from the vault, the master password is asked only once.
+  [Connect] opens them as tabs; [Side by side] splits the view into columns, rows or a grid. Saved passwords are used without asking.
 - **Templates**: save a group of sites you often open together under a name (select them, then [Save template]). Choose the name, the layout
   (tabs / columns / rows / grid) and the sites and their order; double-click the template under **Templates** at the top of the site list
   (or right-click → Connect all) to open them all. Right-click → Edit / Delete. Templates are stored in `sessions.toml`; deleting a site removes it from its templates.
@@ -462,18 +464,23 @@ When a public key was accepted and the server still asks for the plain `password
 
 Local RSA private-key files are skipped before signing as an interim mitigation for RUSTSEC-2023-0071, including renamed files and default `id_rsa` fallback. Ed25519/ECDSA files remain supported. RSA through an external agent uses a separate signer path; the agent's security and remaining RDP scope require separate assessment. See the [RSA mitigation record](docs/security-rsa-223.md). This does not mean the advisory is officially patched.
 
-Password fields (login, key passphrase, vault master password, a site's password) switch the input method (IME) off: even right after typing
+Password fields (login, key passphrase, export master password, a site's password) switch the input method (IME) off: even right after typing
 Korean in the terminal, a password is typed in Latin letters instead of jamo hidden behind the dots, which would fail the login. The input mode comes back when the dialog closes.
 
 If you entered the wrong user name, fix it in the **User** field of the password dialog. SSH servers do not allow changing the user during authentication,
 so playterm reconnects and logs in as that user; for a saved site, check **Save it in the site too** to change the site's user name as well.
 
 Check **Save password** in the password dialog (for a saved site) to store the password in the vault after a successful login and switch the site to
-'Save password'. A wrong password is never stored; if the vault is locked you are asked to unlock it (or create it the first time). Cancelling that dialog changes nothing.
+'Save password'. A wrong password is never stored.
 A further factor asked after the password (a one-time code, say) never gets the saved password and is never saved as the password.
 
-**Locking** the vault also takes the passwords back from the open tabs; reconnecting such a tab asks to unlock the vault first. Resetting the vault
-with 'Forgot the master password?' keeps the old file as `vault.toml.bak`.
+The key of the saved passwords is kept in the OS keychain (on Linux without one, in a 0600 file in the settings folder), so connecting and reconnecting
+never ask for a master password. A vault made by an older version with a master password asks for it once, then is re-encrypted with a keychain key
+and never asks again. Resetting it there with 'Forgot the master password?' keeps the old file as `vault.toml.bak`.
+
+**File → Export sites…** writes the site list with the saved passwords to one `.ptsites` file, encrypted with a master password (8+ characters) chosen then.
+**File → Import → Exported playterm sites…** reads it back with the same master password: pick the sites, and their passwords go into this PC's vault.
+Sites that already exist (same address) start unchecked.
 
 ## Updates
 
@@ -494,7 +501,7 @@ On macOS playterm does not replace the signed `playterm.app` itself: **Open the 
 |---|---|
 | `sessions.toml` | Saved sites and templates (no passwords) |
 | `settings.toml` | Language, UI theme, font, size, color theme, scrollback, status bar, command input bar, sleep prevention, screen saver prevention, connection timeout, copy / paste keys, site manager view (tree/grid), ZMODEM download folder and asking for it, macros, update check / skipped version |
-| `vault.toml` | Saved passwords, encrypted with the master password → Argon2id → XChaCha20-Poly1305. Each password is stored with the target it was saved for (protocol, user, host, port), also encrypted: if a site in `sessions.toml` is pointed elsewhere, its password is not sent (changes made in playterm carry it along). Several windows do not delete each other's saved passwords |
+| `vault.toml` | Saved passwords, encrypted (XChaCha20-Poly1305) with a random key kept in the OS keychain (a master-password vault of an older version is converted once). Each password is stored with the target it was saved for (protocol, user, host, port), also encrypted: if a site in `sessions.toml` is pointed elsewhere, its password is not sent (changes made in playterm carry it along). Several windows do not delete each other's saved passwords |
 | `known_hosts` | SSH host keys. If a known host's key changes — even to a key of another type — the connection is refused (protection against man-in-the-middle attacks). Key types on record are asked for first |
 | `known_rdp_hosts` | RDP server certificate fingerprints. A changed certificate is refused |
 

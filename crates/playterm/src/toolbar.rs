@@ -1,5 +1,6 @@
-//! The toolbar under the menu bar: the commands used most, as icons (as in Xshell). Each shows
-//! its name and shortcut in a tooltip, and has that name for screen readers.
+//! The toolbar under the menu bar: the commands used most, as icons (as in Xshell), and a box to
+//! type an address to connect to. Each button shows its name and shortcut in a tooltip, and has
+//! that name for screen readers.
 
 use eframe::egui::containers::menu::MenuButton;
 use eframe::egui::{self, Role, WidgetInfo};
@@ -131,9 +132,35 @@ fn groups(ui: &egui::Ui, st: &ToolbarState<'_>) -> Vec<Vec<Tool>> {
     ]
 }
 
-/// Draws the toolbar's buttons in `ui` (a horizontal layout), returning the one clicked. It
-/// stays on one line: the groups that do not fit go into a "»" menu at its end (#144).
-pub fn show(ui: &mut egui::Ui, st: &ToolbarState<'_>) -> Option<Command> {
+/// The group after which the address box sits (new tab, quick connect, site manager).
+const ADDRESS_AFTER_GROUP: usize = 1;
+
+/// The box to type an address into (`user@host`, `ssh://...`, an IP address or a domain, a
+/// site's name); Enter connects. Narrower when the window is.
+fn address_box(ui: &mut egui::Ui, address: &mut String, out: &mut Option<Command>) {
+    let width = (ui.available_width() * 0.3).clamp(110.0, 240.0);
+    let name = t!("toolbar.connect_to_an_address");
+    let response = ui.add(
+        egui::TextEdit::singleline(address).hint_text(t!("toolbar.host_or_user_host")).desired_width(width).id_salt("toolbar-address"),
+    );
+    response.widget_info(|| WidgetInfo::labeled(Role::TextInput, true, name));
+    let response = response.on_hover_text(t!("toolbar.type_user_host_an_ip_address_or_a"));
+    if response.lost_focus() {
+        // The key that ends the typing (Enter, Escape) is the box's: the terminal, which takes
+        // the keyboard back in this same frame, must not get it too.
+        let (enter, _) = ui.input_mut(|i| {
+            (i.consume_key(egui::Modifiers::NONE, egui::Key::Enter), i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        });
+        if enter && !address.trim().is_empty() {
+            *out = Some(Command::ConnectAddress(address.trim().to_owned()));
+        }
+    }
+}
+
+/// Draws the toolbar's buttons and address box in `ui` (a horizontal layout), returning what
+/// was asked for. It stays on one line: the groups that do not fit go into a "»" menu at its
+/// end (#144).
+pub fn show(ui: &mut egui::Ui, st: &ToolbarState<'_>, address: &mut String) -> Option<Command> {
     let mut out = None;
     let groups = groups(ui, st);
     // Room a button takes, measured on the first one drawn (the same for all of them).
@@ -166,6 +193,10 @@ pub fn show(ui: &mut egui::Ui, st: &ToolbarState<'_>) -> Option<Command> {
                 Action::CharsetMenu(i, current) => menu_button(ui, tool, |ui| menu::charset_items(ui, &mut out, *i, *current)),
             };
             button_w = response.rect.width() + gap;
+        }
+        if k == ADDRESS_AFTER_GROUP {
+            ui.separator();
+            address_box(ui, address, &mut out);
         }
     }
     ui.data_mut(|d| d.insert_temp(width_id, button_w));
@@ -240,7 +271,7 @@ mod tests {
         ctx.enable_accesskit();
         let mut out = ctx.run_ui(Default::default(), |ui| {
             ui.set_max_width(width);
-            ui.horizontal(|ui| show(ui, state));
+            ui.horizontal(|ui| show(ui, state, &mut String::new()));
         });
         out.textures_delta.clear();
         let update = out.platform_output.accesskit_update.expect("accesskit is on");

@@ -14,7 +14,9 @@ Ce guide français décrit la branche de développement `master`. Pour les fonct
 - Sélection de plusieurs sites avec Ctrl/Maj+clic, connexion groupée et modèles enregistrant les sites et leur disposition.
 - Authentification SSH par clés, certificats et agents externes ; hôtes de rebond, redirections `-L` / `-R` / `-D` et X11.
 - Panneau SFTP, transferts ZMODEM (`sz` / `rz`), connexion automatique, macros, saisie simultanée et journaux de session.
-- Coffre de mots de passe chiffré avec un mot de passe principal (Argon2id + XChaCha20-Poly1305).
+- Coffre de mots de passe : la clé est gardée dans le trousseau du système (Trousseau macOS, Gestionnaire d’identification Windows, Secret Service Linux ; XChaCha20-Poly1305), la connexion ne demande donc jamais de mot de passe principal. Un coffre d’une version antérieure demande son mot de passe principal une seule fois, puis est converti.
+- Export/import de la liste des sites (Fichier → Exporter les sites…, Fichier → Importer → Sites playterm exportés…) : sites et mots de passe enregistrés dans un fichier `.ptsites`, chiffré avec un mot de passe principal choisi à l’export (Argon2id + XChaCha20-Poly1305).
+- Champ d’adresse dans la barre d’outils : `user@hôte`, `ssh://…`, `telnet://…` se connectent aussitôt ; un hôte sans utilisateur ouvre la connexion rapide pré-remplie.
 - Importation des sessions PuTTY, Xshell et SecureCRT ; dossiers et couleurs d’onglets.
 - Interface en dix langues, thèmes clair et sombre, choix des polices, recherche dans l’historique et encodages internationaux.
 
@@ -81,7 +83,7 @@ Sous Windows, la configuration se trouve dans `%APPDATA%\playterm\config\`. La v
 | --- | --- |
 | `sessions.toml` | Sites et modèles, sans mots de passe |
 | `settings.toml` | Langue, affichage, touches, macros et mises à jour |
-| `vault.toml` | Mots de passe enregistrés, chiffrés avec le mot de passe principal |
+| `vault.toml` | Mots de passe enregistrés, chiffrés avec une clé aléatoire gardée dans le trousseau du système |
 | `known_hosts` | Clés d’hôte SSH approuvées |
 | `known_rdp_hosts` | Empreintes de certificats RDP approuvés |
 

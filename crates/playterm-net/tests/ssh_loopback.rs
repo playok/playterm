@@ -1798,7 +1798,7 @@ fn dropped_passphrase_prompt_and_exhausted_retries_abort() {
 /// A real loopback SSH server for native-window authentication checks. Only fake credentials.
 /// Set PLAYTERM_GUI_FIXTURE_DIR to a fresh evidence directory, run with --ignored --nocapture,
 /// then launch playterm with PLAYTERM_CONFIG_DIR=<directory> and the URL from connection.txt.
-/// PLAYTERM_GUI_SAVED_SITE=1 also saves the site with a vault password ("master");
+/// PLAYTERM_GUI_SAVED_SITE=1 also saves the site with a saved (vault) password;
 /// PLAYTERM_GUI_KEY_PASSWORD=1 makes the server require the key before the password.
 /// Create <directory>/stop to stop it. It also exits after 30 minutes.
 #[test]
@@ -1857,9 +1857,10 @@ fn native_auth_fixture() {
         site.identity_file = dir.join("encrypted_key").display().to_string();
         store.upsert(site.clone()).unwrap();
         let mut vault = playterm_config::Vault::new(dir.join("vault.toml"));
-        vault.create("master").unwrap();
+        // The key goes in a file next to it, which playterm finds when the keychain has none.
+        vault.create().unwrap();
         vault.set(&site.id, &format!("ssh://{user}@127.0.0.1:{}", fx.port), "secret").unwrap();
-        println!("Saved site: {} (vault master password: master)", site.display_name());
+        println!("Saved site: {} (saved password opens without a master password)", site.display_name());
     }
     std::fs::write(dir.join("connection.txt"), format!("ssh://{user}@127.0.0.1:{}", fx.port)).unwrap();
     println!("Native GUI fixture: {} (passphrase: open sesame; password: secret)", dir.display());

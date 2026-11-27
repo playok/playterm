@@ -55,10 +55,15 @@ use self::windows::Windows;
 /// Largest text a remote program may put on the clipboard (OSC 52).
 const MAX_REMOTE_COPY: usize = 1024 * 1024;
 
-/// What to do once the vault dialog succeeds (or is cancelled).
+/// What to do once the saved passwords are open (or could not be opened): at once, or after the
+/// vault dialog asked for the master password of an older version.
 enum Pending {
     /// Just unlock (sidebar button).
     Unlock,
+    /// Export the site list, with the passwords.
+    Export,
+    /// Store the passwords that came with imported sites, by site id.
+    StoreSecrets(Vec<(String, Zeroizing<String>)>),
     /// Connect a saved profile, using its stored password, in the given tab if any.
     Connect(String, Option<u64>),
     /// Reconnect the tab with this id, with its site's stored password.
@@ -76,6 +81,9 @@ enum Modal {
     QuickConnect(Box<QuickConnect>),
     Vault(VaultDialog, Pending),
     VaultWorking(VaultDialog, Pending, vault_worker::Task),
+    /// The master password of an export or import.
+    Sites(VaultDialog, SitesJob),
+    SitesWorking(VaultDialog, SitesJob, vault_worker::Task<SitesDone>),
     ConfirmDelete(String),
     Template(Box<TemplateDialog>),
     ConfirmDeleteTemplate(String),
@@ -163,6 +171,44 @@ fn bound_secret(vault: &playterm_config::Vault, profile: &SessionProfile) -> Res
     }
 }
 
+/// Exporting the site list to a file, or importing one, once the master password is typed.
+#[derive(Clone)]
+enum SitesJob {
+    Export(PathBuf),
+    /// The text of the file to import.
+    Import(String),
+}
+
+/// What an export or import did.
+enum SitesDone {
+    /// Written to the file: how many sites, and passwords with them.
+    Exported {
+        path: PathBuf,
+        sites: usize,
+        passwords: usize,
+    },
+    Imported(Vec<playterm_config::ExportedSite>),
+}
+
+/// Whether the saved passwords could be opened (see `open_vault`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Gate {
+    Open,
+    /// Saved by an older version: the master password is needed, once.
+    Master,
+    /// There are none, or they cannot be opened here (the reason is in the status line).
+    Closed,
+}
+
+/// Where the vault key is kept: the OS keychain, or for tests a file in their own folder.
+fn key_store(config_dir: &Path) -> Arc<dyn playterm_config::KeyStore> {
+    if cfg!(test) {
+        Arc::new(playterm_config::FileKeyStore::new(config_dir))
+    } else {
+        Arc::new(playterm_config::OsKeyStore::new(config_dir))
+    }
+}
+
 /// A change to a saved password that waits for the vault to be unlocked.
 enum VaultTodo {
     /// The site was deleted or no longer saves its password.
@@ -190,6 +236,10 @@ pub struct PlaytermApp {
     next_id: u64,
     sidebar: Sidebar,
     show_sidebar: bool,
+    /// The address typed into the toolbar's connect box.
+    address: String,
+    /// The user was told that the vault key is kept in a file (no keychain here).
+    key_file_noted: bool,
     /// The site manager window; app modals (vault, delete confirmation) stack above it.
     site_manager: Option<SiteManager>,
     /// The site manager was just opened: the terminal gives up the keyboard to it.
@@ -287,7 +337,7 @@ impl PlaytermApp {
             net: NetRuntime::new().context(t!("app.mod.could_not_start_the_network_runtime"))?,
             waker: Arc::new(move || ctx.request_repaint()),
             known_hosts: config_dir.join("known_hosts"),
-            vault: Vault::new(config_dir.join("vault.toml")),
+            vault: Vault::with_keys(config_dir.join("vault.toml"), key_store(config_dir)),
             vault_worker: vault_worker::Worker::default(),
             vault_todo: Vec::new(),
             modal: None,
@@ -297,6 +347,8 @@ impl PlaytermApp {
             next_id: 1,
             sidebar: Sidebar::default(),
             show_sidebar: true,
+            address: String::new(),
+            key_file_noted: false,
             site_manager: None,
             site_manager_opened: false,
             status,
@@ -334,6 +386,10 @@ impl PlaytermApp {
         // Development builds (cargo run) are not replaced by releases unless asked.
         if app.settings.check_updates && !cfg!(debug_assertions) {
             app.updater.check(&cc.egui_ctx, false);
+        }
+        // Saved passwords open with the key in the keychain, without asking.
+        if matches!(app.vault.kind(), Ok(playterm_config::VaultKind::Local)) {
+            app.open_vault(false);
         }
         for profile in initial {
             // A saved site (opened in a new window) connects as one: with its vault password.
@@ -393,6 +449,9 @@ impl PlaytermApp {
     }
     pub(crate) fn test_settings(&self) -> &AppSettings {
         &self.settings
+    }
+    pub(crate) fn test_vault(&self) -> &Vault {
+        &self.vault
     }
     pub(crate) fn test_store(&self) -> &ProfileStore {
         &self.store
