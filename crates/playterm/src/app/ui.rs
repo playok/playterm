@@ -82,7 +82,7 @@ impl PlaytermApp {
             Modal::Import(mut dialog) => match dialog.show(ctx, &self.store) {
                 ImportResult::Open => self.modal = Some(Modal::Import(dialog)),
                 ImportResult::Cancel => {}
-                ImportResult::Import { source, folder, profiles } => {
+                ImportResult::Import { source, folder, profiles, secrets } => {
                     let count = profiles.len();
                     for p in profiles {
                         let r = self.store.upsert(p);
@@ -100,29 +100,46 @@ impl PlaytermApp {
                         self.info = Some(imported);
                     }
                     self.show_sidebar = true;
+                    self.store_imported_secrets(secrets);
                 }
             },
             Modal::Vault(mut dialog, pending) => match dialog.show(ctx) {
                 VaultResult::Open => self.modal = Some(Modal::Vault(dialog, pending)),
                 VaultResult::Cancel => self.vault_cancelled(pending),
-                VaultResult::Submit(master) => {
-                    match self.vault_worker.start(self.vault.path().to_owned(), dialog.mode, master, ctx.clone()) {
-                        Ok(task) => {
-                            dialog.clear_secrets();
-                            self.modal = Some(Modal::VaultWorking(dialog, pending, task));
-                        }
-                        Err(e) => {
-                            dialog.fail(e.to_string());
-                            self.modal = Some(Modal::Vault(dialog, pending));
-                        }
+                VaultResult::Submit(master) => match self.vault_worker.migrate(self.vault.reopen(), master, ctx.clone()) {
+                    Ok(task) => {
+                        dialog.clear_secrets();
+                        self.modal = Some(Modal::VaultWorking(dialog, pending, task));
                     }
+                    Err(e) => {
+                        dialog.fail(e.to_string());
+                        self.modal = Some(Modal::Vault(dialog, pending));
+                    }
+                },
+                // The passwords of the older version are given up: new ones go in a new vault.
+                VaultResult::Reset => match self.vault.reset() {
+                    Ok(()) => self.with_vault(true, "", pending),
+                    Err(e) => {
+                        dialog.fail(e.to_string());
+                        self.modal = Some(Modal::Vault(dialog, pending));
+                    }
+                },
+            },
+            Modal::Sites(mut dialog, job) => match dialog.show(ctx) {
+                VaultResult::Open | VaultResult::Reset => self.modal = Some(Modal::Sites(dialog, job)),
+                VaultResult::Cancel => {}
+                VaultResult::Submit(password) => self.start_sites_job(ctx, dialog, job, password),
+            },
+            Modal::SitesWorking(mut dialog, job, task) => match task.poll() {
+                Some(Ok(done)) => self.sites_done(done),
+                Some(Err(e)) => {
+                    dialog.fail(e.to_string());
+                    self.modal = Some(Modal::Sites(dialog, job));
                 }
-                VaultResult::Reset => {
-                    match self.vault.reset() {
-                        Ok(()) => dialog.switch_to_create(),
-                        Err(e) => dialog.fail(e.to_string()),
+                None => {
+                    if !dialog.show_working(ctx, task.can_cancel()) || !task.cancel() {
+                        self.modal = Some(Modal::SitesWorking(dialog, job, task));
                     }
-                    self.modal = Some(Modal::Vault(dialog, pending));
                 }
             },
             Modal::VaultWorking(mut dialog, pending, task) => match task.poll() {
@@ -347,7 +364,7 @@ impl PlaytermApp {
             copy_hint: clip_keys::copy_hint(&self.settings.clipboard),
             paste_hint: clip_keys::paste_hint(&self.settings.clipboard),
         };
-        let action = ui.horizontal(|ui| crate::toolbar::show(ui, &state)).inner;
+        let action = ui.horizontal(|ui| crate::toolbar::show(ui, &state, &mut self.address)).inner;
         if let Some(command) = action {
             let ctx = ui.ctx().clone();
             self.run(&ctx, command);
@@ -496,13 +513,12 @@ impl PlaytermApp {
         }
     }
 
+    /// Whether the saved passwords wait for the master password of an older version.
     pub(super) fn vault_state(&self) -> VaultState {
-        if self.vault.is_unlocked() {
-            VaultState::Unlocked
-        } else if self.vault.exists() {
-            VaultState::Locked
+        if !self.vault.is_unlocked() && self.vault.exists() && matches!(self.vault.kind(), Ok(playterm_config::VaultKind::Master)) {
+            VaultState::Legacy
         } else {
-            VaultState::Missing
+            VaultState::Ready
         }
     }
 }

@@ -77,6 +77,35 @@ pub fn parse_url(url: &str) -> Result<SessionProfile, String> {
     Ok(SessionProfile { protocol, host: host.to_owned(), port, username, ..SessionProfile::new().map_err(|e| e.to_string())? })
 }
 
+/// What an address typed into the toolbar connects to.
+#[derive(Debug)]
+pub enum AddressTarget {
+    /// Complete: connect at once.
+    Connect(SessionProfile),
+    /// A host without a user name (SSH needs one): the quick-connect form, filled in.
+    Ask(SessionProfile),
+}
+
+/// Reads an address typed into the toolbar: a URL (`ssh://`, `telnet://`, ...), `user@host[:port]`,
+/// or a bare `host[:port]` (an IP address or a domain; port 23 means Telnet).
+pub fn parse_address(text: &str) -> Result<AddressTarget, String> {
+    let text = text.trim();
+    if text.contains("://") || text.contains('@') {
+        return parse_url(text).map(AddressTarget::Connect);
+    }
+    if text.is_empty() || text.contains(char::is_whitespace) {
+        return Err(tr!("profile_form.invalid_address", url = text));
+    }
+    // Host and port as for any URL, then SSH unless the port is Telnet's.
+    let raw = parse_url(&format!("raw://{text}"))?;
+    let explicit_port = text.starts_with('[') && text.contains("]:") || !text.starts_with('[') && text.matches(':').count() == 1;
+    if explicit_port && raw.port == Protocol::Telnet.default_port() {
+        return Ok(AddressTarget::Connect(SessionProfile { protocol: Protocol::Telnet, ..raw }));
+    }
+    let port = if explicit_port { raw.port } else { Protocol::Ssh.default_port() };
+    Ok(AddressTarget::Ask(SessionProfile { protocol: Protocol::Ssh, port, ..raw }))
+}
+
 /// Expands a leading `~` to the user's home directory.
 pub fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix('~') {
@@ -1208,5 +1237,28 @@ mod tests {
         form.forwards[0].dest_port = "5432".into();
         form.forwards[0].dest_host = " ".into();
         assert!(form.validate().is_none());
+    }
+
+    #[test]
+    fn toolbar_addresses() {
+        let connect = |t: &str| match parse_address(t).unwrap() {
+            AddressTarget::Connect(p) => (p.protocol, p.username, p.host, p.port),
+            other => panic!("{t}: {other:?}"),
+        };
+        let ask = |t: &str| match parse_address(t).unwrap() {
+            AddressTarget::Ask(p) => (p.protocol, p.username, p.host, p.port),
+            other => panic!("{t}: {other:?}"),
+        };
+        assert_eq!(connect("root@10.0.0.1"), (Protocol::Ssh, "root".into(), "10.0.0.1".into(), 22));
+        assert_eq!(connect(" ops@db.example.com:2222 "), (Protocol::Ssh, "ops".into(), "db.example.com".into(), 2222));
+        assert_eq!(connect("telnet://router"), (Protocol::Telnet, String::new(), "router".into(), 23));
+        assert_eq!(connect("router:23"), (Protocol::Telnet, String::new(), "router".into(), 23));
+        assert_eq!(ask("192.168.0.10"), (Protocol::Ssh, String::new(), "192.168.0.10".into(), 22));
+        assert_eq!(ask("example.com:2200"), (Protocol::Ssh, String::new(), "example.com".into(), 2200));
+        assert_eq!(ask("[::1]:2222"), (Protocol::Ssh, String::new(), "::1".into(), 2222));
+        assert_eq!(ask("[::1]"), (Protocol::Ssh, String::new(), "::1".into(), 22));
+        for bad in ["", "a b", "host:abc", "ssh://example.com"] {
+            assert!(parse_address(bad).is_err(), "{bad:?}");
+        }
     }
 }

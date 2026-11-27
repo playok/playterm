@@ -1,10 +1,13 @@
-//! "세션 가져오기" dialog: lists the sessions saved by PuTTY, Xshell or SecureCRT to pick from.
+//! "세션 가져오기" dialog: lists the sessions saved by PuTTY, Xshell or SecureCRT, or the
+//! sites of a list exported by playterm, to pick from.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui::{self, RichText};
 use playterm_config::{ProfileStore, SessionProfile, normalize_folder};
 use playterm_i18n::{t, tr};
+use zeroize::Zeroizing;
 
 use crate::icon;
 use crate::{putty, securecrt, sidebar, xshell};
@@ -15,6 +18,8 @@ pub enum ImportSource {
     Putty,
     Xshell,
     SecureCrt,
+    /// A site list exported by playterm.
+    Playterm,
 }
 
 impl ImportSource {
@@ -23,6 +28,7 @@ impl ImportSource {
             Self::Putty => "PuTTY",
             Self::Xshell => "Xshell",
             Self::SecureCrt => "SecureCRT",
+            Self::Playterm => "playterm",
         }
     }
 }
@@ -48,6 +54,8 @@ pub enum ImportResult {
         source: ImportSource,
         folder: String,
         profiles: Vec<SessionProfile>,
+        /// The saved passwords that came with them (exported playterm sites), by site id.
+        secrets: Vec<(String, Zeroizing<String>)>,
     },
 }
 
@@ -67,6 +75,8 @@ pub struct ImportDialog {
     /// Only part of the sessions folder was read (it is too big).
     truncated: bool,
     error: Option<String>,
+    /// Passwords of the sites (exported playterm sites), by site id.
+    secrets: HashMap<String, Zeroizing<String>>,
 }
 
 /// Same protocol, host, port and user.
@@ -89,10 +99,47 @@ impl ImportDialog {
             ImportSource::Putty => None,
             ImportSource::Xshell => xshell::default_dir(),
             ImportSource::SecureCrt => securecrt::default_dir(),
+            ImportSource::Playterm => None,
         };
-        let mut dialog = Self { source, dir, items: Vec::new(), folder: source.name().to_owned(), truncated: false, error: None };
+        let mut dialog = Self {
+            source,
+            dir,
+            items: Vec::new(),
+            folder: source.name().to_owned(),
+            truncated: false,
+            error: None,
+            secrets: HashMap::new(),
+        };
         dialog.load(store);
         dialog
+    }
+
+    /// The sites of an exported playterm list, each with a new id (the list may come back to
+    /// the computer it was exported from), keeping their folders.
+    pub fn exported(store: &ProfileStore, sites: Vec<playterm_config::ExportedSite>) -> std::io::Result<Self> {
+        let mut items = Vec::new();
+        let mut secrets = HashMap::new();
+        for site in sites {
+            let mut profile = SessionProfile { id: String::new(), ..site.profile };
+            profile.ensure_id()?;
+            match site.password {
+                Some(password) if profile.save_password => {
+                    secrets.insert(profile.id.clone(), password);
+                }
+                _ => profile.save_password = false,
+            }
+            let session = ImportedSession {
+                name: profile.display_name(),
+                folder: std::mem::take(&mut profile.folder),
+                profile: Ok(profile),
+                notes: Vec::new(),
+            };
+            items.push(Item { session, checked: false, duplicate: false });
+        }
+        let mut dialog =
+            Self { source: ImportSource::Playterm, dir: None, items, folder: String::new(), truncated: false, error: None, secrets };
+        dialog.mark_duplicates(store, true);
+        Ok(dialog)
     }
 
     /// (Re)reads the sessions and marks those that already exist.
@@ -101,6 +148,7 @@ impl ImportDialog {
             (ImportSource::Putty, _) => putty::load(&putty::sessions_key()).map(|s| (s, false)),
             (ImportSource::Xshell, Some(dir)) => xshell::load(dir).map(|l| (l.sessions, l.truncated)),
             (ImportSource::SecureCrt, Some(dir)) => securecrt::load(dir).map(|l| (l.sessions, l.truncated)),
+            (ImportSource::Playterm, _) => return,
             (_, None) => Ok((Vec::new(), false)),
         };
         let (sessions, truncated, error) = match loaded {
@@ -130,7 +178,7 @@ impl ImportDialog {
 
     /// The sessions folder line (Xshell, SecureCRT), with a button to read another folder.
     fn location(&mut self, ui: &mut egui::Ui, store: &ProfileStore) {
-        if self.source == ImportSource::Putty {
+        if matches!(self.source, ImportSource::Putty | ImportSource::Playterm) {
             return;
         }
         let source = self.source.name();
@@ -182,6 +230,7 @@ impl ImportDialog {
                         ImportSource::Putty => t!("import_dialog.passwords_are_not_imported_because_putty_does_not"),
                         ImportSource::Xshell => t!("import_dialog.xshell_s_subfolders_are_kept_inside_the_folder"),
                         ImportSource::SecureCrt => t!("import_dialog.securecrt_s_subfolders_are_kept_inside_the_folder"),
+                        ImportSource::Playterm => t!("import_dialog.the_sites_keep_their_folders_inside_the_folder"),
                     });
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -217,7 +266,7 @@ impl ImportDialog {
                 {
                     if main.clicked() {
                         let folder = normalize_folder(&self.folder);
-                        let profiles = self
+                        let profiles: Vec<SessionProfile> = self
                             .items
                             .iter()
                             .filter(|i| i.checked)
@@ -226,7 +275,8 @@ impl ImportDialog {
                                 i.session.profile.clone().ok().map(|p| SessionProfile { folder, ..p })
                             })
                             .collect();
-                        result = ImportResult::Import { source: self.source, folder, profiles };
+                        let secrets = profiles.iter().filter_map(|p| Some((p.id.clone(), self.secrets.get(&p.id)?.clone()))).collect();
+                        result = ImportResult::Import { source: self.source, folder, profiles, secrets };
                     }
                     if cancel.clicked() {
                         result = ImportResult::Cancel;
@@ -312,6 +362,7 @@ mod tests {
             folder: folder.into(),
             truncated: false,
             error: None,
+            secrets: HashMap::new(),
         }
     }
 

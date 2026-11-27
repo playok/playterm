@@ -29,7 +29,12 @@ pub struct QuickConnect {
 
 impl QuickConnect {
     pub fn new() -> Self {
-        Self { form: ProfileForm::new(SessionProfile::default(), false), save: false }
+        Self::with(SessionProfile::default())
+    }
+
+    /// The form filled in with `profile` (an address typed into the toolbar).
+    pub fn with(profile: SessionProfile) -> Self {
+        Self { form: ProfileForm::new(profile, false), save: false }
     }
 
     pub fn show(&mut self, ctx: &egui::Context) -> QuickConnectResult {
@@ -67,20 +72,27 @@ impl QuickConnect {
 // ---------------------------------------------------------------------------------------------
 // Vault
 
-/// Shortest master password a new vault accepts.
+/// Shortest master password an export accepts.
 pub const MIN_MASTER_LENGTH: usize = 8;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// What the master password is asked for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VaultMode {
+    /// Opening the saved passwords of an older version, once (they are then kept with a
+    /// keychain key).
     Unlock,
-    Create,
+    /// Exporting the site list: a new password, typed twice.
+    Export,
+    /// Importing an exported site list: the password it was exported with.
+    Import,
 }
 
 pub enum VaultResult {
     Open,
     Cancel,
     Submit(Zeroizing<String>),
-    /// User confirmed deleting the vault after forgetting the master password.
+    /// User confirmed starting over without the saved passwords of an older version, after
+    /// forgetting their master password.
     Reset,
 }
 
@@ -127,7 +139,8 @@ impl VaultDialog {
             ui.set_width(380.0);
             ui.heading(match self.mode {
                 VaultMode::Unlock => t!("dialogs.unlocking_saved_passwords"),
-                VaultMode::Create => t!("dialogs.creating_the_password_vault"),
+                VaultMode::Export => t!("dialogs.exporting_sites"),
+                VaultMode::Import => t!("dialogs.reading_the_exported_sites"),
             });
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -139,26 +152,23 @@ impl VaultDialog {
         can_cancel && (cancel || close)
     }
 
-    /// Switches to creating a new vault (after a reset).
-    pub fn switch_to_create(&mut self) {
-        let reason = std::mem::take(&mut self.reason);
-        *self = Self::new(VaultMode::Create, reason);
-    }
-
     pub fn show(&mut self, ctx: &egui::Context) -> VaultResult {
         let mut result = VaultResult::Open;
         let close = modal("vault", ctx, |ui| {
             ui.set_width(380.0);
             ui.heading(match self.mode {
                 VaultMode::Unlock => t!("dialogs.unlock_saved_passwords"),
-                VaultMode::Create => t!("dialogs.set_master_password"),
+                VaultMode::Export => t!("dialogs.export_sites"),
+                VaultMode::Import => t!("dialogs.import_sites"),
             });
             if !self.reason.is_empty() {
                 ui.label(&self.reason);
             }
-            if self.mode == VaultMode::Create {
-                ui.label(t!("dialogs.saved_passwords_are_encrypted_with_this_master_password"));
-            }
+            ui.label(match self.mode {
+                VaultMode::Unlock => t!("dialogs.saved_passwords_of_an_older_version_open_once"),
+                VaultMode::Export => t!("dialogs.the_exported_file_is_encrypted_with_this_master"),
+                VaultMode::Import => t!("dialogs.enter_the_master_password_the_sites_were_exported"),
+            });
             ui.add_space(6.0);
 
             let mut enter = false;
@@ -172,7 +182,7 @@ impl VaultDialog {
             }
             // Making one: checked while typing (#139), as it cannot be recovered once forgotten.
             let mut ready = true;
-            if self.mode == VaultMode::Create {
+            if self.mode == VaultMode::Export {
                 let length = self.master.chars().count();
                 let short = length < MIN_MASTER_LENGTH;
                 let (color, text) = if short {
@@ -202,12 +212,15 @@ impl VaultDialog {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                let label = if self.mode == VaultMode::Unlock { t!("common.unlock") } else { t!("dialogs.create") };
-                let icon = if self.mode == VaultMode::Unlock { icon::UNLOCK } else { icon::VAULT_SET_UP };
+                let (icon, label) = match self.mode {
+                    VaultMode::Unlock => (icon::UNLOCK, t!("common.unlock")),
+                    VaultMode::Export => (icon::EXPORT, t!("dialogs.export")),
+                    VaultMode::Import => (icon::IMPORT, t!("dialogs.import")),
+                };
                 if ui.add_enabled(ready, icon::primary(ui, icon, label)).clicked() || (enter && ready) {
                     if self.master.is_empty() {
                         self.error = Some(t!("dialogs.enter_the_master_password").into());
-                    } else if self.mode == VaultMode::Create && *self.master != *self.confirm {
+                    } else if self.mode == VaultMode::Export && *self.master != *self.confirm {
                         self.error = Some(t!("dialogs.the_passwords_do_not_match").into());
                     } else {
                         result = VaultResult::Submit(self.master.clone());

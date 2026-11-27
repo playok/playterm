@@ -1,4 +1,7 @@
-//! Saved sites and the password vault: saving, duplicating and deleting sites, the vault's passwords and its locking.
+//! Saved sites and the password vault: saving, duplicating and deleting sites, the vault's
+//! passwords, and exporting and importing the site list.
+
+use playterm_config::{ExportedSite, SITES_EXTENSION, VaultError, VaultKind};
 
 use super::*;
 
@@ -21,7 +24,7 @@ impl PlaytermApp {
             self.forget_secret(&id);
         } else if password.is_none() {
             // The user edited the site here: its saved password follows the new target.
-            if self.vault.is_unlocked() {
+            if self.open_vault(false) == Gate::Open {
                 let target = self.store.get(&id).map(vault_target).unwrap_or_default();
                 let r = self.vault.rebind(&id, &target);
                 self.report(t!("common.could_not_update_the_saved_passwords"), r);
@@ -50,16 +53,8 @@ impl PlaytermApp {
         if self.store.get(&id).is_none() {
             return;
         }
-        if self.vault.is_unlocked() {
-            self.finish_save_login(&id, &password);
-            return;
-        }
-        let (mode, reason) = if self.vault.exists() {
-            (VaultMode::Unlock, t!("app.vault.unlock_the_saved_passwords_to_save_the_password"))
-        } else {
-            (VaultMode::Create, t!("app.vault.saving_a_password_for_the_first_time"))
-        };
-        self.modal = Some(Modal::Vault(VaultDialog::new(mode, reason), Pending::SaveLogin { id, password }));
+        let reason = t!("app.vault.unlock_the_saved_passwords_to_save_the_password");
+        self.with_vault(true, reason, Pending::SaveLogin { id, password });
     }
 
     /// Stores a login password in the (unlocked) vault and marks the site as saving it.
@@ -78,26 +73,53 @@ impl PlaytermApp {
     }
 
     pub(super) fn store_secret(&mut self, id: String, password: Zeroizing<String>, connect: bool) {
-        if self.vault.is_unlocked() {
-            let r = self.set_secret(&id, &password);
-            self.report(t!("app.vault.could_not_save_the_password"), r);
-            if connect {
-                self.connect_saved(&id);
-            }
-            return;
-        }
-        let (mode, reason) = if self.vault.exists() {
-            (VaultMode::Unlock, t!("app.vault.unlock_the_saved_passwords_to_save_the_password"))
-        } else {
-            (VaultMode::Create, t!("app.vault.saving_a_password_for_the_first_time"))
-        };
         let target = self.connect_target.take();
-        let pending = Pending::StoreSecret { id, password, connect, target };
-        self.modal = Some(Modal::Vault(VaultDialog::new(mode, reason), pending));
+        let reason = t!("app.vault.unlock_the_saved_passwords_to_save_the_password");
+        self.with_vault(true, reason, Pending::StoreSecret { id, password, connect, target });
     }
 
-    /// Runs after the vault was unlocked or created.
-    pub(super) fn vault_ready(&mut self, pending: Pending) {
+    /// Opens the saved passwords if they are not open yet, with the key in the keychain;
+    /// `create` makes the vault if there is none. Those of an older version need their master
+    /// password (once): [`Gate::Master`].
+    pub(super) fn open_vault(&mut self, create: bool) -> Gate {
+        if self.vault.is_unlocked() {
+            return Gate::Open;
+        }
+        let opened = match self.vault.kind() {
+            Ok(VaultKind::Master) => return Gate::Master,
+            Ok(VaultKind::Missing) if !create => return Gate::Closed,
+            Ok(VaultKind::Missing) => match self.vault.create() {
+                // Made in another window just now.
+                Err(VaultError::AlreadyExists) => self.vault.open(),
+                r => r,
+            },
+            Ok(VaultKind::Local) => self.vault.open(),
+            Err(e) => Err(e),
+        };
+        match opened {
+            Ok(()) => {
+                self.vault_opened();
+                Gate::Open
+            }
+            Err(e) => {
+                self.status = Some(format!("{}: {e}", t!("app.vault.could_not_open_the_saved_passwords")));
+                Gate::Closed
+            }
+        }
+    }
+
+    /// Carries out `pending` with the saved passwords: at once if they open without asking,
+    /// after the master password of an older vault (asked with `reason`), or without them.
+    pub(super) fn with_vault(&mut self, create: bool, reason: impl Into<String>, pending: Pending) {
+        match self.open_vault(create) {
+            Gate::Open => self.vault_ready(pending),
+            Gate::Master => self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, reason), pending)),
+            Gate::Closed => self.vault_cancelled(pending),
+        }
+    }
+
+    /// Applies what waited for the saved passwords to open.
+    fn vault_opened(&mut self) {
         // Changes made while it was locked. Nothing else is removed: the site list may be
         // incomplete (unreadable file, another window), and a lost password cannot come back.
         for todo in std::mem::take(&mut self.vault_todo) {
@@ -114,8 +136,23 @@ impl PlaytermApp {
         let store = &self.store;
         let r = self.vault.bind_missing(|id| store.get(id).filter(|p| p.save_password && may_bind_unbound(p)).map(vault_target));
         self.report(t!("common.could_not_update_the_saved_passwords"), r);
+    }
+
+    /// Runs once the vault is open (after asking for the master password of an older one).
+    pub(super) fn vault_ready(&mut self, pending: Pending) {
+        if !self.vault.is_unlocked() {
+            return self.vault_cancelled(pending);
+        }
+        self.vault_opened();
         match pending {
             Pending::Unlock => {}
+            Pending::Export => self.choose_export_file(),
+            Pending::StoreSecrets(secrets) => {
+                for (id, password) in secrets {
+                    let r = self.set_secret(&id, &password);
+                    self.report(t!("app.vault.could_not_save_the_password"), r);
+                }
+            }
             Pending::Connect(id, target) => self.connect_in(target, |app| app.connect_saved(&id)),
             Pending::ConnectMany(ids, layout) => self.open_many(&ids, layout, true),
             Pending::Reconnect(id) => {
@@ -138,6 +175,19 @@ impl PlaytermApp {
     pub(super) fn vault_cancelled(&mut self, pending: Pending) {
         match pending {
             Pending::Unlock => {}
+            // The sites go without the passwords.
+            Pending::Export => self.choose_export_file(),
+            // The imported sites ask for their passwords.
+            Pending::StoreSecrets(secrets) => {
+                for (id, _) in secrets {
+                    if let Some(mut p) = self.store.get(&id).cloned() {
+                        p.save_password = false;
+                        let r = self.store.upsert(p);
+                        self.report(t!("common.could_not_save_the_site"), r);
+                    }
+                }
+                self.status = Some(t!("app.vault.the_passwords_of_the_imported_sites_were_not").into());
+            }
             Pending::Connect(id, target) => {
                 if let Some(p) = self.store.get(&id).cloned() {
                     self.connect_in(target, |app| app.open_session(&p, None, Some(p.display_name())));
@@ -167,6 +217,9 @@ impl PlaytermApp {
     /// Saves a copy of a site (with its stored password, if the vault is open). Returns the copy.
     pub(super) fn duplicate_profile(&mut self, id: &str) -> Option<SessionProfile> {
         let original = self.store.get(id)?.clone();
+        if original.save_password {
+            self.open_vault(false);
+        }
         let mut copy = match original.duplicate() {
             Ok(copy) => copy,
             Err(e) => {
@@ -257,24 +310,138 @@ impl PlaytermApp {
             SidebarAction::ImportSecureCrt => {
                 self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::SecureCrt))));
             }
+            SidebarAction::ImportSites => self.import_sites(),
             SidebarAction::Duplicate(id) => {
                 self.duplicate_profile(&id);
             }
             SidebarAction::Delete(id) => self.modal = Some(Modal::ConfirmDelete(id)),
-            SidebarAction::LockVault => self.lock_vault(),
             SidebarAction::UnlockVault => self.unlock_vault(),
-            SidebarAction::SetUpVault => self.set_up_vault(),
         }
     }
 
+    /// Opens the saved passwords of an older version with their master password (the sidebar's
+    /// "Unlock"); from then on they open without it.
     pub(super) fn unlock_vault(&mut self) {
-        self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Unlock, ""), Pending::Unlock));
+        self.with_vault(false, "", Pending::Unlock);
     }
 
-    /// Sets the master password before any password is saved (the sidebar's "Set up").
-    pub(super) fn set_up_vault(&mut self) {
-        let reason = t!("app.vault.with_site_passwords_saved_connecting_does_not_ask");
-        self.modal = Some(Modal::Vault(VaultDialog::new(VaultMode::Create, reason), Pending::Unlock));
+    /// Exports the site list with the saved passwords, encrypted with a master password asked
+    /// for now. Passwords of an older version are opened first (or left out).
+    pub(super) fn export_sites(&mut self) {
+        if let Err(e) = self.store.reload() {
+            self.report(t!("app.vault.could_not_reload_the_sites"), Err(e));
+        }
+        if self.store.profiles().is_empty() {
+            self.status = Some(t!("app.vault.there_are_no_sites_to_export").into());
+            return;
+        }
+        if self.store.profiles().iter().any(|p| p.save_password) {
+            let reason = t!("app.vault.unlock_the_saved_passwords_to_export_them");
+            self.with_vault(false, reason, Pending::Export);
+        } else {
+            self.choose_export_file();
+        }
+    }
+
+    /// Asks where to export the site list, then for the master password to encrypt it with.
+    fn choose_export_file(&mut self) {
+        let Some(path) = crate::picker::Picker::new(crate::picker::Kind::Save, t!("app.vault.export_sites"))
+            .file_name(format!("playterm-sites.{SITES_EXTENSION}"))
+            .filter(t!("app.vault.exported_playterm_sites"), &[SITES_EXTENSION])
+            .pick_one()
+        else {
+            return;
+        };
+        self.modal = Some(Modal::Sites(VaultDialog::new(VaultMode::Export, ""), SitesJob::Export(path)));
+    }
+
+    /// Asks for a site list exported by playterm, then for its master password.
+    pub(super) fn import_sites(&mut self) {
+        let Some(path) = crate::picker::Picker::new(crate::picker::Kind::File, t!("app.vault.import_sites"))
+            .filter(t!("app.vault.exported_playterm_sites"), &[SITES_EXTENSION])
+            .pick_one()
+        else {
+            return;
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let reason = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.modal = Some(Modal::Sites(VaultDialog::new(VaultMode::Import, reason), SitesJob::Import(text)));
+            }
+            Err(e) => self.status = Some(format!("{}: {e}", t!("app.vault.could_not_read_the_file"))),
+        }
+    }
+
+    /// The sites to export, each with its saved password if it has one for where it points now.
+    fn sites_to_export(&self) -> Vec<ExportedSite> {
+        self.store
+            .profiles()
+            .iter()
+            .map(|p| {
+                let password = if p.save_password { bound_secret(&self.vault, p).ok().flatten() } else { None };
+                ExportedSite { profile: p.clone(), password }
+            })
+            .collect()
+    }
+
+    /// The master password of an export or import was typed: does it off the UI thread.
+    pub(super) fn start_sites_job(&mut self, ctx: &egui::Context, mut dialog: VaultDialog, job: SitesJob, password: Zeroizing<String>) {
+        let task = match &job {
+            SitesJob::Export(path) => {
+                let sites = self.sites_to_export();
+                let path = path.clone();
+                self.vault_worker.run(
+                    move || {
+                        let text = playterm_config::export_sites(&password, &sites)?;
+                        std::fs::write(&path, text)?;
+                        let passwords = sites.iter().filter(|s| s.password.is_some()).count();
+                        Ok(SitesDone::Exported { path, sites: sites.len(), passwords })
+                    },
+                    ctx.clone(),
+                )
+            }
+            SitesJob::Import(text) => {
+                let text = text.clone();
+                self.vault_worker.run(move || playterm_config::import_sites(&password, &text).map(SitesDone::Imported), ctx.clone())
+            }
+        };
+        match task {
+            Ok(task) => {
+                dialog.clear_secrets();
+                self.modal = Some(Modal::SitesWorking(dialog, job, task));
+            }
+            Err(e) => {
+                dialog.fail(e.to_string());
+                self.modal = Some(Modal::Sites(dialog, job));
+            }
+        }
+    }
+
+    /// An export or import finished.
+    pub(super) fn sites_done(&mut self, done: SitesDone) {
+        match done {
+            SitesDone::Exported { path, sites, passwords } => {
+                let left_out = self.store.profiles().iter().filter(|p| p.save_password).count().saturating_sub(passwords);
+                let mut text =
+                    tr!("app.vault.exported_sites_with_passwords_to", count = sites, passwords = passwords, path = path.display());
+                if left_out > 0 {
+                    text = format!("{text} {}", tr!("app.vault.saved_passwords_were_left_out", count = left_out));
+                }
+                self.info = Some(text);
+            }
+            SitesDone::Imported(sites) => match ImportDialog::exported(&self.store, sites) {
+                Ok(dialog) => self.modal = Some(Modal::Import(Box::new(dialog))),
+                Err(e) => self.status = Some(format!("{}: {e}", t!("app.vault.import_sites"))),
+            },
+        }
+    }
+
+    /// Stores the passwords that came with imported sites.
+    pub(super) fn store_imported_secrets(&mut self, secrets: Vec<(String, Zeroizing<String>)>) {
+        if !secrets.is_empty() {
+            let reason = t!("app.vault.unlock_the_saved_passwords_to_add_the_imported");
+            self.with_vault(true, reason, Pending::StoreSecrets(secrets));
+        }
     }
 
     /// Shows the site manager, if open, and applies its outcome.
@@ -364,7 +531,7 @@ mod tests {
     fn a_password_goes_only_where_it_was_saved_for() {
         let dir = tempfile::tempdir().unwrap();
         let mut vault = playterm_config::Vault::new(dir.path().join("vault.bin"));
-        vault.create("master").unwrap();
+        vault.create().unwrap();
         let site =
             SessionProfile { id: "a".into(), host: "db01".into(), port: 22, username: "ops".into(), ..SessionProfile::new().unwrap() };
         assert!(matches!(bound_secret(&vault, &site), Ok(None)), "no password saved");
@@ -394,7 +561,7 @@ mod tests {
     fn a_new_or_changed_rd_gateway_does_not_get_the_saved_password() {
         let dir = tempfile::tempdir().unwrap();
         let mut vault = playterm_config::Vault::new(dir.path().join("vault.bin"));
-        vault.create("master").unwrap();
+        vault.create().unwrap();
         let direct = rdp_site("", "");
         assert_eq!(vault_target(&direct), "rdp://ops@desk01:3389", "direct sites keep their target");
         vault.set("r", &vault_target(&direct), "s3cret").unwrap();

@@ -7,6 +7,7 @@ impl PlaytermApp {
         let n = self.sessions.len();
         match command {
             Command::QuickConnect => self.open_quick_connect(None),
+            Command::ConnectAddress(address) => self.connect_address(&address),
             Command::NewTab => self.open_local(),
             Command::SiteManager => {
                 let selected = self.sidebar.selected().map(str::to_owned);
@@ -22,6 +23,8 @@ impl PlaytermApp {
             Command::ImportSecureCrt => {
                 self.modal = Some(Modal::Import(Box::new(ImportDialog::new(&self.store, ImportSource::SecureCrt))));
             }
+            Command::ImportSites => self.import_sites(),
+            Command::ExportSites => self.export_sites(),
             Command::Quit => self.request_close(ctx, CloseRequest::Quit),
 
             Command::Copy => {
@@ -122,9 +125,7 @@ impl PlaytermApp {
                 }
             }
             Command::OpenLogFolder => logging::reveal(&logging::default_log_dir()),
-            Command::LockVault => self.lock_vault(),
             Command::UnlockVault => self.unlock_vault(),
-            Command::SetUpVault => self.set_up_vault(),
 
             Command::Activate(i) if i < n => {
                 // A tab in another window (from the Tab menu): that window comes to the front.
