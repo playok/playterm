@@ -1658,6 +1658,14 @@ mod tests {
         !session.terminal.all_matches(&mut search, 10).is_empty()
     }
 
+    /// All the text of the terminal, scrollback included (for failure messages).
+    fn screen_text(session: &mut Session) -> String {
+        session.terminal.select_all();
+        let text = session.terminal.selection_text().unwrap_or_default();
+        session.terminal.clear_selection();
+        text
+    }
+
     #[test]
     fn rz_on_the_server_asks_for_files() {
         let setup = TermSetup { palette: Palette::default(), scrollback: 100 };
@@ -1712,6 +1720,8 @@ mod tests {
 
     #[test]
     fn ctrl_c_cancels_a_reconnect_waiting_for_the_ssh_banner() {
+        // The network thread words the cancel message in the language set then (#278).
+        playterm_i18n::set_language(playterm_i18n::Language::KOREAN);
         let (mut session, net, _lines) = device_tab(Duration::ZERO, None, None);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let remote = session.remote.as_mut().unwrap();
@@ -1729,7 +1739,7 @@ mod tests {
             session.poll(Path::new(""), false);
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(shows(&mut session, t!("session.connection_cancelled")));
+        assert!(shows(&mut session, t!("session.connection_cancelled")), "the terminal shows:\n{}", screen_text(&mut session));
         assert!(session.in_console());
         assert!(session.has_target(), "the cancelled target remains available for another reconnect");
     }

@@ -103,7 +103,10 @@ mod tests {
     #[test]
     fn the_ui_follows_the_system_theme_by_default() {
         let ctx = egui::Context::default();
-        apply_ui(&ctx, &AppSettings::default());
+        // The language is global to the test process and the other tests read it in Korean:
+        // the default settings' system language (English on CI) would change it under them (#278).
+        let defaults = AppSettings { language: playterm_i18n::Language::KOREAN, ..AppSettings::default() };
+        apply_ui(&ctx, &defaults);
         for system in [egui::Theme::Light, egui::Theme::Dark, egui::Theme::Light] {
             let input = egui::RawInput { system_theme: Some(system), ..Default::default() };
             let mut out = ctx.run_ui(input, |_| {});
@@ -111,7 +114,7 @@ mod tests {
             assert_eq!(ctx.theme(), system, "follows the system as it changes");
         }
         // A theme chosen in the settings wins over the system's.
-        apply_ui(&ctx, &AppSettings { ui_theme: UiTheme::Dark, ..AppSettings::default() });
+        apply_ui(&ctx, &AppSettings { ui_theme: UiTheme::Dark, ..defaults });
         let input = egui::RawInput { system_theme: Some(egui::Theme::Light), ..Default::default() };
         let mut out = ctx.run_ui(input, |_| {});
         out.textures_delta.clear();
