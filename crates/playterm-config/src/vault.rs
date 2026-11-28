@@ -641,18 +641,20 @@ mod tests {
             let result = retry_busy(|| v.create());
             assert!(result.is_ok() || matches!(result, Err(VaultError::AlreadyExists)));
         } else {
-            retry_busy(|| v.update(|u| {
-                std::fs::write(dir.join(format!("entered-{name}")), "").unwrap();
-                wait_file(&dir.join(format!("release-{name}")));
-                if op == "remove" {
-                    u.secrets.remove("old");
-                    u.targets.remove("old");
-                } else {
-                    u.secrets.insert(name.clone(), Zeroizing::new("fake-secret".into()));
-                    u.targets.insert(name.clone(), format!("ssh://{name}"));
-                }
-                true
-            }))
+            retry_busy(|| {
+                v.update(|u| {
+                    std::fs::write(dir.join(format!("entered-{name}")), "").unwrap();
+                    wait_file(&dir.join(format!("release-{name}")));
+                    if op == "remove" {
+                        u.secrets.remove("old");
+                        u.targets.remove("old");
+                    } else {
+                        u.secrets.insert(name.clone(), Zeroizing::new("fake-secret".into()));
+                        u.targets.insert(name.clone(), format!("ssh://{name}"));
+                    }
+                    true
+                })
+            })
             .unwrap();
         }
         std::fs::write(dir.join(format!("done-{name}")), "").unwrap();
