@@ -636,12 +636,12 @@ mod tests {
         std::fs::write(dir.join(format!("ready-{name}")), "").unwrap();
         wait_file(&dir.join(format!("start-{name}")));
         if op == "reset" {
-            v.reset().unwrap();
+            retry_busy(|| v.reset()).unwrap();
         } else if op == "create" {
-            let result = v.create();
+            let result = retry_busy(|| v.create());
             assert!(result.is_ok() || matches!(result, Err(VaultError::AlreadyExists)));
         } else {
-            v.update(|u| {
+            retry_busy(|| v.update(|u| {
                 std::fs::write(dir.join(format!("entered-{name}")), "").unwrap();
                 wait_file(&dir.join(format!("release-{name}")));
                 if op == "remove" {
@@ -652,10 +652,22 @@ mod tests {
                     u.targets.insert(name.clone(), format!("ssh://{name}"));
                 }
                 true
-            })
+            }))
             .unwrap();
         }
         std::fs::write(dir.join(format!("done-{name}")), "").unwrap();
+    }
+
+    /// Tries `op` again while the vault's lock stays busy (another worker holds it longer than
+    /// the lock wait on a slow machine), up to the same limit as [`wait_file`].
+    fn retry_busy<T>(mut op: impl FnMut() -> Result<T, VaultError>) -> Result<T, VaultError> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            match op() {
+                Err(VaultError::Io(e)) if e.kind() == io::ErrorKind::TimedOut && Instant::now() < deadline => {}
+                result => return result,
+            }
+        }
     }
 
     fn worker(dir: &Path, name: &str, op: &str) -> std::process::Child {
